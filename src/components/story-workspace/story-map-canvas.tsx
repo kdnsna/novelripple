@@ -13,15 +13,20 @@ import {
   useReactFlow,
   useUpdateNodeInternals,
 } from "@xyflow/react";
-import { useEffect, useMemo } from "react";
+import { Graph, layout } from "@dagrejs/dagre";
+import { useEffect, useMemo, useState } from "react";
 
-import type { StoryEvent, StoryMap } from "@/domain/schemas";
+import type { Event, StoryMap } from "@/domain/schemas";
 
 type StoryMapCanvasProps = {
   storyMap: StoryMap;
   selectedEventId: string;
-  onSelectEvent: (event: StoryEvent) => void;
+  onSelectEvent: (event: Event) => void;
+  characterId?: string | null;
 };
+
+const nodeWidth = 184;
+const nodeHeight = 108;
 
 const edgeColors = {
   causes: "#c95d3e",
@@ -55,75 +60,105 @@ export function StoryMapCanvas({
   storyMap,
   selectedEventId,
   onSelectEvent,
+  characterId = null,
 }: StoryMapCanvasProps) {
-  const computedNodes = useMemo<Node[]>(
+  const [lastDraggedNodeId, setLastDraggedNodeId] = useState("");
+  const visibleEvents = useMemo(
     () =>
-      storyMap.events.map((event) => {
-        const column = (event.sequence - 1) % 4;
-        const row = Math.floor((event.sequence - 1) / 4);
-        const isSelected = event.id === selectedEventId;
-        const isDivergence = event.id === "event_07";
-
-        return {
-          id: event.id,
-          position: { x: column * 248, y: row * 184 },
-          initialWidth: 184,
-          initialHeight: 108,
-          data: {
-            label: (
-              <div
-                className="map-node-content"
-                data-testid={`event-node-${event.id}`}
-              >
-                <div className="map-node-kicker">
-                  <span>{String(event.sequence).padStart(2, "0")}</span>
-                  <span>{event.evidenceKind === "inference" ? "推断" : "事实"}</span>
-                </div>
-                <strong>{event.title}</strong>
-                <small>{event.participants.length} 位人物 · 可追溯</small>
-                {isDivergence ? <em>推荐分歧点</em> : null}
-              </div>
-            ),
-          },
-          draggable: false,
-          selectable: true,
-          className: [
-            "story-map-node",
-            isSelected ? "story-map-node-selected" : "",
-            isDivergence ? "story-map-node-divergence" : "",
-          ]
-            .filter(Boolean)
-            .join(" "),
-          sourcePosition: Position.Right,
-          targetPosition: Position.Left,
-        };
-      }),
-    [selectedEventId, storyMap.events],
+      characterId
+        ? storyMap.events.filter((event) =>
+            event.participants.includes(characterId),
+          )
+        : storyMap.events,
+    [characterId, storyMap.events],
   );
+  const visibleEventIds = useMemo(
+    () => new Set(visibleEvents.map((event) => event.id)),
+    [visibleEvents],
+  );
+  const visibleStoryEdges = useMemo(
+    () =>
+      storyMap.edges.filter(
+        (edge) =>
+          visibleEventIds.has(edge.from) && visibleEventIds.has(edge.to),
+      ),
+    [storyMap.edges, visibleEventIds],
+  );
+  const computedNodes = useMemo<Node[]>(() => {
+    const graph = new Graph({ multigraph: true })
+      .setDefaultEdgeLabel(() => ({}))
+      .setGraph({
+        rankdir: "LR",
+        ranksep: 76,
+        nodesep: 42,
+        edgesep: 22,
+        marginx: 24,
+        marginy: 24,
+      });
+    visibleEvents.forEach((event) =>
+      graph.setNode(event.id, { width: nodeWidth, height: nodeHeight }),
+    );
+    visibleStoryEdges.forEach((edge) =>
+      graph.setEdge(edge.from, edge.to, {}, edge.id),
+    );
+    layout(graph);
+
+    return visibleEvents.map((event) => {
+      const position = graph.node(event.id) as { x: number; y: number };
+      return {
+        id: event.id,
+        position: {
+          x: position.x - nodeWidth / 2,
+          y: position.y - nodeHeight / 2,
+        },
+        initialWidth: nodeWidth,
+        initialHeight: nodeHeight,
+        data: {
+          label: (
+            <div
+              className="map-node-content"
+              data-testid={`event-node-${event.id}`}
+            >
+              <div className="map-node-kicker">
+                <span>{String(event.sequence).padStart(2, "0")}</span>
+                <span>{event.evidenceKind === "inference" ? "推断" : "事实"}</span>
+              </div>
+              <strong>{event.title}</strong>
+              <small>{event.participants.length} 位人物 · 可追溯</small>
+            </div>
+          ),
+        },
+        draggable: true,
+        selectable: true,
+        className: "story-map-node",
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      };
+    });
+  }, [visibleEvents, visibleStoryEdges]);
   const [nodes, setNodes, onNodesChange] = useNodesState(computedNodes);
 
   useEffect(() => {
-    setNodes((currentNodes) =>
-      computedNodes.map((nextNode) => {
-        const currentNode = currentNodes.find((item) => item.id === nextNode.id);
-        return {
-          ...nextNode,
-          measured: currentNode?.measured,
-          width: currentNode?.width,
-          height: currentNode?.height,
-        };
-      }),
-    );
+    setNodes(computedNodes);
   }, [computedNodes, setNodes]);
+
+  useEffect(() => {
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => ({
+        ...node,
+        selected: node.id === selectedEventId,
+      })),
+    );
+  }, [selectedEventId, setNodes]);
 
   const computedEdges = useMemo<Edge[]>(
     () =>
-      storyMap.edges.map((edge) => ({
+      visibleStoryEdges.map((edge) => ({
         id: edge.id,
-        source: edge.sourceEventId,
-        target: edge.targetEventId,
+        source: edge.from,
+        target: edge.to,
         type: "smoothstep",
-        animated: edge.sourceEventId === selectedEventId,
+        animated: edge.from === selectedEventId,
         label:
           edge.type === "causes"
             ? "导致"
@@ -132,8 +167,8 @@ export function StoryMapCanvas({
               : "伏笔",
         style: {
           stroke: edgeColors[edge.type],
-          strokeWidth: edge.sourceEventId === selectedEventId ? 2.4 : 1.25,
-          opacity: edge.sourceEventId === selectedEventId ? 1 : 0.56,
+          strokeWidth: edge.from === selectedEventId ? 2.4 : 1.25,
+          opacity: edge.from === selectedEventId ? 1 : 0.56,
         },
         labelStyle: { fill: "#776e63", fontSize: 9, fontWeight: 700 },
         labelBgStyle: { fill: "#f3efe7", fillOpacity: 0.94 },
@@ -144,12 +179,12 @@ export function StoryMapCanvas({
           height: 14,
         },
       })),
-    [selectedEventId, storyMap.edges],
+    [selectedEventId, visibleStoryEdges],
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(computedEdges);
   const nodeIds = useMemo(
-    () => storyMap.events.map((event) => event.id),
-    [storyMap.events],
+    () => visibleEvents.map((event) => event.id),
+    [visibleEvents],
   );
 
   useEffect(() => {
@@ -161,6 +196,7 @@ export function StoryMapCanvas({
       aria-label="故事地图"
       className="story-map-canvas"
       data-edge-count={edges.length}
+      data-last-dragged-node={lastDraggedNodeId}
       data-node-count={nodes.length}
     >
       <ReactFlow
@@ -173,12 +209,13 @@ export function StoryMapCanvas({
         minZoom={0.35}
         nodes={nodes}
         nodesConnectable={false}
-        nodesDraggable={false}
+        nodesDraggable
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => {
           const event = storyMap.events.find((item) => item.id === node.id);
           if (event) onSelectEvent(event);
         }}
+        onNodeDragStop={(_, node) => setLastDraggedNodeId(node.id)}
         onNodesChange={onNodesChange}
         panOnScroll
         proOptions={{ hideAttribution: true }}

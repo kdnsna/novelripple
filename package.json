@@ -7,23 +7,31 @@
     "node": ">=22"
   },
   "scripts": {
+    "predev": "npm run db:migrate",
     "dev": "next dev",
     "build": "next build",
+    "prestart": "npm run db:migrate",
     "start": "next start",
     "lint": "eslint .",
+    "pretypecheck": "next typegen",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:contract": "vitest run tests/contract",
     "test:watch": "vitest",
-    "test:e2e": "npm run db:migrate && playwright test",
+    "test:e2e": "tsx scripts/run-e2e.ts",
+    "eval:live": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-live.ts",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
-    "db:migrate": "tsx scripts/migrate.ts",
+    "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/migrate.ts",
     "fixture:build": "tsx scripts/build-fixture.ts"
   },
   "dependencies": {
+    "@dagrejs/dagre": "3.1.1",
     "@xyflow/react": "12.11.2",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.2",
     "next": "16.3.0",
+    "openai": "7.4.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "4.4.3"

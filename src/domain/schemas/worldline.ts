@@ -20,10 +20,16 @@ export const WorldlineSchema = z
   .strict()
   .superRefine((worldline, context) => {
     if (worldline.status === "canonical") {
-      if (worldline.parentWorldlineId !== null || worldline.divergence !== null) {
+      if (
+        worldline.parentWorldlineId !== null ||
+        worldline.divergence !== null ||
+        worldline.mode !== "open" ||
+        worldline.anchors.length > 0 ||
+        worldline.acceptedImpactPlanId !== null
+      ) {
         context.addIssue({
           code: "custom",
-          message: "原著世界线不能包含父世界线或分歧点",
+          message: "原著世界线不能包含父世界线、分歧、Anchor 或已接受影响计划",
         });
       }
       return;

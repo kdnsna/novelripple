@@ -2,18 +2,23 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  ContinuationDirectionsModelOutputSchema,
+  ContinuationSceneModelOutputSchema,
   DivergenceSchema,
   ImpactPlanSchema,
   SourceSchema,
   StoryMapSchema,
-  type EvidenceReference,
+  type SourceReference,
 } from "../src/domain/schemas";
 import {
   extractMarkdownSections,
   normalizeSourceText,
   sha256,
 } from "../src/domain/source/normalize-source";
-import { assertValidStoryMap } from "../src/domain/invariants/validate-story-map";
+import {
+  assertValidImpactPlan,
+  assertValidStoryMap,
+} from "../src/domain/invariants/validate-story-map";
 
 const fixtureDirectory = path.join(process.cwd(), "fixtures", "ripple-001");
 const sourcePath = path.join(fixtureDirectory, "source.md");
@@ -66,7 +71,7 @@ const quotes = {
     "事故当夜，东堤外有人违规抽砂。抽砂船切断了灯塔备用电缆，主电源又在四点零五分被港务站远程关闭。灯灭了七分钟。",
 } as const;
 
-function evidence(quote: string): EvidenceReference {
+function evidence(quote: string): SourceReference {
   const start = normalizedText.indexOf(quote);
   if (start < 0) throw new Error(`找不到证据原文：${quote}`);
   if (normalizedText.indexOf(quote, start + quote.length) >= 0) {
@@ -89,6 +94,7 @@ function evidence(quote: string): EvidenceReference {
 }
 
 const storyMap = StoryMapSchema.parse({
+  schemaVersion: 1,
   id: "story_map_ripple_001_v1",
   sourceId: source.id,
   version: 1,
@@ -280,8 +286,8 @@ const storyMap = StoryMapSchema.parse({
   edges: [
     {
       id: "edge_01_02",
-      sourceEventId: "event_01",
-      targetEventId: "event_02",
+      from: "event_01",
+      to: "event_02",
       type: "enables",
       explanation: "返港和母亲的信让许澄进入钟楼并尝试旧密码。",
       confidence: 0.99,
@@ -290,8 +296,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_02_03",
-      sourceEventId: "event_02",
-      targetEventId: "event_03",
+      from: "event_02",
+      to: "event_03",
       type: "causes",
       explanation: "打开检修门和地板藏匿处直接导致红账被发现。",
       confidence: 0.99,
@@ -300,8 +306,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_03_04",
-      sourceEventId: "event_03",
-      targetEventId: "event_04",
+      from: "event_03",
+      to: "event_04",
       type: "causes",
       explanation: "红账中的黑红双值让潮位覆盖问题可被识别。",
       confidence: 0.98,
@@ -310,8 +316,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_03_05",
-      sourceEventId: "event_03",
-      targetEventId: "event_05",
+      from: "event_03",
+      to: "event_05",
       type: "causes",
       explanation: "许澄带着红账质询港务站，顾闻舟才出示蓝表解释。",
       confidence: 0.91,
@@ -320,8 +326,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_03_06",
-      sourceEventId: "event_03",
-      targetEventId: "event_06",
+      from: "event_03",
+      to: "event_06",
       type: "enables",
       explanation: "红账留言和半把钥匙把调查引向北岬灯塔。",
       confidence: 0.97,
@@ -330,8 +336,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_06_07",
-      sourceEventId: "event_06",
-      targetEventId: "event_07",
+      from: "event_06",
+      to: "event_07",
       type: "enables",
       explanation: "独立灯塔证词提高红账可信度，使正式移交成为合理下一步。",
       confidence: 0.86,
@@ -340,8 +346,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_07_08",
-      sourceEventId: "event_07",
-      targetEventId: "event_08",
+      from: "event_07",
+      to: "event_08",
       type: "causes",
       explanation: "周岚携原件前往档案馆，触发港务站车辆的拦截。",
       confidence: 0.93,
@@ -350,8 +356,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_06_09",
-      sourceEventId: "event_06",
-      targetEventId: "event_09",
+      from: "event_06",
+      to: "event_09",
       type: "enables",
       explanation: "沈砚的半把钥匙和独立潮标使机械开闸成为可能。",
       confidence: 0.99,
@@ -360,8 +366,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_02_10",
-      sourceEventId: "event_02",
-      targetEventId: "event_10",
+      from: "event_02",
+      to: "event_10",
       type: "foreshadows",
       explanation: "人为制动的潮汐钟暗示钟体仍藏有需要钟重新运转才能定位的证据。",
       confidence: 0.84,
@@ -370,8 +376,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_03_10",
-      sourceEventId: "event_03",
-      targetEventId: "event_10",
+      from: "event_03",
+      to: "event_10",
       type: "foreshadows",
       explanation: "红账整齐缺失的四页预告了后续钟锤中的原页。",
       confidence: 0.99,
@@ -380,8 +386,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_10_11",
-      sourceEventId: "event_10",
-      targetEventId: "event_11",
+      from: "event_10",
+      to: "event_11",
       type: "enables",
       explanation: "缺失四页和付款记录补全证据链，使听证会能够重建责任。",
       confidence: 0.98,
@@ -390,8 +396,8 @@ const storyMap = StoryMapSchema.parse({
     },
     {
       id: "edge_11_12",
-      sourceEventId: "event_11",
-      targetEventId: "event_12",
+      from: "event_11",
+      to: "event_12",
       type: "causes",
       explanation: "公开听证确认材料价值后，红账归档、钟楼保留并恢复运行。",
       confidence: 0.96,
@@ -429,6 +435,8 @@ const storyMap = StoryMapSchema.parse({
 
 assertValidStoryMap(storyMap, source);
 
+// These Golden values are human-authored. This script only validates them and
+// materializes source offsets and hashes; it never calls or imitates a model.
 const divergences = zodArray(DivergenceSchema, [
   {
     id: "div_prevent_handoff",
@@ -439,14 +447,14 @@ const divergences = zodArray(DivergenceSchema, [
   {
     id: "div_destroy_ledger",
     eventId: "event_07",
-    type: "alternate_choice",
+    type: "choice",
     instruction: "许澄当场烧毁红色账簿，并拒绝保留任何副本",
   },
   {
-    id: "div_trust_gu",
-    eventId: "event_07",
-    type: "alternate_choice",
-    instruction: "许澄把红色账簿交给顾闻舟保管",
+    id: "div_gate_partial",
+    eventId: "event_09",
+    type: "outcome",
+    instruction: "许澄仍启动旧东闸，但闸门只抬起一半便彻底卡死",
   },
 ]);
 
@@ -454,6 +462,7 @@ const impactPlans = zodArray(ImpactPlanSchema, [
   {
     id: "impact_prevent_handoff_v1",
     storyMapId: storyMap.id,
+    mode: "strict",
     divergence: divergences[0],
     anchors: [
       {
@@ -466,8 +475,10 @@ const impactPlans = zodArray(ImpactPlanSchema, [
     impacts: [
       {
         id: "impact_01",
-        horizon: "immediate",
+        scope: "direct",
         changeType: "removed",
+        fromEventId: "event_07",
+        affectedEventId: "event_07",
         summary: "周岚无法建立原件的第三方移交记录",
         explanation:
           "交付不发生，报社车辆、封装见证和异地上传都不会按原路径发生。",
@@ -476,8 +487,10 @@ const impactPlans = zodArray(ImpactPlanSchema, [
       },
       {
         id: "impact_02",
-        horizon: "immediate",
+        scope: "direct",
         changeType: "modified",
+        fromEventId: "event_05",
+        affectedEventId: "event_08",
         summary: "顾闻舟会把目标从周岚转向仍持有原件的许澄",
         explanation:
           "追踪车辆失去原路径目标，但顾闻舟仍知道红账存在且需要控制原件。",
@@ -486,8 +499,10 @@ const impactPlans = zodArray(ImpactPlanSchema, [
       },
       {
         id: "impact_03",
-        horizon: "midterm",
+        scope: "downstream",
         changeType: "modified",
+        fromEventId: "event_07",
+        affectedEventId: "event_09",
         summary: "风暴中的开闸判断更依赖沈砚的独立潮标",
         explanation:
           "许澄仍持有红账，但缺少周岚的异地副本；机械钥匙与灯塔潮标成为主要交叉证据。",
@@ -496,8 +511,10 @@ const impactPlans = zodArray(ImpactPlanSchema, [
       },
       {
         id: "impact_04",
-        horizon: "ending",
+        scope: "ending",
         changeType: "modified",
+        fromEventId: "event_07",
+        affectedEventId: "event_11",
         summary: "真相仍可公开，但必须改由许澄在风暴后直接提交",
         explanation:
           "钟锤四页、残带、后台日志与原件仍可形成证据链，只是失去周岚在风暴前建立的独立保管路径。",
@@ -506,14 +523,19 @@ const impactPlans = zodArray(ImpactPlanSchema, [
       },
     ],
     characterChanges: [
-      "许澄继续独自承担原件保管风险",
-      "周岚从证据保管者转为外部调查与见证者",
+      {
+        characterId: "char_xucheng",
+        summary: "许澄继续独自承担原件保管风险",
+      },
+      {
+        characterId: "char_zhoulan",
+        summary: "周岚从证据保管者转为外部调查与见证者",
+      },
     ],
-    threadChanges: [
-      "关闭：周岚移交途中被拦截",
-      "开启：顾闻舟如何定位仍持原件的许澄",
-      "保留：钟锤缺失四页与公开听证",
-    ],
+    threadChanges: {
+      opened: ["顾闻舟如何定位仍持原件的许澄"],
+      closed: ["周岚移交途中被拦截"],
+    },
     anchorEvaluations: [
       {
         anchorId: "anchor_truth_public",
@@ -532,6 +554,7 @@ const impactPlans = zodArray(ImpactPlanSchema, [
   {
     id: "impact_destroy_ledger_v1",
     storyMapId: storyMap.id,
+    mode: "strict",
     divergence: divergences[1],
     anchors: [
       {
@@ -544,8 +567,10 @@ const impactPlans = zodArray(ImpactPlanSchema, [
     impacts: [
       {
         id: "impact_05",
-        horizon: "immediate",
+        scope: "direct",
         changeType: "removed",
+        fromEventId: "event_07",
+        affectedEventId: "event_07",
         summary: "红色账簿原件及其材料鉴定价值永久消失",
         explanation: "烧毁是不可逆变化，照片与压痕不能恢复原件本身。",
         reasonPath: ["event_07"],
@@ -553,8 +578,10 @@ const impactPlans = zodArray(ImpactPlanSchema, [
       },
       {
         id: "impact_06",
-        horizon: "midterm",
+        scope: "downstream",
         changeType: "modified",
+        fromEventId: "event_07",
+        affectedEventId: "event_11",
         summary: "旧案只能依赖残带、钟锤四页和后台日志重建",
         explanation: "其他证据仍可能证明造假，但潮位连续记录和保管链被削弱。",
         reasonPath: ["event_07", "event_06", "event_10", "event_11"],
@@ -562,16 +589,26 @@ const impactPlans = zodArray(ImpactPlanSchema, [
       },
       {
         id: "impact_07",
-        horizon: "ending",
+        scope: "ending",
         changeType: "removed",
+        fromEventId: "event_07",
+        affectedEventId: "event_12",
         summary: "红账原件无法在档案馆公开陈列",
         explanation: "被销毁的同一物理原件不能同时进入档案馆。",
         reasonPath: ["event_07", "event_12"],
         confidence: 1,
       },
     ],
-    characterChanges: ["许澄成为原件毁损的直接责任人"],
-    threadChanges: ["关闭：红账原件归档", "保留：其他证据能否公开旧案"],
+    characterChanges: [
+      {
+        characterId: "char_xucheng",
+        summary: "许澄成为原件毁损的直接责任人",
+      },
+    ],
+    threadChanges: {
+      opened: ["其余证据能否独立支持旧案公开"],
+      closed: ["红账原件归档"],
+    },
     anchorEvaluations: [
       {
         anchorId: "anchor_ledger_archived",
@@ -585,58 +622,142 @@ const impactPlans = zodArray(ImpactPlanSchema, [
     status: "candidate",
   },
   {
-    id: "impact_trust_gu_v1",
+    id: "impact_gate_partial_v1",
     storyMapId: storyMap.id,
+    mode: "open",
     divergence: divergences[2],
     anchors: [],
     impacts: [
       {
         id: "impact_08",
-        horizon: "immediate",
-        changeType: "removed",
-        summary: "周岚无法建立数字副本和公开移交记录",
-        explanation: "原件直接进入顾闻舟控制的港务系统。",
-        reasonPath: ["event_07"],
-        confidence: 0.99,
+        scope: "direct",
+        changeType: "modified",
+        fromEventId: "event_09",
+        affectedEventId: "event_09",
+        summary: "旧东闸的实际泄洪能力低于原路径",
+        explanation:
+          "启动仍然发生，但闸门半开后卡死，低洼区水位不能按原作在十分钟后停止上涨。",
+        reasonPath: ["event_09"],
+        confidence: 1,
       },
       {
         id: "impact_09",
-        horizon: "midterm",
+        scope: "downstream",
         changeType: "modified",
-        summary: "顾闻舟可以继续以蓝表指导风暴决策",
-        explanation: "红账警告和潮位差不再掌握在许澄与周岚手中。",
-        reasonPath: ["event_07", "event_09"],
-        confidence: 0.87,
+        fromEventId: "event_09",
+        affectedEventId: "event_09",
+        summary: "养老院转运不再确定获得十三分钟窗口",
+        explanation:
+          "原作的救援时间来自闸门充分开启后的水位变化，半开结果会迫使许澄、沈砚与消防改用新的应急路径。",
+        reasonPath: ["event_09"],
+        confidence: 0.96,
       },
       {
         id: "impact_10",
-        horizon: "ending",
+        scope: "ending",
         changeType: "modified",
-        summary: "公开听证不再是隐藏目标，旧案可能长期保持争议",
-        explanation: "开放模式允许原著未来被彻底改变，但残带和钟锤四页仍可能触发新的调查路径。",
-        reasonPath: ["event_07", "event_10"],
-        confidence: 0.7,
+        fromEventId: "event_09",
+        affectedEventId: "event_11",
+        summary: "旧闸按原路径救下低洼区不再是确定事实",
+        explanation:
+          "开放模式不预设听证或旧案公开必然发生；红账、残带和钟锤四页仍在，但风暴伤亡、证据保存与调查路径都需重新推演。",
+        reasonPath: ["event_09"],
+        confidence: 0.84,
       },
     ],
     characterChanges: [
-      "许澄暂时选择相信制度负责人而非记者",
-      "顾闻舟重新获得关键物证控制权",
+      {
+        characterId: "char_xucheng",
+        summary: "许澄必须立即改变救灾决策，不能把完全开闸视为已完成",
+      },
+      {
+        characterId: "char_shenyan",
+        summary: "沈砚必须立即改变救灾决策，不能把完全开闸视为已完成",
+      },
+      {
+        characterId: "char_guwenzhou",
+        summary: "顾闻舟关于撤离时间的判断可能局部改变，但蓝表仍缺乏可信性",
+      },
     ],
-    threadChanges: [
-      "关闭：原路径中的车辆拦截",
-      "开启：顾闻舟是否销毁或篡改红账",
-      "开启：沈砚能否用残带重新说服许澄",
-    ],
+    threadChanges: {
+      opened: ["半开闸门是否足以避免伤亡"],
+      closed: ["旧东闸完全开启并让水位在十分钟后停止上涨"],
+    },
     anchorEvaluations: [],
-    uncertainties: ["顾闻舟会立即销毁原件还是继续伪造保管流程"],
+    uncertainties: [
+      "低洼区水位最终上涨幅度与伤亡情况",
+      "风暴中红账与钟锤四页能否按原路径保存",
+      "旧案证据是否仍会进入公开听证",
+    ],
     status: "candidate",
   },
 ]);
+
+for (const impactPlan of impactPlans) {
+  assertValidImpactPlan(impactPlan, storyMap);
+}
+
+const continuationFixture = {
+  impactPlanFixtureId: impactPlans[0]!.id,
+  directions: ContinuationDirectionsModelOutputSchema.parse({
+    directions: [
+      {
+        title: "把证据藏进潮标站",
+        premise:
+          "许澄与沈砚先保护红账原件，再寻找不依赖报社车辆的公开路径。",
+        affectedCharacterIds: ["char_xucheng", "char_shenyan"],
+        expectedConsequence:
+          "原件保管风险暂时下降，但顾闻舟会更快把注意力转向灯塔。",
+      },
+      {
+        title: "让周岚只做见证",
+        premise:
+          "周岚不接触原件，只远程记录许澄展示红账与钟锤四页的过程。",
+        affectedCharacterIds: ["char_xucheng", "char_zhoulan"],
+        expectedConsequence:
+          "独立见证链得到补强，但没有形成原件的第三方保管。",
+      },
+      {
+        title: "反向追踪顾闻舟",
+        premise:
+          "许澄故意留下错误去向，以确认顾闻舟掌握红账存在的渠道。",
+        affectedCharacterIds: ["char_xucheng", "char_guwenzhou"],
+        expectedConsequence:
+          "新的追踪证据可能出现，同时许澄暴露位置的风险上升。",
+      },
+    ],
+  }),
+  selectedDirectionIndex: 0,
+  scene: ContinuationSceneModelOutputSchema.parse({
+    title: "潮标站的第二把锁",
+    prose:
+      "许澄没有把红账带去报社。雨水沿着旧潮标站的百叶窗往下淌，她把包在防潮布里的账簿放进铁柜，又让沈砚当面记下封条编号。沈砚关掉顶灯，只留下值班台的一圈冷光。他们没有宣称证据已经安全，也没有假装周岚持有原件；电话另一端，周岚只记录时间、地点和两人的口述。铁柜上锁后，许澄把钥匙留在自己手里，决定等风暴过去便亲自把原件、钟锤四页和录音一并提交。远处一束车灯扫过堤岸，两人同时停住了动作。",
+    statePatch: {
+      factsAdded: [
+        {
+          key: "generated:scene_tide_station_lock",
+          statement:
+            "许澄把红账原件封存在旧潮标站铁柜，并由沈砚和周岚远程见证。",
+        },
+      ],
+      factsRemoved: [],
+      characterChanges: [
+        {
+          characterId: "char_xucheng",
+          summary: "许澄决定继续持有钥匙并在风暴后亲自提交全部证据。",
+        },
+      ],
+      threadsOpened: ["堤岸上的车辆是否属于顾闻舟"],
+      threadsClosed: ["顾闻舟如何定位仍持原件的许澄"],
+    },
+  }),
+};
 
 await Promise.all([
   writeJson("expected-story-map.json", storyMap),
   writeJson("divergences.json", divergences),
   writeJson("expected-impacts.json", impactPlans),
+  writeJson("expected-continuation.json", continuationFixture),
 ]);
 
 console.log(

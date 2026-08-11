@@ -1,14 +1,14 @@
 import { z } from "zod";
 
-export const EvidenceKindSchema = z.enum(["fact", "inference", "generated"]);
+import { SourceReferenceSchema } from "./source";
+import { StateFactIdSchema } from "./state-fact-id";
 
-export const EvidenceReferenceSchema = z
+export const EvidenceKindSchema = z.enum(["fact", "inference"]);
+
+export const EvidenceClaimSchema = z
   .object({
-    sourceId: z.string().min(1),
     sectionId: z.string().min(1),
-    start: z.number().int().nonnegative(),
-    end: z.number().int().positive(),
-    excerptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    exactQuote: z.string().min(1),
   })
   .strict();
 
@@ -27,76 +27,130 @@ export const CharacterSchema = z
   })
   .strict();
 
-export const StoryEventSchema = z
-  .object({
-    id: z.string().min(1),
-    title: z.string().min(1),
-    summary: z.string().min(1),
-    sequence: z.number().int().positive(),
-    participants: z.array(z.string().min(1)).min(1),
-    stateChanges: z.array(z.string().min(1)),
-    evidenceKind: EvidenceKindSchema,
-    confidence: z.number().min(0).max(1).optional(),
-    evidence: z.array(EvidenceReferenceSchema),
-  })
+const eventShape = {
+  id: StateFactIdSchema,
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  sequence: z.number().int().positive(),
+  participants: z.array(z.string().min(1)).min(1),
+  stateChanges: z.array(z.string().min(1)),
+  evidenceKind: EvidenceKindSchema,
+  confidence: z.number().min(0).max(1).optional(),
+};
+
+function requireInferenceConfidence(
+  event: { evidenceKind: z.infer<typeof EvidenceKindSchema>; confidence?: number },
+  context: z.RefinementCtx,
+): void {
+  if (event.evidenceKind === "inference" && event.confidence === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["confidence"],
+      message: "推断事件必须包含置信度",
+    });
+  }
+}
+
+export const EventSchema = z
+  .object({ ...eventShape, evidence: z.array(SourceReferenceSchema).min(1) })
   .strict()
   .superRefine((event, context) => {
-    if (event.evidenceKind !== "generated" && event.evidence.length === 0) {
-      context.addIssue({
-        code: "custom",
-        path: ["evidence"],
-        message: "事实与推断事件必须包含原文证据",
-      });
-    }
-
-    if (event.evidenceKind === "inference" && event.confidence === undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["confidence"],
-        message: "推断事件必须包含置信度",
-      });
-    }
+    requireInferenceConfidence(event, context);
   });
 
-export const StoryEdgeSchema = z
+export const StoryMapCandidateEventSchema = z
   .object({
-    id: z.string().min(1),
-    sourceEventId: z.string().min(1),
-    targetEventId: z.string().min(1),
-    type: z.enum(["causes", "enables", "foreshadows"]),
-    explanation: z.string().min(1),
-    confidence: z.number().min(0).max(1),
-    evidence: z.array(EvidenceReferenceSchema).min(1),
-    confirmed: z.boolean(),
+    ...eventShape,
+    evidenceKind: EvidenceKindSchema,
+    evidence: z.array(EvidenceClaimSchema).min(1),
   })
+  .strict()
+  .superRefine(requireInferenceConfidence);
+
+const storyEdgeShape = {
+  id: z.string().min(1),
+  from: z.string().min(1),
+  to: z.string().min(1),
+  type: z.enum(["causes", "enables", "foreshadows"]),
+  explanation: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+  confirmed: z.boolean(),
+};
+
+export const StoryEdgeSchema = z
+  .object({ ...storyEdgeShape, evidence: z.array(SourceReferenceSchema).min(1) })
   .strict();
+
+export const StoryMapCandidateEdgeSchema = z
+  .object({ ...storyEdgeShape, evidence: z.array(EvidenceClaimSchema).min(1) })
+  .strict();
+
+const endingCandidateShape = {
+  id: StateFactIdSchema,
+  targetEventId: z.string().min(1),
+  requirement: z.string().min(1),
+};
 
 export const EndingCandidateSchema = z
   .object({
-    id: z.string().min(1),
-    targetEventId: z.string().min(1),
-    requirement: z.string().min(1),
-    evidence: z.array(EvidenceReferenceSchema).min(1),
+    ...endingCandidateShape,
+    evidence: z.array(SourceReferenceSchema).min(1),
   })
   .strict();
 
+export const StoryMapCandidateEndingSchema = z
+  .object({
+    ...endingCandidateShape,
+    evidence: z.array(EvidenceClaimSchema).min(1),
+  })
+  .strict();
+
+const storyMapContentShape = {
+  title: z.string().min(1),
+  logline: z.string().min(1),
+  characters: z.array(CharacterSchema).min(1),
+  events: z.array(EventSchema).min(1),
+  edges: z.array(StoryEdgeSchema),
+  endingCandidates: z.array(EndingCandidateSchema).min(1),
+};
+
+export const StoryMapContentSchema = z.object(storyMapContentShape).strict();
+
+export const StoryMapExtractionCandidateSchema = z
+  .object({
+    title: z.string().min(1),
+    logline: z.string().min(1),
+    characters: z.array(CharacterSchema).min(1),
+    events: z.array(StoryMapCandidateEventSchema).min(1),
+    edges: z.array(StoryMapCandidateEdgeSchema),
+  })
+  .strict();
+
+export const StoryMapContentCandidateSchema =
+  StoryMapExtractionCandidateSchema.extend({
+    endingCandidates: z.array(StoryMapCandidateEndingSchema).min(1),
+  });
+
 export const StoryMapSchema = z
   .object({
+    schemaVersion: z.literal(1),
     id: z.string().min(1),
     sourceId: z.string().min(1),
     version: z.number().int().positive(),
     status: z.enum(["draft", "confirmed"]),
-    title: z.string().min(1),
-    logline: z.string().min(1),
-    characters: z.array(CharacterSchema).min(1),
-    events: z.array(StoryEventSchema).min(1),
-    edges: z.array(StoryEdgeSchema),
-    endingCandidates: z.array(EndingCandidateSchema).min(1),
+    ...storyMapContentShape,
   })
   .strict();
 
-export type EvidenceReference = z.infer<typeof EvidenceReferenceSchema>;
-export type StoryCharacter = z.infer<typeof CharacterSchema>;
-export type StoryEvent = z.infer<typeof StoryEventSchema>;
+export type Character = z.infer<typeof CharacterSchema>;
+export type Event = z.infer<typeof EventSchema>;
 export type StoryEdge = z.infer<typeof StoryEdgeSchema>;
+export type EvidenceClaim = z.infer<typeof EvidenceClaimSchema>;
+export type StoryMapContent = z.infer<typeof StoryMapContentSchema>;
+export type StoryMapExtractionCandidate = z.infer<
+  typeof StoryMapExtractionCandidateSchema
+>;
+export type StoryMapContentCandidate = z.infer<
+  typeof StoryMapContentCandidateSchema
+>;
 export type StoryMap = z.infer<typeof StoryMapSchema>;

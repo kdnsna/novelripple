@@ -1,5 +1,9 @@
 import Link from "next/link";
 
+import { listProjects } from "@/server/repositories/project-repository";
+
+export const dynamic = "force-dynamic";
+
 const principles = [
   {
     number: "01",
@@ -19,6 +23,8 @@ const principles = [
 ] as const;
 
 export default function Home() {
+  const projects = listProjects();
+
   return (
     <main className="landing-shell">
       <nav className="landing-nav" aria-label="主导航">
@@ -49,9 +55,14 @@ export default function Home() {
             NovelRipple 把完成的小说变成一张可以核对、分叉和继续的故事地图。
             原著保持只读，每一次改变都先经过证据和因果检查。
           </p>
+          <p className="fixture-note" role="status">
+            {projects.length === 0
+              ? "当前没有故事项目"
+              : `当前有 ${projects.length} 个故事项目`}
+          </p>
           <div className="hero-actions">
-            <Link className="primary-action" href="/demo">
-              进入基准故事
+            <Link className="primary-action" href="/projects/new">
+              创建故事项目
               <span aria-hidden="true">↗</span>
             </Link>
             <a className="text-action" href="#how-it-works">
@@ -60,8 +71,19 @@ export default function Home() {
             </a>
           </div>
           <p className="fixture-note">
-            当前体验使用 8,000+ 字自建公开短篇，不会上传任何私人作品。
+            Source 只在本地 SQLite 持久化且不会被生成内容覆盖；生成 Story Map
+            时，正文会发送到你配置的模型端点。
           </p>
+          {projects.length > 0 ? (
+            <div className="recent-projects">
+              <span>最近项目</span>
+              {projects.slice(0, 3).map((project) => (
+                <Link href={`/projects/${project.id}`} key={project.id}>
+                  {project.title}
+                </Link>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="hero-visual" aria-label="世界线涟漪示意">

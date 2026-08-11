@@ -8,13 +8,13 @@
   {
     "id": "div_destroy_ledger",
     "eventId": "event_07",
-    "type": "alternate_choice",
+    "type": "choice",
     "instruction": "许澄当场烧毁红色账簿，并拒绝保留任何副本"
   },
   {
-    "id": "div_trust_gu",
-    "eventId": "event_07",
-    "type": "alternate_choice",
-    "instruction": "许澄把红色账簿交给顾闻舟保管"
+    "id": "div_gate_partial",
+    "eventId": "event_09",
+    "type": "outcome",
+    "instruction": "许澄仍启动旧东闸，但闸门只抬起一半便彻底卡死"
   }
 ]

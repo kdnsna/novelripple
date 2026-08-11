@@ -8,6 +8,41 @@
       "when": 1786416000000,
       "tag": "0000_initial",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786438147000,
+      "tag": "0001_immutable_sources",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786441054000,
+      "tag": "0002_generation_run_worldline",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786443325000,
+      "tag": "0003_story_map_artifact_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786451500000,
+      "tag": "0004_story_map_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786460000000,
+      "tag": "0005_remove_legacy_demo",
+      "breakpoints": true
     }
   ]
 }

@@ -1,11 +1,13 @@
 import type {
-  EvidenceReference,
+  ImpactPlan,
   Source,
+  SourceReference,
   StoryMap,
+  StoryMapReview,
 } from "@/domain/schemas";
 import { sha256 } from "@/domain/source/normalize-source";
 
-export type StoryMapValidationIssue = {
+export type DomainValidationIssue = {
   path: string;
   message: string;
 };
@@ -24,10 +26,10 @@ function duplicateValues(values: string[]): string[] {
 
 function validateEvidence(
   source: Source,
-  reference: EvidenceReference,
+  reference: SourceReference,
   path: string,
-): StoryMapValidationIssue[] {
-  const issues: StoryMapValidationIssue[] = [];
+): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
 
   if (reference.sourceId !== source.id) {
     issues.push({ path, message: `证据引用了未知 Source：${reference.sourceId}` });
@@ -63,19 +65,51 @@ function validateEvidence(
   return issues;
 }
 
+function validateReasonPath(
+  reasonPath: string[],
+  eventIds: Set<string>,
+  path: string,
+): DomainValidationIssue[] {
+  return reasonPath
+    .filter((eventId) => !eventIds.has(eventId))
+    .map((eventId) => ({
+      path,
+      message: `reasonPath 引用了未知 Event：${eventId}`,
+    }));
+}
+
 export function validateStoryMap(
   storyMap: StoryMap,
   source: Source,
-): StoryMapValidationIssue[] {
-  const issues: StoryMapValidationIssue[] = [];
+): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
   const characterIds = new Set(storyMap.characters.map((item) => item.id));
   const eventIds = new Set(storyMap.events.map((item) => item.id));
+  const evidencedParticipantIds = new Set(
+    storyMap.events.flatMap((event) => event.participants),
+  );
+
+  if (storyMap.sourceId !== source.id) {
+    issues.push({
+      path: "sourceId",
+      message: `Story Map 绑定了未知 Source：${storyMap.sourceId}`,
+    });
+  }
 
   for (const duplicate of duplicateValues(
     storyMap.characters.map((item) => item.id),
   )) {
     issues.push({ path: "characters", message: `重复人物 ID：${duplicate}` });
   }
+
+  storyMap.characters.forEach((character, characterIndex) => {
+    if (!evidencedParticipantIds.has(character.id)) {
+      issues.push({
+        path: `characters.${characterIndex}`,
+        message: `人物必须至少参与一个有 Evidence 的 Event：${character.id}`,
+      });
+    }
+  });
 
   for (const duplicate of duplicateValues(storyMap.events.map((item) => item.id))) {
     issues.push({ path: "events", message: `重复事件 ID：${duplicate}` });
@@ -86,9 +120,31 @@ export function validateStoryMap(
   }
 
   for (const duplicate of duplicateValues(
+    storyMap.endingCandidates.map((item) => item.id),
+  )) {
+    issues.push({
+      path: "endingCandidates",
+      message: `重复结局候选 ID：${duplicate}`,
+    });
+  }
+
+  for (const duplicate of duplicateValues(
     storyMap.events.map((item) => String(item.sequence)),
   )) {
     issues.push({ path: "events", message: `重复事件顺序：${duplicate}` });
+  }
+
+  const orderedSequences = storyMap.events
+    .map((event) => event.sequence)
+    .sort((left, right) => left - right);
+  const invalidSequenceIndex = orderedSequences.findIndex(
+    (sequence, index) => sequence !== index + 1,
+  );
+  if (invalidSequenceIndex >= 0) {
+    issues.push({
+      path: "events",
+      message: `事件 sequence 必须从 1 开始连续：期望 ${invalidSequenceIndex + 1}，实际 ${orderedSequences[invalidSequenceIndex]}`,
+    });
   }
 
   for (const [eventIndex, event] of storyMap.events.entries()) {
@@ -113,10 +169,10 @@ export function validateStoryMap(
   }
 
   for (const [edgeIndex, edge] of storyMap.edges.entries()) {
-    if (!eventIds.has(edge.sourceEventId) || !eventIds.has(edge.targetEventId)) {
+    if (!eventIds.has(edge.from) || !eventIds.has(edge.to)) {
       issues.push({
         path: `edges.${edgeIndex}`,
-        message: `因果边包含悬空引用：${edge.sourceEventId} → ${edge.targetEventId}`,
+        message: `因果边包含悬空引用：${edge.from} → ${edge.to}`,
       });
     }
 
@@ -153,13 +209,291 @@ export function validateStoryMap(
   return issues;
 }
 
-export function assertValidStoryMap(storyMap: StoryMap, source: Source): void {
-  const issues = validateStoryMap(storyMap, source);
-  if (issues.length > 0) {
-    throw new Error(
-      `Story Map 校验失败：\n${issues
-        .map((issue) => `- ${issue.path}: ${issue.message}`)
-        .join("\n")}`,
+export function validateImpactPlan(
+  impactPlan: ImpactPlan,
+  storyMap: StoryMap,
+): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
+  const eventIds = new Set(storyMap.events.map((event) => event.id));
+  const eventsById = new Map(storyMap.events.map((event) => [event.id, event]));
+  const characterIds = new Set(
+    storyMap.characters.map((character) => character.id),
+  );
+  const anchorIds = new Set(impactPlan.anchors.map((anchor) => anchor.id));
+  const evaluatedAnchorIds = new Set(
+    impactPlan.anchorEvaluations.map((evaluation) => evaluation.anchorId),
+  );
+
+  if (impactPlan.storyMapId !== storyMap.id) {
+    issues.push({
+      path: "storyMapId",
+      message: `Impact Plan 绑定了未知 Story Map：${impactPlan.storyMapId}`,
+    });
+  }
+
+  if (!eventIds.has(impactPlan.divergence.eventId)) {
+    issues.push({
+      path: "divergence.eventId",
+      message: `Divergence 引用了未知 Event：${impactPlan.divergence.eventId}`,
+    });
+  }
+
+  for (const scope of ["direct", "downstream", "ending"] as const) {
+    if (!impactPlan.impacts.some((impact) => impact.scope === scope)) {
+      issues.push({
+        path: "impacts",
+        message: `Impact Plan 缺少 ${scope} 影响`,
+      });
+    }
+  }
+
+  for (const duplicate of duplicateValues(
+    impactPlan.impacts.map((impact) => impact.id),
+  )) {
+    issues.push({ path: "impacts", message: `重复影响 ID：${duplicate}` });
+  }
+
+  for (const duplicate of duplicateValues(
+    impactPlan.anchors.map((anchor) => anchor.id),
+  )) {
+    issues.push({ path: "anchors", message: `重复 Anchor ID：${duplicate}` });
+  }
+
+  for (const duplicate of duplicateValues(
+    impactPlan.anchorEvaluations.map((evaluation) => evaluation.anchorId),
+  )) {
+    issues.push({
+      path: "anchorEvaluations",
+      message: `重复 Anchor 评估：${duplicate}`,
+    });
+  }
+
+  for (const [impactIndex, impact] of impactPlan.impacts.entries()) {
+    if (!eventIds.has(impact.fromEventId)) {
+      issues.push({
+        path: `impacts.${impactIndex}.fromEventId`,
+        message: `fromEventId 引用了未知 Event：${impact.fromEventId}`,
+      });
+    }
+    if (impact.reasonPath[0] !== impact.fromEventId) {
+      issues.push({
+        path: `impacts.${impactIndex}.fromEventId`,
+        message: "fromEventId 必须是 reasonPath 的起点",
+      });
+    }
+    if (
+      impact.affectedEventId !== null &&
+      !eventIds.has(impact.affectedEventId)
+    ) {
+      issues.push({
+        path: `impacts.${impactIndex}.affectedEventId`,
+        message: `affectedEventId 引用了未知 Event：${impact.affectedEventId}`,
+      });
+    }
+    if (impact.changeType !== "added" && impact.affectedEventId === null) {
+      issues.push({
+        path: `impacts.${impactIndex}.affectedEventId`,
+        message: "修改、删除或保留原事件时必须声明 affectedEventId",
+      });
+    }
+    issues.push(
+      ...validateReasonPath(
+        impact.reasonPath,
+        eventIds,
+        `impacts.${impactIndex}.reasonPath`,
+      ),
     );
   }
+
+  for (const [changeIndex, change] of impactPlan.characterChanges.entries()) {
+    if (!characterIds.has(change.characterId)) {
+      issues.push({
+        path: `characterChanges.${changeIndex}.characterId`,
+        message: `人物状态变化引用了未知人物：${change.characterId}`,
+      });
+    }
+  }
+
+  for (const duplicate of duplicateValues(
+    impactPlan.characterChanges.map((change) => change.characterId),
+  )) {
+    issues.push({
+      path: "characterChanges",
+      message: `重复人物状态变化：${duplicate}`,
+    });
+  }
+  for (const duplicate of duplicateValues(impactPlan.threadChanges.opened)) {
+    issues.push({
+      path: "threadChanges.opened",
+      message: `重复开启线索：${duplicate}`,
+    });
+  }
+  for (const duplicate of duplicateValues(impactPlan.threadChanges.closed)) {
+    issues.push({
+      path: "threadChanges.closed",
+      message: `重复关闭线索：${duplicate}`,
+    });
+  }
+  const closedThreads = new Set(impactPlan.threadChanges.closed);
+  for (const [threadIndex, thread] of impactPlan.threadChanges.opened.entries()) {
+    if (closedThreads.has(thread)) {
+      issues.push({
+        path: `threadChanges.opened.${threadIndex}`,
+        message: `同一 Impact Plan 不能同时开启和关闭线索：${thread}`,
+      });
+    }
+  }
+
+  for (const [anchorIndex, anchor] of impactPlan.anchors.entries()) {
+    if (!eventIds.has(anchor.targetEventId)) {
+      issues.push({
+        path: `anchors.${anchorIndex}.targetEventId`,
+        message: `Anchor 引用了未知 Event：${anchor.targetEventId}`,
+      });
+    }
+
+    const matchesEndingCandidate = storyMap.endingCandidates.some(
+      (ending) =>
+        ending.targetEventId === anchor.targetEventId &&
+        ending.requirement === anchor.requirement,
+    );
+    if (!matchesEndingCandidate) {
+      issues.push({
+        path: `anchors.${anchorIndex}`,
+        message: `Anchor 不匹配已确认 Story Map 的 Ending Candidate：${anchor.id}`,
+      });
+    }
+
+    if (!evaluatedAnchorIds.has(anchor.id)) {
+      issues.push({
+        path: `anchors.${anchorIndex}`,
+        message: `缺少 Anchor 评估：${anchor.id}`,
+      });
+    }
+  }
+
+  for (const [evaluationIndex, evaluation] of impactPlan.anchorEvaluations.entries()) {
+    if (!anchorIds.has(evaluation.anchorId)) {
+      issues.push({
+        path: `anchorEvaluations.${evaluationIndex}.anchorId`,
+        message: `Anchor 评估引用了未知 Anchor：${evaluation.anchorId}`,
+      });
+    }
+
+    issues.push(
+      ...validateReasonPath(
+        evaluation.reasonPath,
+        eventIds,
+        `anchorEvaluations.${evaluationIndex}.reasonPath`,
+      ),
+    );
+  }
+
+
+  const divergence = eventsById.get(impactPlan.divergence.eventId);
+  if (divergence) {
+    for (const [impactIndex, impact] of impactPlan.impacts.entries()) {
+      const affected = impact.affectedEventId
+        ? eventsById.get(impact.affectedEventId)
+        : undefined;
+      if (
+        affected &&
+        affected.sequence < divergence.sequence &&
+        (impact.changeType === "modified" || impact.changeType === "removed")
+      ) {
+        issues.push({
+          path: `impacts.${impactIndex}.affectedEventId`,
+          message: `任何模式都不得修改或删除分歧前事实：${affected.id}`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+export function validateStoryMapReview(
+  storyMap: StoryMap,
+  review: StoryMapReview,
+): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
+  const confirmationKeys = new Set<string>();
+
+  review.evidenceConfirmations.forEach((confirmation, index) => {
+    const event = storyMap.events.find(
+      (candidate) => candidate.id === confirmation.eventId,
+    );
+    const path = `evidenceConfirmations.${index}`;
+    if (!event) {
+      issues.push({
+        path,
+        message: `Evidence 确认引用了未知 Event：${confirmation.eventId}`,
+      });
+      return;
+    }
+
+    const belongsToEvent = event.evidence.some((reference) =>
+      sameSourceReference(reference, confirmation.evidence),
+    );
+    if (!belongsToEvent) {
+      issues.push({ path, message: "Evidence 不属于指定事件" });
+      return;
+    }
+
+    const key = [
+      confirmation.eventId,
+      confirmation.evidence.sourceId,
+      confirmation.evidence.sectionId,
+      confirmation.evidence.start,
+      confirmation.evidence.end,
+      confirmation.evidence.excerptHash,
+    ].join(":");
+    if (confirmationKeys.has(key)) {
+      issues.push({ path, message: "Evidence 已被重复确认" });
+    }
+    confirmationKeys.add(key);
+  });
+
+  return issues;
+}
+
+export function assertValidStoryMap(storyMap: StoryMap, source: Source): void {
+  assertNoIssues("Story Map", validateStoryMap(storyMap, source));
+}
+
+export function assertValidStoryMapReview(
+  storyMap: StoryMap,
+  review: StoryMapReview,
+): void {
+  assertNoIssues("Story Map Review", validateStoryMapReview(storyMap, review));
+}
+
+export function assertValidImpactPlan(
+  impactPlan: ImpactPlan,
+  storyMap: StoryMap,
+): void {
+  assertNoIssues("Impact Plan", validateImpactPlan(impactPlan, storyMap));
+}
+
+function assertNoIssues(label: string, issues: DomainValidationIssue[]): void {
+  if (issues.length === 0) return;
+
+  throw new Error(
+    `${label} 校验失败：\n${issues
+      .map((issue) => `- ${issue.path}: ${issue.message}`)
+      .join("\n")}`,
+  );
+}
+
+function sameSourceReference(
+  left: SourceReference,
+  right: SourceReference,
+): boolean {
+  return (
+    left.sourceId === right.sourceId &&
+    left.sectionId === right.sectionId &&
+    left.start === right.start &&
+    left.end === right.end &&
+    left.excerptHash === right.excerptHash
+  );
 }

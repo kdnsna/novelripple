@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 1,
   "id": "story_map_ripple_001_v1",
   "sourceId": "source_ripple_001",
   "version": 1,
@@ -173,8 +174,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_03",
-          "start": 2213,
-          "end": 2267,
+          "start": 2447,
+          "end": 2501,
           "excerptHash": "sha256:ecc08650a7734fdf3e909512a90b375928de4d1d5b4df473cfa509db051a3cb1"
         }
       ]
@@ -198,15 +199,15 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_04",
-          "start": 3316,
-          "end": 3340,
+          "start": 3750,
+          "end": 3774,
           "excerptHash": "sha256:37fc6647007fa95217a4a87c51036577e54784f48651795366a75b65384602e3"
         },
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_04",
-          "start": 3405,
-          "end": 3459,
+          "start": 3839,
+          "end": 3893,
           "excerptHash": "sha256:d12b957f0071ee2f759137b509c581370bc41b03d8883c4bbe7b27aece4c9149"
         }
       ]
@@ -229,8 +230,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_05",
-          "start": 4811,
-          "end": 4850,
+          "start": 5584,
+          "end": 5623,
           "excerptHash": "sha256:dab04cb73f24cecfcebc3d91efcbbf6b6d8370bd50901df8ea9edde209ee5e5f"
         }
       ]
@@ -253,8 +254,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_07",
-          "start": 6570,
-          "end": 6595,
+          "start": 7595,
+          "end": 7620,
           "excerptHash": "sha256:d7589468814ce0619f8e4817b1d5ea64f0a59f1a9d4035a085d19f11d568c306"
         }
       ]
@@ -278,8 +279,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_06",
-          "start": 6119,
-          "end": 6159,
+          "start": 7144,
+          "end": 7184,
           "excerptHash": "sha256:7bb343c4a706764ca6cdb380ed9f48962a9e111cc2c9eedc27fd2e942a7a6526"
         }
       ]
@@ -304,8 +305,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_07",
-          "start": 6949,
-          "end": 6984,
+          "start": 7974,
+          "end": 8009,
           "excerptHash": "sha256:44d5f444d84d44300f0a422b3e77d1057ea7ddca9d4c5e3dba2dc18257db4b2d"
         }
       ]
@@ -330,8 +331,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_08",
-          "start": 7484,
-          "end": 7553,
+          "start": 8509,
+          "end": 8578,
           "excerptHash": "sha256:76d93d62ad1d3add74ea38c449049d3d3d6287112aecc3a9ba758217a255cd13"
         }
       ]
@@ -355,22 +356,22 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_08",
-          "start": 7878,
-          "end": 7943,
+          "start": 8903,
+          "end": 8968,
           "excerptHash": "sha256:82da3833dbc81d4dbe9d0a096bdf9fdfc3cff10aebd715ba959bf78749f8c2af"
         },
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_09",
-          "start": 8215,
-          "end": 8233,
+          "start": 9240,
+          "end": 9258,
           "excerptHash": "sha256:63d6089f27e5caca6c45e45b08bf48640025da31e3dcbd721af0468d3822a03e"
         },
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_09",
-          "start": 8255,
-          "end": 8298,
+          "start": 9280,
+          "end": 9323,
           "excerptHash": "sha256:3879f13a4a56c388ae3e1482dd9c64657819317c79d06f84c80be73b640735b7"
         }
       ]
@@ -379,11 +380,12 @@
   "edges": [
     {
       "id": "edge_01_02",
-      "sourceEventId": "event_01",
-      "targetEventId": "event_02",
+      "from": "event_01",
+      "to": "event_02",
       "type": "enables",
       "explanation": "返港和母亲的信让许澄进入钟楼并尝试旧密码。",
       "confidence": 0.99,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
@@ -392,16 +394,16 @@
           "end": 836,
           "excerptHash": "sha256:6232b8c2fc6da29bf8d9de225027aff4d85056f2b61c59a392de836dbe31f93f"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_02_03",
-      "sourceEventId": "event_02",
-      "targetEventId": "event_03",
+      "from": "event_02",
+      "to": "event_03",
       "type": "causes",
       "explanation": "打开检修门和地板藏匿处直接导致红账被发现。",
       "confidence": 0.99,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
@@ -410,16 +412,16 @@
           "end": 976,
           "excerptHash": "sha256:f2cdd822826586d0b52551b26f39b4a8cf9f9ad41c5c1b5c650e85554cfad82f"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_03_04",
-      "sourceEventId": "event_03",
-      "targetEventId": "event_04",
+      "from": "event_03",
+      "to": "event_04",
       "type": "causes",
       "explanation": "红账中的黑红双值让潮位覆盖问题可被识别。",
       "confidence": 0.98,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
@@ -428,106 +430,106 @@
           "end": 1128,
           "excerptHash": "sha256:feff594481c3121a341010860638ef01aa14609b46c618a397cb7c8aba3243f5"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_03_05",
-      "sourceEventId": "event_03",
-      "targetEventId": "event_05",
+      "from": "event_03",
+      "to": "event_05",
       "type": "causes",
       "explanation": "许澄带着红账质询港务站，顾闻舟才出示蓝表解释。",
       "confidence": 0.91,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_03",
-          "start": 2213,
-          "end": 2267,
+          "start": 2447,
+          "end": 2501,
           "excerptHash": "sha256:ecc08650a7734fdf3e909512a90b375928de4d1d5b4df473cfa509db051a3cb1"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_03_06",
-      "sourceEventId": "event_03",
-      "targetEventId": "event_06",
+      "from": "event_03",
+      "to": "event_06",
       "type": "enables",
       "explanation": "红账留言和半把钥匙把调查引向北岬灯塔。",
       "confidence": 0.97,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_04",
-          "start": 3316,
-          "end": 3340,
+          "start": 3750,
+          "end": 3774,
           "excerptHash": "sha256:37fc6647007fa95217a4a87c51036577e54784f48651795366a75b65384602e3"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_06_07",
-      "sourceEventId": "event_06",
-      "targetEventId": "event_07",
+      "from": "event_06",
+      "to": "event_07",
       "type": "enables",
       "explanation": "独立灯塔证词提高红账可信度，使正式移交成为合理下一步。",
       "confidence": 0.86,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_05",
-          "start": 4811,
-          "end": 4850,
+          "start": 5584,
+          "end": 5623,
           "excerptHash": "sha256:dab04cb73f24cecfcebc3d91efcbbf6b6d8370bd50901df8ea9edde209ee5e5f"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_07_08",
-      "sourceEventId": "event_07",
-      "targetEventId": "event_08",
+      "from": "event_07",
+      "to": "event_08",
       "type": "causes",
       "explanation": "周岚携原件前往档案馆，触发港务站车辆的拦截。",
       "confidence": 0.93,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_07",
-          "start": 6570,
-          "end": 6595,
+          "start": 7595,
+          "end": 7620,
           "excerptHash": "sha256:d7589468814ce0619f8e4817b1d5ea64f0a59f1a9d4035a085d19f11d568c306"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_06_09",
-      "sourceEventId": "event_06",
-      "targetEventId": "event_09",
+      "from": "event_06",
+      "to": "event_09",
       "type": "enables",
       "explanation": "沈砚的半把钥匙和独立潮标使机械开闸成为可能。",
       "confidence": 0.99,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_06",
-          "start": 6119,
-          "end": 6159,
+          "start": 7144,
+          "end": 7184,
           "excerptHash": "sha256:7bb343c4a706764ca6cdb380ed9f48962a9e111cc2c9eedc27fd2e942a7a6526"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_02_10",
-      "sourceEventId": "event_02",
-      "targetEventId": "event_10",
+      "from": "event_02",
+      "to": "event_10",
       "type": "foreshadows",
       "explanation": "人为制动的潮汐钟暗示钟体仍藏有需要钟重新运转才能定位的证据。",
       "confidence": 0.84,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
@@ -539,20 +541,20 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_07",
-          "start": 6949,
-          "end": 6984,
+          "start": 7974,
+          "end": 8009,
           "excerptHash": "sha256:44d5f444d84d44300f0a422b3e77d1057ea7ddca9d4c5e3dba2dc18257db4b2d"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_03_10",
-      "sourceEventId": "event_03",
-      "targetEventId": "event_10",
+      "from": "event_03",
+      "to": "event_10",
       "type": "foreshadows",
       "explanation": "红账整齐缺失的四页预告了后续钟锤中的原页。",
       "confidence": 0.99,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
@@ -564,55 +566,54 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_07",
-          "start": 6949,
-          "end": 6984,
+          "start": 7974,
+          "end": 8009,
           "excerptHash": "sha256:44d5f444d84d44300f0a422b3e77d1057ea7ddca9d4c5e3dba2dc18257db4b2d"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_10_11",
-      "sourceEventId": "event_10",
-      "targetEventId": "event_11",
+      "from": "event_10",
+      "to": "event_11",
       "type": "enables",
       "explanation": "缺失四页和付款记录补全证据链，使听证会能够重建责任。",
       "confidence": 0.98,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_08",
-          "start": 7484,
-          "end": 7553,
+          "start": 8509,
+          "end": 8578,
           "excerptHash": "sha256:76d93d62ad1d3add74ea38c449049d3d3d6287112aecc3a9ba758217a255cd13"
         }
-      ],
-      "confirmed": true
+      ]
     },
     {
       "id": "edge_11_12",
-      "sourceEventId": "event_11",
-      "targetEventId": "event_12",
+      "from": "event_11",
+      "to": "event_12",
       "type": "causes",
       "explanation": "公开听证确认材料价值后，红账归档、钟楼保留并恢复运行。",
       "confidence": 0.96,
+      "confirmed": true,
       "evidence": [
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_08",
-          "start": 7878,
-          "end": 7943,
+          "start": 8903,
+          "end": 8968,
           "excerptHash": "sha256:82da3833dbc81d4dbe9d0a096bdf9fdfc3cff10aebd715ba959bf78749f8c2af"
         },
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_09",
-          "start": 8215,
-          "end": 8233,
+          "start": 9240,
+          "end": 9258,
           "excerptHash": "sha256:63d6089f27e5caca6c45e45b08bf48640025da31e3dcbd721af0468d3822a03e"
         }
-      ],
-      "confirmed": true
+      ]
     }
   ],
   "endingCandidates": [
@@ -624,8 +625,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_08",
-          "start": 7484,
-          "end": 7553,
+          "start": 8509,
+          "end": 8578,
           "excerptHash": "sha256:76d93d62ad1d3add74ea38c449049d3d3d6287112aecc3a9ba758217a255cd13"
         }
       ]
@@ -638,8 +639,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_08",
-          "start": 7878,
-          "end": 7943,
+          "start": 8903,
+          "end": 8968,
           "excerptHash": "sha256:82da3833dbc81d4dbe9d0a096bdf9fdfc3cff10aebd715ba959bf78749f8c2af"
         }
       ]
@@ -652,8 +653,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_09",
-          "start": 8215,
-          "end": 8233,
+          "start": 9240,
+          "end": 9258,
           "excerptHash": "sha256:63d6089f27e5caca6c45e45b08bf48640025da31e3dcbd721af0468d3822a03e"
         }
       ]
@@ -666,8 +667,8 @@
         {
           "sourceId": "source_ripple_001",
           "sectionId": "section_09",
-          "start": 8255,
-          "end": 8298,
+          "start": 9280,
+          "end": 9323,
           "excerptHash": "sha256:3879f13a4a56c388ae3e1482dd9c64657819317c79d06f84c80be73b640735b7"
         }
       ]

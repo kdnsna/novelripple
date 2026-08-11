@@ -1,10 +1,19 @@
-import type { SourceSection, StoryEvent } from "@/domain/schemas";
+"use client";
+
+import { useEffect, useRef } from "react";
+
+import type {
+  Event,
+  SourceReference,
+  SourceSection,
+} from "@/domain/schemas";
 
 type SourceReaderProps = {
   title: string;
   normalizedText: string;
   sections: SourceSection[];
-  selectedEvent: StoryEvent;
+  selectedEvent: Event;
+  activeEvidence?: SourceReference | null;
 };
 
 export function SourceReader({
@@ -12,12 +21,18 @@ export function SourceReader({
   normalizedText,
   sections,
   selectedEvent,
+  activeEvidence,
 }: SourceReaderProps) {
-  const evidence = selectedEvent.evidence[0];
+  const evidence = activeEvidence ?? selectedEvent.evidence[0];
+  const evidenceMark = useRef<HTMLElement>(null);
   const section = sections.find((item) => item.id === evidence?.sectionId);
   const excerpt = evidence
     ? normalizedText.slice(evidence.start, evidence.end)
     : "该事件属于新世界线生成内容，没有原著片段。";
+
+  useEffect(() => {
+    evidenceMark.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [evidence?.end, evidence?.start]);
 
   return (
     <aside className="workspace-panel source-panel">
@@ -41,12 +56,25 @@ export function SourceReader({
         ))}
       </div>
 
+      <pre className="workspace-source-text" data-testid="source-reader">
+        {evidence ? (
+          <>
+            {normalizedText.slice(0, evidence.start)}
+            <mark data-active-evidence="true" ref={evidenceMark}>
+              {excerpt}
+            </mark>
+            {normalizedText.slice(evidence.end)}
+          </>
+        ) : (
+          normalizedText
+        )}
+      </pre>
+
       <div className="evidence-card">
         <div className="evidence-card-heading">
           <span>当前证据</span>
           <span>{section?.title ?? "新世界线"}</span>
         </div>
-        <blockquote>{excerpt}</blockquote>
         {evidence ? (
           <dl className="evidence-meta">
             <div>

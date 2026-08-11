@@ -1,0 +1,60 @@
+{
+  "impactPlanFixtureId": "impact_prevent_handoff_v1",
+  "directions": {
+    "directions": [
+      {
+        "title": "把证据藏进潮标站",
+        "premise": "许澄与沈砚先保护红账原件，再寻找不依赖报社车辆的公开路径。",
+        "affectedCharacterIds": [
+          "char_xucheng",
+          "char_shenyan"
+        ],
+        "expectedConsequence": "原件保管风险暂时下降，但顾闻舟会更快把注意力转向灯塔。"
+      },
+      {
+        "title": "让周岚只做见证",
+        "premise": "周岚不接触原件，只远程记录许澄展示红账与钟锤四页的过程。",
+        "affectedCharacterIds": [
+          "char_xucheng",
+          "char_zhoulan"
+        ],
+        "expectedConsequence": "独立见证链得到补强，但没有形成原件的第三方保管。"
+      },
+      {
+        "title": "反向追踪顾闻舟",
+        "premise": "许澄故意留下错误去向，以确认顾闻舟掌握红账存在的渠道。",
+        "affectedCharacterIds": [
+          "char_xucheng",
+          "char_guwenzhou"
+        ],
+        "expectedConsequence": "新的追踪证据可能出现，同时许澄暴露位置的风险上升。"
+      }
+    ]
+  },
+  "selectedDirectionIndex": 0,
+  "scene": {
+    "title": "潮标站的第二把锁",
+    "prose": "许澄没有把红账带去报社。雨水沿着旧潮标站的百叶窗往下淌，她把包在防潮布里的账簿放进铁柜，又让沈砚当面记下封条编号。沈砚关掉顶灯，只留下值班台的一圈冷光。他们没有宣称证据已经安全，也没有假装周岚持有原件；电话另一端，周岚只记录时间、地点和两人的口述。铁柜上锁后，许澄把钥匙留在自己手里，决定等风暴过去便亲自把原件、钟锤四页和录音一并提交。远处一束车灯扫过堤岸，两人同时停住了动作。",
+    "statePatch": {
+      "factsAdded": [
+        {
+          "key": "generated:scene_tide_station_lock",
+          "statement": "许澄把红账原件封存在旧潮标站铁柜，并由沈砚和周岚远程见证。"
+        }
+      ],
+      "factsRemoved": [],
+      "characterChanges": [
+        {
+          "characterId": "char_xucheng",
+          "summary": "许澄决定继续持有钥匙并在风暴后亲自提交全部证据。"
+        }
+      ],
+      "threadsOpened": [
+        "堤岸上的车辆是否属于顾闻舟"
+      ],
+      "threadsClosed": [
+        "顾闻舟如何定位仍持原件的许澄"
+      ]
+    }
+  }
+}

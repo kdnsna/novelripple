@@ -1,10 +1,12 @@
 import { z } from "zod";
 
+import { StateFactIdSchema } from "./state-fact-id";
+
 export const DivergenceSchema = z
   .object({
-    id: z.string().min(1),
+    id: StateFactIdSchema,
     eventId: z.string().min(1),
-    type: z.enum(["prevent", "alternate_choice", "alternate_outcome"]),
+    type: z.enum(["prevent", "choice", "outcome"]),
     instruction: z.string().min(1),
   })
   .strict();

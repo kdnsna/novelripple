@@ -2,17 +2,25 @@ import { createHash } from "node:crypto";
 
 import {
   ImpactPlanSchema,
+  StoryMapArtifactSchema,
   WorldlineSchema,
   type ImpactPlan,
+  type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
 
 export type CreateWorldlineInput = {
   projectId: string;
   parentWorldlineId: string;
-  baseStoryMapArtifactId: string;
+  baseStoryMapArtifact: StoryMapArtifact;
   impactPlan: ImpactPlan;
   mode: "strict" | "open";
+  createdAt?: string;
+};
+
+export type CreateCanonicalWorldlineInput = {
+  projectId: string;
+  baseStoryMapArtifact: StoryMapArtifact;
   createdAt?: string;
 };
 
@@ -28,24 +36,74 @@ function stableValue(value: unknown): unknown {
   return value;
 }
 
+export function createCanonicalWorldline(
+  input: CreateCanonicalWorldlineInput,
+): Worldline {
+  const baseStoryMapArtifact = StoryMapArtifactSchema.parse(
+    input.baseStoryMapArtifact,
+  );
+  if (baseStoryMapArtifact.projectId !== input.projectId) {
+    throw new Error("Canonical Worldline 与 Story Map Artifact 项目不匹配");
+  }
+  if (baseStoryMapArtifact.storyMap.status !== "confirmed") {
+    throw new Error("Story Map 必须先由用户确认，才能进入 Ripple");
+  }
+
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        projectId: input.projectId,
+        baseStoryMapArtifactId: baseStoryMapArtifact.id,
+      }),
+    )
+    .digest("hex");
+
+  return WorldlineSchema.parse({
+    id: `wl_${digest.slice(0, 16)}`,
+    projectId: input.projectId,
+    parentWorldlineId: null,
+    baseStoryMapArtifactId: baseStoryMapArtifact.id,
+    divergence: null,
+    mode: "open",
+    anchors: [],
+    acceptedImpactPlanId: null,
+    idempotencyKey: `canonical:${baseStoryMapArtifact.id}`,
+    status: "canonical",
+    createdAt: input.createdAt ?? new Date().toISOString(),
+  });
+}
+
 export function createWorldline(input: CreateWorldlineInput): Worldline {
   const impactPlan = ImpactPlanSchema.parse(input.impactPlan);
+  const baseStoryMapArtifact = StoryMapArtifactSchema.parse(
+    input.baseStoryMapArtifact,
+  );
+
+  if (
+    baseStoryMapArtifact.projectId !== input.projectId ||
+    impactPlan.storyMapId !== baseStoryMapArtifact.storyMap.id
+  ) {
+    throw new Error("Impact Plan 与 Story Map Artifact 不匹配");
+  }
+  if (baseStoryMapArtifact.storyMap.status !== "confirmed") {
+    throw new Error("Story Map 必须先由用户确认，才能进入 Ripple");
+  }
 
   if (impactPlan.status !== "accepted") {
     throw new Error("Impact Plan 必须由用户接受后才能创建世界线");
   }
+  if (impactPlan.mode !== input.mode) {
+    throw new Error("Worldline 模式必须与已接受 Impact Plan 一致");
+  }
 
   if (input.mode === "strict") {
-    const incompatibleHardAnchor = impactPlan.anchorEvaluations.find(
-      (evaluation) =>
-        evaluation.status === "incompatible" &&
-        impactPlan.anchors.find((anchor) => anchor.id === evaluation.anchorId)
-          ?.strength === "hard",
+    const incompatibleAnchor = impactPlan.anchorEvaluations.find(
+      (evaluation) => evaluation.status === "incompatible",
     );
 
-    if (incompatibleHardAnchor) {
+    if (incompatibleAnchor) {
       throw new Error(
-        `严格模式锚点不兼容：${incompatibleHardAnchor.anchorId}`,
+        `严格模式锚点不兼容：${incompatibleAnchor.anchorId}`,
       );
     }
   }
@@ -54,7 +112,7 @@ export function createWorldline(input: CreateWorldlineInput): Worldline {
   const idempotencyPayload = stableValue({
     projectId: input.projectId,
     parentWorldlineId: input.parentWorldlineId,
-    baseStoryMapArtifactId: input.baseStoryMapArtifactId,
+    baseStoryMapArtifactId: baseStoryMapArtifact.id,
     impactPlanId: impactPlan.id,
     divergence: impactPlan.divergence,
     mode: input.mode,
@@ -68,7 +126,7 @@ export function createWorldline(input: CreateWorldlineInput): Worldline {
     id: `wl_${digest.slice(0, 16)}`,
     projectId: input.projectId,
     parentWorldlineId: input.parentWorldlineId,
-    baseStoryMapArtifactId: input.baseStoryMapArtifactId,
+    baseStoryMapArtifactId: baseStoryMapArtifact.id,
     divergence: impactPlan.divergence,
     mode: input.mode,
     anchors,

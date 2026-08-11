@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+export const SourceReferenceSchema = z
+  .object({
+    sourceId: z.string().min(1),
+    sectionId: z.string().min(1),
+    start: z.number().int().nonnegative(),
+    end: z.number().int().positive(),
+    excerptHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  })
+  .strict()
+  .refine((reference) => reference.start < reference.end, {
+    message: "SourceReference 必须是非空范围",
+    path: ["end"],
+  });
+
 export const SourceSectionSchema = z
   .object({
     id: z.string().min(1),
@@ -23,4 +37,5 @@ export const SourceSchema = z
   .strict();
 
 export type Source = z.infer<typeof SourceSchema>;
+export type SourceReference = z.infer<typeof SourceReferenceSchema>;
 export type SourceSection = z.infer<typeof SourceSectionSchema>;
