@@ -56,9 +56,43 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-项目处于产品与工程初始化阶段，技术栈尚未锁定。下一步应通过一个最小纵向原型验证核心体验，再决定具体框架、模型和存储方案。
+项目已进入 **M0 — First Ripple**。当前仓库提供一个本地优先的 Web 原型和公开基准故事，用来验证“证据可追溯的故事地图 → 涟漪影响预览 → 创建新世界线”这条最小纵向路径。
 
-参与开发或使用编码 Agent 前，请先阅读 [AGENTS.md](AGENTS.md)。在仓库尚未提供正式脚本前，不要虚构安装、启动或测试命令。
+当前技术基线：
+
+- Next.js App Router + TypeScript；
+- React Flow 故事地图；
+- SQLite + Drizzle ORM；
+- Zod 领域 Schema；
+- Vitest 领域测试与 Playwright 浏览器测试。
+
+真实模型尚未接入。M0 先使用仓库内自建夹具验证领域契约和交互，避免在 Schema、证据与分支规则尚未稳定时把模型随机性混入基础验收。
+
+## 本地启动
+
+需要 Node.js 22 或更高版本。
+
+```bash
+npm install
+npm run db:migrate
+npm run dev
+```
+
+打开 `http://localhost:3000`，点击“进入基准故事”体验第一条涟漪路径。
+
+常用验证命令：
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run test:e2e
+npm run build
+```
+
+产品范围、领域语义和评测门槛分别见 [`docs/mvp.md`](docs/mvp.md)、[`docs/domain.md`](docs/domain.md) 与 [`docs/evals.md`](docs/evals.md)。
+
+参与开发或使用编码 Agent 前，请先阅读 [AGENTS.md](AGENTS.md)。安装、启动与验证命令以 `package.json` 中的脚本为准。
 
 ## 内容权利与隐私
 

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "div_prevent_handoff",
+    "eventId": "event_07",
+    "type": "prevent",
+    "instruction": "许澄没有把红色账簿交给周岚"
+  },
+  {
+    "id": "div_destroy_ledger",
+    "eventId": "event_07",
+    "type": "alternate_choice",
+    "instruction": "许澄当场烧毁红色账簿，并拒绝保留任何副本"
+  },
+  {
+    "id": "div_trust_gu",
+    "eventId": "event_07",
+    "type": "alternate_choice",
+    "instruction": "许澄把红色账簿交给顾闻舟保管"
+  }
+]
