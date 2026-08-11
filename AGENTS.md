@@ -4,6 +4,15 @@
 
 这里只保留长期稳定的产品不变量、工程约束和工作方法。技术栈、脚本和目录尚未确定时，不要猜测它们；确定后以仓库中的可执行配置为准。所有命令默认从仓库根目录运行。
 
+## 权威文档索引
+
+- 当前产品范围与 MVP：`docs/mvp.md`
+- 领域语义与不变量：`docs/domain.md`
+- 质量与评测规则：`docs/evals.md`
+- 已采纳的技术决策：`docs/decisions/`
+
+实现计划只引用这些事实源，不复制一套可能漂移的产品或领域定义。
+
 ## 项目使命
 
 NovelRipple 将完成的小说转化为可追溯、可探索、可分叉的故事世界。首个产品闭环只有：
@@ -173,3 +182,13 @@ NovelRipple 是独立产品，不继承 NarrativeOS 的整体架构。可以优�
 - 适用的测试、静态检查和构建已通过，或未执行项已明确说明；
 - 没有新增无用依赖、平行实现、死代码、秘密或用户正文泄露；
 - 相关文档描述当前真实行为，不承诺尚未实现的功能。
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

@@ -1,0 +1,48 @@
+{
+  "name": "novelripple",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npm run db:migrate && playwright test",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "fixture:build": "tsx scripts/build-fixture.ts"
+  },
+  "dependencies": {
+    "@xyflow/react": "12.11.2",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.2",
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.10.13",
+    "@types/react": "19.2.10",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.3.0",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "tsx": {
+      "esbuild": "0.28.2"
+    }
+  }
+}

@@ -1,0 +1,242 @@
+[
+  {
+    "id": "impact_prevent_handoff_v1",
+    "storyMapId": "story_map_ripple_001_v1",
+    "divergence": {
+      "id": "div_prevent_handoff",
+      "eventId": "event_07",
+      "type": "prevent",
+      "instruction": "许澄没有把红色账簿交给周岚"
+    },
+    "anchors": [
+      {
+        "id": "anchor_truth_public",
+        "targetEventId": "event_11",
+        "requirement": "白鸥号沉船事故的系统性真相最终进入公共记录",
+        "strength": "hard"
+      }
+    ],
+    "impacts": [
+      {
+        "id": "impact_01",
+        "horizon": "immediate",
+        "changeType": "removed",
+        "summary": "周岚无法建立原件的第三方移交记录",
+        "explanation": "交付不发生，报社车辆、封装见证和异地上传都不会按原路径发生。",
+        "reasonPath": [
+          "event_07",
+          "event_08"
+        ],
+        "confidence": 0.98
+      },
+      {
+        "id": "impact_02",
+        "horizon": "immediate",
+        "changeType": "modified",
+        "summary": "顾闻舟会把目标从周岚转向仍持有原件的许澄",
+        "explanation": "追踪车辆失去原路径目标，但顾闻舟仍知道红账存在且需要控制原件。",
+        "reasonPath": [
+          "event_05",
+          "event_07"
+        ],
+        "confidence": 0.82
+      },
+      {
+        "id": "impact_03",
+        "horizon": "midterm",
+        "changeType": "modified",
+        "summary": "风暴中的开闸判断更依赖沈砚的独立潮标",
+        "explanation": "许澄仍持有红账，但缺少周岚的异地副本；机械钥匙与灯塔潮标成为主要交叉证据。",
+        "reasonPath": [
+          "event_07",
+          "event_06",
+          "event_09"
+        ],
+        "confidence": 0.9
+      },
+      {
+        "id": "impact_04",
+        "horizon": "ending",
+        "changeType": "modified",
+        "summary": "真相仍可公开，但必须改由许澄在风暴后直接提交",
+        "explanation": "钟锤四页、残带、后台日志与原件仍可形成证据链，只是失去周岚在风暴前建立的独立保管路径。",
+        "reasonPath": [
+          "event_07",
+          "event_09",
+          "event_10",
+          "event_11"
+        ],
+        "confidence": 0.78
+      }
+    ],
+    "characterChanges": [
+      "许澄继续独自承担原件保管风险",
+      "周岚从证据保管者转为外部调查与见证者"
+    ],
+    "threadChanges": [
+      "关闭：周岚移交途中被拦截",
+      "开启：顾闻舟如何定位仍持原件的许澄",
+      "保留：钟锤缺失四页与公开听证"
+    ],
+    "anchorEvaluations": [
+      {
+        "anchorId": "anchor_truth_public",
+        "status": "rerouted",
+        "explanation": "公开结局仍与因果相容，但必须通过许澄直接提交原件、钟锤四页和沈砚录音的新路径到达。",
+        "reasonPath": [
+          "event_07",
+          "event_06",
+          "event_09",
+          "event_10",
+          "event_11"
+        ]
+      }
+    ],
+    "uncertainties": [
+      "顾闻舟是否会在风暴前直接进入钟楼夺取原件",
+      "没有异地高清副本时，受潮红字能保留到何种程度"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "impact_destroy_ledger_v1",
+    "storyMapId": "story_map_ripple_001_v1",
+    "divergence": {
+      "id": "div_destroy_ledger",
+      "eventId": "event_07",
+      "type": "alternate_choice",
+      "instruction": "许澄当场烧毁红色账簿，并拒绝保留任何副本"
+    },
+    "anchors": [
+      {
+        "id": "anchor_ledger_archived",
+        "targetEventId": "event_12",
+        "requirement": "红色账簿原件最终进入市档案馆",
+        "strength": "hard"
+      }
+    ],
+    "impacts": [
+      {
+        "id": "impact_05",
+        "horizon": "immediate",
+        "changeType": "removed",
+        "summary": "红色账簿原件及其材料鉴定价值永久消失",
+        "explanation": "烧毁是不可逆变化，照片与压痕不能恢复原件本身。",
+        "reasonPath": [
+          "event_07"
+        ],
+        "confidence": 1
+      },
+      {
+        "id": "impact_06",
+        "horizon": "midterm",
+        "changeType": "modified",
+        "summary": "旧案只能依赖残带、钟锤四页和后台日志重建",
+        "explanation": "其他证据仍可能证明造假，但潮位连续记录和保管链被削弱。",
+        "reasonPath": [
+          "event_07",
+          "event_06",
+          "event_10",
+          "event_11"
+        ],
+        "confidence": 0.92
+      },
+      {
+        "id": "impact_07",
+        "horizon": "ending",
+        "changeType": "removed",
+        "summary": "红账原件无法在档案馆公开陈列",
+        "explanation": "被销毁的同一物理原件不能同时进入档案馆。",
+        "reasonPath": [
+          "event_07",
+          "event_12"
+        ],
+        "confidence": 1
+      }
+    ],
+    "characterChanges": [
+      "许澄成为原件毁损的直接责任人"
+    ],
+    "threadChanges": [
+      "关闭：红账原件归档",
+      "保留：其他证据能否公开旧案"
+    ],
+    "anchorEvaluations": [
+      {
+        "anchorId": "anchor_ledger_archived",
+        "status": "incompatible",
+        "explanation": "同一本红色账簿原件被烧毁后，不可能再进入市档案馆；严格模式必须拒绝该组合。",
+        "reasonPath": [
+          "event_07",
+          "event_12"
+        ]
+      }
+    ],
+    "uncertainties": [
+      "其余证据是否足以撤销许川的主要过失结论"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "impact_trust_gu_v1",
+    "storyMapId": "story_map_ripple_001_v1",
+    "divergence": {
+      "id": "div_trust_gu",
+      "eventId": "event_07",
+      "type": "alternate_choice",
+      "instruction": "许澄把红色账簿交给顾闻舟保管"
+    },
+    "anchors": [],
+    "impacts": [
+      {
+        "id": "impact_08",
+        "horizon": "immediate",
+        "changeType": "removed",
+        "summary": "周岚无法建立数字副本和公开移交记录",
+        "explanation": "原件直接进入顾闻舟控制的港务系统。",
+        "reasonPath": [
+          "event_07"
+        ],
+        "confidence": 0.99
+      },
+      {
+        "id": "impact_09",
+        "horizon": "midterm",
+        "changeType": "modified",
+        "summary": "顾闻舟可以继续以蓝表指导风暴决策",
+        "explanation": "红账警告和潮位差不再掌握在许澄与周岚手中。",
+        "reasonPath": [
+          "event_07",
+          "event_09"
+        ],
+        "confidence": 0.87
+      },
+      {
+        "id": "impact_10",
+        "horizon": "ending",
+        "changeType": "modified",
+        "summary": "公开听证不再是隐藏目标，旧案可能长期保持争议",
+        "explanation": "开放模式允许原著未来被彻底改变，但残带和钟锤四页仍可能触发新的调查路径。",
+        "reasonPath": [
+          "event_07",
+          "event_10"
+        ],
+        "confidence": 0.7
+      }
+    ],
+    "characterChanges": [
+      "许澄暂时选择相信制度负责人而非记者",
+      "顾闻舟重新获得关键物证控制权"
+    ],
+    "threadChanges": [
+      "关闭：原路径中的车辆拦截",
+      "开启：顾闻舟是否销毁或篡改红账",
+      "开启：沈砚能否用残带重新说服许澄"
+    ],
+    "anchorEvaluations": [],
+    "uncertainties": [
+      "顾闻舟会立即销毁原件还是继续伪造保管流程"
+    ],
+    "status": "candidate"
+  }
+]

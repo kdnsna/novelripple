@@ -11,7 +11,18 @@ __pycache__/
 # 构建产物
 dist/
 build/
+.next/
+*.tsbuildinfo
+coverage/
+playwright-report/
+test-results/
 *.log
+
+# 本地数据库与运行时数据
+.data/
+*.db
+*.db-shm
+*.db-wal
 
 # 环境变量（含密钥，严禁提交）
 .env
