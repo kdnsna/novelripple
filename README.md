@@ -1,4 +1,4 @@
-# NovelRipple · 故事涟漪
+# NovelRipple · 涟漪
 
 > 改变一个选择，荡开一整个故事世界。  
 > Change one moment. Ripple the whole story.
