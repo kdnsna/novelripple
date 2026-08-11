@@ -145,6 +145,30 @@ describe("core domain schemas", () => {
     ).toBe(false);
   });
 
+  it("rejects duplicate Event IDs inside a reasonPath at the Schema boundary", () => {
+    expect(
+      schemas.ImpactItemSchema.safeParse({
+        id: "impact_1",
+        scope: "direct",
+        changeType: "modified",
+        fromEventId: "event_1",
+        affectedEventId: "event_1",
+        summary: "改变事件",
+        explanation: "分歧造成改变",
+        reasonPath: ["event_1", "event_1"],
+        confidence: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      schemas.AnchorEvaluationSchema.safeParse({
+        anchorId: "anchor_1",
+        status: "rerouted",
+        explanation: "通过新路径到达",
+        reasonPath: ["event_1", "event_1", "event_2"],
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts only prevent, choice, and outcome divergences", () => {
     for (const type of ["prevent", "choice", "outcome"] as const) {
       expect(

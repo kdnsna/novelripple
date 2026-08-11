@@ -51,18 +51,27 @@ test("imports, reviews, revises, confirms, and reloads a Story Map", async ({
     "渡船靠上祁雾港",
   );
 
+  await page.getByRole("button", { name: "确认 Evidence 1" }).click();
+  await expect(page.getByText("Story Map v2 · draft")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Evidence 已确认" }),
+  ).toBeDisabled();
+
   await page.getByRole("button", { name: "修正事件" }).click();
   await page.getByLabel("事件标题").fill("许澄回到祁雾港");
   await page.getByRole("button", { name: "保存为新 revision" }).click();
-  await expect(page.getByText("Story Map v2 · draft")).toBeVisible();
+  await expect(page.getByText("Story Map v3 · draft")).toBeVisible();
   await expect(page.getByRole("heading", { name: "许澄回到祁雾港" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "确认 Evidence 1" }),
+  ).toBeEnabled();
 
   await page.getByRole("button", { name: "确认 Story Map" }).click();
-  await expect(page.getByText("Story Map v3 · confirmed")).toBeVisible();
+  await expect(page.getByText("Story Map v4 · confirmed")).toBeVisible();
   await expect(page.getByText("已通过 Ripple 前置确认门")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByText("Story Map v3 · confirmed")).toBeVisible();
+  await expect(page.getByText("Story Map v4 · confirmed")).toBeVisible();
   await expect(page.getByRole("heading", { name: "许澄回到祁雾港" })).toBeVisible();
   await expect(page.getByTestId("source-reader")).toContainText(
     "潮汐钟正停在凌晨四点十二分",

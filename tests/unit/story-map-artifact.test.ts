@@ -313,6 +313,90 @@ describe("immutable Story Map review revisions", () => {
     expect(artifact.review.evidenceConfirmations).toEqual([]);
   });
 
+  it("invalidates every confirmation for a summarized Event while preserving other Events and the prior Artifact", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const targetEvent = artifact.storyMap.events[1];
+    const otherEvent = artifact.storyMap.events[0];
+    let latest = artifact;
+
+    for (const evidence of targetEvent.evidence) {
+      latest = createStoryMapRevision({
+        projectId: project.id,
+        artifactId: latest.id,
+        change: {
+          type: "confirm_evidence",
+          eventId: targetEvent.id,
+          evidence,
+        },
+      });
+    }
+    latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: {
+        type: "confirm_evidence",
+        eventId: otherEvent.id,
+        evidence: otherEvent.evidence[0],
+      },
+    });
+    const priorArtifact = structuredClone(latest);
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: {
+        type: "update_event",
+        eventId: targetEvent.id,
+        summary: `${targetEvent.summary}（人工修正）`,
+      },
+    });
+
+    expect(revision.storyMap.status).toBe("draft");
+    expect(
+      revision.review.evidenceConfirmations.filter(
+        (confirmation) => confirmation.eventId === targetEvent.id,
+      ),
+    ).toEqual([]);
+    expect(revision.review.evidenceConfirmations).toContainEqual({
+      eventId: otherEvent.id,
+      evidence: otherEvent.evidence[0],
+    });
+    expect(getStoryMapArtifact(latest.id)).toEqual(priorArtifact);
+  });
+
+  it("invalidates the edited Event confirmations when participants change", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const targetEvent = artifact.storyMap.events[1];
+    const confirmed = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: {
+        type: "confirm_evidence",
+        eventId: targetEvent.id,
+        evidence: targetEvent.evidence[0],
+      },
+    });
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: confirmed.id,
+      change: {
+        type: "update_event",
+        eventId: targetEvent.id,
+        participants: targetEvent.participants.filter(
+          (participant) => participant !== "char_xuchuan",
+        ),
+      },
+    });
+
+    expect(revision.storyMap.status).toBe("draft");
+    expect(
+      revision.review.evidenceConfirmations.filter(
+        (confirmation) => confirmation.eventId === targetEvent.id,
+      ),
+    ).toEqual([]);
+  });
+
   it("fails closed for an unknown participant and leaves no revision", async () => {
     const { project, source, artifact } = await createInitialArtifact();
 

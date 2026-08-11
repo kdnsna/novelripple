@@ -65,11 +65,13 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - 关键事件通过 Golden 与候选 Evidence 区间的一对一重叠映射计算，避免依赖模型措辞或内部 ID；
 - 人物通过姓名和别名归并计算；
 - Evidence 逐条检查 Source、section、Offset 与 Hash；
-- 一级影响按映射后的受影响事件和变化类型计算；
+- 一级影响按映射后的受影响事件、变化类型和同一领域 Validator 的 `reasonPath` 合同共同计算；路径合同失败时不得命中，并直接阻止 Live Eval 放行；
 - Anchor 按映射后的结局目标比较，严格不兼容案例必须得到 `incompatible`；
 - Continuation 对照 accepted Worldline Delta 检查结构化 `statePatch`。
 
 Golden 没有穷举全文所有合理事件。因此，有合法 Source Evidence 但未匹配 Golden 的事件只进入 `source-backed unmatched` 人工复核清单，不自动判为 hallucination；叙事语义幻觉、主要因果边认可率和场景正文语义仍由人工按 `fixtures/ripple-001/rubric.md` 复核。确定性非法引用、无有效 Evidence 事件与恢复已删除事实则直接使 Live Eval 失败。
+
+最终人工验收使用脱敏的 [`M0 Live Eval 人工复核模板`](evals/m0-live-review-template.md)。自动报告中的每个 `source-backed unmatched` Event 都必须在人工报告中记录 disposition；即使列表为空也要明确记录 `none`。人工报告只保存 ID、比例、判断和简短理由，不得保存 Source 正文、完整 Prompt、密钥或 raw model output。
 
 真实模型质量不进入默认 CI。存在待验收模型输出时，报告记录供应商、模型、全部 Prompt 版本、事件与人物召回、Evidence 有效率、一级影响命中、Anchor 结果、非法/待复核事件和 Continuation 矛盾；人工补充因果认可率与相对上次退化项。
 

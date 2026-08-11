@@ -23,7 +23,7 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const promptVersion = "impact-plan.v1";
+const promptVersion = "impact-plan.v2";
 
 export async function generateImpactPlan(input: {
   projectId: string;

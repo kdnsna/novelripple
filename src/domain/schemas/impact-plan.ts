@@ -3,6 +3,23 @@ import { z } from "zod";
 import { DivergenceSchema } from "./divergence";
 import { StateFactIdSchema } from "./state-fact-id";
 
+export const ReasonPathSchema = z
+  .array(z.string().min(1))
+  .min(1)
+  .superRefine((reasonPath, context) => {
+    const seen = new Set<string>();
+    reasonPath.forEach((eventId, index) => {
+      if (seen.has(eventId)) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: `reasonPath 不得重复 Event：${eventId}`,
+        });
+      }
+      seen.add(eventId);
+    });
+  });
+
 export const AnchorSchema = z
   .object({
     id: StateFactIdSchema,
@@ -17,7 +34,7 @@ export const AnchorEvaluationSchema = z
     anchorId: z.string().min(1),
     status: z.enum(["preserved", "rerouted", "threatened", "incompatible"]),
     explanation: z.string().min(1),
-    reasonPath: z.array(z.string().min(1)).min(1),
+    reasonPath: ReasonPathSchema,
   })
   .strict();
 
@@ -30,7 +47,7 @@ export const ImpactItemSchema = z
     affectedEventId: z.string().min(1).nullable(),
     summary: z.string().min(1),
     explanation: z.string().min(1),
-    reasonPath: z.array(z.string().min(1)).min(1),
+    reasonPath: ReasonPathSchema,
     confidence: z.number().min(0).max(1),
   })
   .strict();

@@ -1,4 +1,4 @@
-# Impact Plan v1
+# Impact Plan v2
 
 基于已确认的 Story Map、选中的 Event、一个 Divergence、只读 Canonical 上下文与 Anchors，先推演直接影响，再推演下游影响和结局影响。
 
@@ -7,6 +7,11 @@
 - ImpactPlan 是待用户确认的提案，不是 Worldline 事实。
 - 必须同时输出 direct、downstream、ending 三类核心影响。
 - 每项核心影响都给出 explanation、fromEventId、affectedEventId、reasonPath 与 confidence；fromEventId 必须是 reasonPath 第一个节点。
+- 每项 Impact 的 reasonPath 必须包含 Divergence Event；direct Impact 必须从 Divergence Event 开始。
+- affectedEventId 非空时，reasonPath 必须以该 Event 结束。
+- Anchor Evaluation 的 reasonPath 必须从 Divergence Event 开始，并以对应 Anchor 的 targetEventId 结束。
+- reasonPath 不得重复 Event，且所有 ID 必须来自输入的 confirmed Story Map。
+- 原作中的替代前提若不是因果路径节点，只写入 explanation，不要把相关 ID 列表冒充 reasonPath。
 - 人物变化必须引用 Story Map 中存在的 Character；线索变化明确分为 opened 与 closed。
 - 严格模式不得强行维持 Anchor；确有冲突时必须给出 `incompatible`。
 - 严格模式为每个 Anchor 返回且只返回一个 preserved / rerouted / threatened / incompatible 判断。

@@ -42,10 +42,12 @@ test("generates a strict rerouted preview and creates one child only after accep
   await expect(page.getByText("直接影响")).toBeVisible();
   await expect(page.getByText("中期影响")).toBeVisible();
   await expect(page.getByText("结局影响")).toBeVisible();
+  await expect(page.getByText(/因果路径：许澄交出红账/).first()).toBeVisible();
   await expect(page.getByText("Rerouted · 改道")).toBeVisible();
   await expect(
     page.getByText(/Anchor · 白鸥号沉船事故的系统性真相最终进入公共记录/),
   ).toBeVisible();
+  await expect(page.getByText(/Anchor 因果路径：许澄交出红账/)).toBeVisible();
   await expect(page.getByText("接受前不会创建 Worldline")).toBeVisible();
 
   await page

@@ -482,19 +482,19 @@ const impactPlans = zodArray(ImpactPlanSchema, [
         summary: "周岚无法建立原件的第三方移交记录",
         explanation:
           "交付不发生，报社车辆、封装见证和异地上传都不会按原路径发生。",
-        reasonPath: ["event_07", "event_08"],
+        reasonPath: ["event_07"],
         confidence: 0.98,
       },
       {
         id: "impact_02",
         scope: "direct",
         changeType: "modified",
-        fromEventId: "event_05",
+        fromEventId: "event_07",
         affectedEventId: "event_08",
         summary: "顾闻舟会把目标从周岚转向仍持有原件的许澄",
         explanation:
           "追踪车辆失去原路径目标，但顾闻舟仍知道红账存在且需要控制原件。",
-        reasonPath: ["event_05", "event_07"],
+        reasonPath: ["event_07", "event_08"],
         confidence: 0.82,
       },
       {
@@ -661,7 +661,7 @@ const impactPlans = zodArray(ImpactPlanSchema, [
         summary: "旧闸按原路径救下低洼区不再是确定事实",
         explanation:
           "开放模式不预设听证或旧案公开必然发生；红账、残带和钟锤四页仍在，但风暴伤亡、证据保存与调查路径都需重新推演。",
-        reasonPath: ["event_09"],
+        reasonPath: ["event_09", "event_10", "event_11"],
         confidence: 0.84,
       },
     ],

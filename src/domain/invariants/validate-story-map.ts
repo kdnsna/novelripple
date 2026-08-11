@@ -70,12 +70,122 @@ function validateReasonPath(
   eventIds: Set<string>,
   path: string,
 ): DomainValidationIssue[] {
-  return reasonPath
+  const issues = reasonPath
     .filter((eventId) => !eventIds.has(eventId))
     .map((eventId) => ({
       path,
       message: `reasonPath 引用了未知 Event：${eventId}`,
     }));
+  for (const duplicate of duplicateValues(reasonPath)) {
+    issues.push({
+      path,
+      message: `reasonPath 包含重复 Event：${duplicate}`,
+    });
+  }
+  return issues;
+}
+
+export function validateImpactPlanReasonPaths(
+  impactPlan: ImpactPlan,
+  storyMap: StoryMap,
+): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
+  const eventIds = new Set(storyMap.events.map((event) => event.id));
+
+  if (!eventIds.has(impactPlan.divergence.eventId)) {
+    issues.push({
+      path: "divergence.eventId",
+      message: `Divergence 引用了未知 Event：${impactPlan.divergence.eventId}`,
+    });
+  }
+
+  for (const [impactIndex, impact] of impactPlan.impacts.entries()) {
+    const path = `impacts.${impactIndex}.reasonPath`;
+    if (!eventIds.has(impact.fromEventId)) {
+      issues.push({
+        path: `impacts.${impactIndex}.fromEventId`,
+        message: `fromEventId 引用了未知 Event：${impact.fromEventId}`,
+      });
+    }
+    if (impact.reasonPath[0] !== impact.fromEventId) {
+      issues.push({
+        path: `impacts.${impactIndex}.fromEventId`,
+        message: "fromEventId 必须是 reasonPath 的起点",
+      });
+    }
+    if (
+      impact.affectedEventId !== null &&
+      !eventIds.has(impact.affectedEventId)
+    ) {
+      issues.push({
+        path: `impacts.${impactIndex}.affectedEventId`,
+        message: `affectedEventId 引用了未知 Event：${impact.affectedEventId}`,
+      });
+    }
+    if (!impact.reasonPath.includes(impactPlan.divergence.eventId)) {
+      issues.push({
+        path,
+        message: "每项 Impact 的 reasonPath 必须包含 Divergence Event",
+      });
+    }
+    if (
+      impact.scope === "direct" &&
+      impact.reasonPath[0] !== impactPlan.divergence.eventId
+    ) {
+      issues.push({
+        path,
+        message: "direct Impact 的 reasonPath 必须从 Divergence Event 开始",
+      });
+    }
+    if (
+      impact.affectedEventId !== null &&
+      impact.reasonPath.at(-1) !== impact.affectedEventId
+    ) {
+      issues.push({
+        path,
+        message: "reasonPath 的终点必须等于 affectedEventId",
+      });
+    }
+    issues.push(...validateReasonPath(impact.reasonPath, eventIds, path));
+  }
+
+  for (const [anchorIndex, anchor] of impactPlan.anchors.entries()) {
+    if (!eventIds.has(anchor.targetEventId)) {
+      issues.push({
+        path: `anchors.${anchorIndex}.targetEventId`,
+        message: `Anchor 引用了未知 Event：${anchor.targetEventId}`,
+      });
+    }
+  }
+
+  const anchorIds = new Set(impactPlan.anchors.map((anchor) => anchor.id));
+  for (const [evaluationIndex, evaluation] of impactPlan.anchorEvaluations.entries()) {
+    const path = `anchorEvaluations.${evaluationIndex}.reasonPath`;
+    if (!anchorIds.has(evaluation.anchorId)) {
+      issues.push({
+        path: `anchorEvaluations.${evaluationIndex}.anchorId`,
+        message: `Anchor 评估引用了未知 Anchor：${evaluation.anchorId}`,
+      });
+    }
+    if (evaluation.reasonPath[0] !== impactPlan.divergence.eventId) {
+      issues.push({
+        path,
+        message: "Anchor Evaluation 的 reasonPath 必须从 Divergence Event 开始",
+      });
+    }
+    const anchor = impactPlan.anchors.find(
+      (candidate) => candidate.id === evaluation.anchorId,
+    );
+    if (anchor && evaluation.reasonPath.at(-1) !== anchor.targetEventId) {
+      issues.push({
+        path,
+        message: "Anchor Evaluation 的 reasonPath 必须以对应 targetEventId 结束",
+      });
+    }
+    issues.push(...validateReasonPath(evaluation.reasonPath, eventIds, path));
+  }
+
+  return issues;
 }
 
 export function validateStoryMap(
@@ -214,12 +324,10 @@ export function validateImpactPlan(
   storyMap: StoryMap,
 ): DomainValidationIssue[] {
   const issues: DomainValidationIssue[] = [];
-  const eventIds = new Set(storyMap.events.map((event) => event.id));
   const eventsById = new Map(storyMap.events.map((event) => [event.id, event]));
   const characterIds = new Set(
     storyMap.characters.map((character) => character.id),
   );
-  const anchorIds = new Set(impactPlan.anchors.map((anchor) => anchor.id));
   const evaluatedAnchorIds = new Set(
     impactPlan.anchorEvaluations.map((evaluation) => evaluation.anchorId),
   );
@@ -230,13 +338,7 @@ export function validateImpactPlan(
       message: `Impact Plan 绑定了未知 Story Map：${impactPlan.storyMapId}`,
     });
   }
-
-  if (!eventIds.has(impactPlan.divergence.eventId)) {
-    issues.push({
-      path: "divergence.eventId",
-      message: `Divergence 引用了未知 Event：${impactPlan.divergence.eventId}`,
-    });
-  }
+  issues.push(...validateImpactPlanReasonPaths(impactPlan, storyMap));
 
   for (const scope of ["direct", "downstream", "ending"] as const) {
     if (!impactPlan.impacts.some((impact) => impact.scope === scope)) {
@@ -269,40 +371,12 @@ export function validateImpactPlan(
   }
 
   for (const [impactIndex, impact] of impactPlan.impacts.entries()) {
-    if (!eventIds.has(impact.fromEventId)) {
-      issues.push({
-        path: `impacts.${impactIndex}.fromEventId`,
-        message: `fromEventId 引用了未知 Event：${impact.fromEventId}`,
-      });
-    }
-    if (impact.reasonPath[0] !== impact.fromEventId) {
-      issues.push({
-        path: `impacts.${impactIndex}.fromEventId`,
-        message: "fromEventId 必须是 reasonPath 的起点",
-      });
-    }
-    if (
-      impact.affectedEventId !== null &&
-      !eventIds.has(impact.affectedEventId)
-    ) {
-      issues.push({
-        path: `impacts.${impactIndex}.affectedEventId`,
-        message: `affectedEventId 引用了未知 Event：${impact.affectedEventId}`,
-      });
-    }
     if (impact.changeType !== "added" && impact.affectedEventId === null) {
       issues.push({
         path: `impacts.${impactIndex}.affectedEventId`,
         message: "修改、删除或保留原事件时必须声明 affectedEventId",
       });
     }
-    issues.push(
-      ...validateReasonPath(
-        impact.reasonPath,
-        eventIds,
-        `impacts.${impactIndex}.reasonPath`,
-      ),
-    );
   }
 
   for (const [changeIndex, change] of impactPlan.characterChanges.entries()) {
@@ -345,13 +419,6 @@ export function validateImpactPlan(
   }
 
   for (const [anchorIndex, anchor] of impactPlan.anchors.entries()) {
-    if (!eventIds.has(anchor.targetEventId)) {
-      issues.push({
-        path: `anchors.${anchorIndex}.targetEventId`,
-        message: `Anchor 引用了未知 Event：${anchor.targetEventId}`,
-      });
-    }
-
     const matchesEndingCandidate = storyMap.endingCandidates.some(
       (ending) =>
         ending.targetEventId === anchor.targetEventId &&
@@ -371,24 +438,6 @@ export function validateImpactPlan(
       });
     }
   }
-
-  for (const [evaluationIndex, evaluation] of impactPlan.anchorEvaluations.entries()) {
-    if (!anchorIds.has(evaluation.anchorId)) {
-      issues.push({
-        path: `anchorEvaluations.${evaluationIndex}.anchorId`,
-        message: `Anchor 评估引用了未知 Anchor：${evaluation.anchorId}`,
-      });
-    }
-
-    issues.push(
-      ...validateReasonPath(
-        evaluation.reasonPath,
-        eventIds,
-        `anchorEvaluations.${evaluationIndex}.reasonPath`,
-      ),
-    );
-  }
-
 
   const divergence = eventsById.get(impactPlan.divergence.eventId);
   if (divergence) {

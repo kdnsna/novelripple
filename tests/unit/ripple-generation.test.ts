@@ -132,6 +132,18 @@ describe("Ripple Simulator generation", () => {
       expect(provider.requests).toHaveLength(1);
       expect(provider.requests[0]?.prompt).toContain(artifact.storyMap.id);
       expect(provider.requests[0]?.prompt).toContain('"currentWorldline"');
+      expect(provider.requests[0]?.prompt).toContain(
+        "每项 Impact 的 reasonPath 必须包含 Divergence Event",
+      );
+      expect(provider.requests[0]?.prompt).toContain(
+        "affectedEventId 非空时，reasonPath 必须以该 Event 结束",
+      );
+      expect(provider.requests[0]?.prompt).toContain(
+        "Anchor Evaluation 的 reasonPath 必须从 Divergence Event 开始",
+      );
+      expect(provider.requests[0]?.prompt).toContain(
+        "reasonPath 不得重复 Event",
+      );
       expect(provider.requests[0]?.prompt).not.toContain(source.normalizedText);
     }
 
@@ -150,7 +162,7 @@ describe("Ripple Simulator generation", () => {
     );
     expect(impactRuns).toHaveLength(3);
     expect(impactRuns.every((run) => run.worldlineId === null)).toBe(true);
-    expect(impactRuns.every((run) => run.promptVersion === "impact-plan.v1")).toBe(
+    expect(impactRuns.every((run) => run.promptVersion === "impact-plan.v2")).toBe(
       true,
     );
   });

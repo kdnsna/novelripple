@@ -265,6 +265,9 @@ function applyReviewChange(
       event.participants = change.participants;
     }
     if (JSON.stringify(event) === before) throw new Error("修改没有产生变化");
+    review.evidenceConfirmations = review.evidenceConfirmations.filter(
+      (confirmation) => confirmation.eventId !== change.eventId,
+    );
     return;
   }
 

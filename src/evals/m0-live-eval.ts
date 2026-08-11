@@ -1,5 +1,8 @@
 import { validateContinuationStatePatch } from "@/domain/invariants/validate-continuation";
-import { validateStoryMap } from "@/domain/invariants/validate-story-map";
+import {
+  validateImpactPlanReasonPaths,
+  validateStoryMap,
+} from "@/domain/invariants/validate-story-map";
 import { z } from "zod";
 import type {
   ImpactPlan,
@@ -21,6 +24,8 @@ const criticalGoldenEventIds = [
   "event_11",
   "event_12",
 ] as const;
+const minimumEvidenceOverlapLength = 12;
+const minimumEvidenceCoverage = 0.5;
 
 const RateScoreSchema = z
   .object({
@@ -50,11 +55,19 @@ const StoryMapEvalScoreSchema = z
   })
   .strict();
 
+const ReasonPathContractScoreSchema = z
+  .object({
+    passed: z.boolean(),
+    issues: z.array(z.string().min(1)),
+  })
+  .strict();
+
 const ImpactPlanEvalScoreSchema = z
   .object({
     divergenceId: z.string().min(1),
     directImpactHitRate: RateScoreSchema,
     missingDirectImpactIds: z.array(z.string()),
+    reasonPathContract: ReasonPathContractScoreSchema,
     anchorResult: z
       .object({
         expectedStatuses: z.array(z.string()),
@@ -169,6 +182,10 @@ export type ImpactPlanEvalScore = {
   divergenceId: string;
   directImpactHitRate: RateScore;
   missingDirectImpactIds: string[];
+  reasonPathContract: {
+    passed: boolean;
+    issues: string[];
+  };
   anchorResult: {
     expectedStatuses: string[];
     actualStatuses: string[];
@@ -263,12 +280,25 @@ export function scoreFixtureImpactPlan(input: {
   expected: ImpactPlan;
   candidate: ImpactPlan;
   eventIdMap: Record<string, string>;
+  storyMap: StoryMap;
 }): ImpactPlanEvalScore {
+  const reasonPathIssues = validateImpactPlanReasonPaths(
+    input.candidate,
+    input.storyMap,
+  );
+  const invalidImpactIds = new Set(
+    reasonPathIssues.flatMap((issue) => {
+      const match = /^impacts\.(\d+)\./.exec(issue.path);
+      if (!match) return [];
+      const impact = input.candidate.impacts[Number(match[1])];
+      return impact ? [impact.id] : [];
+    }),
+  );
   const expectedDirect = input.expected.impacts.filter(
     (impact) => impact.scope === "direct",
   );
   const candidateDirect = input.candidate.impacts.filter(
-    (impact) => impact.scope === "direct",
+    (impact) => impact.scope === "direct" && !invalidImpactIds.has(impact.id),
   );
   const usedCandidateIds = new Set<string>();
   const hitExpectedIds = new Set<string>();
@@ -305,6 +335,12 @@ export function scoreFixtureImpactPlan(input: {
     missingDirectImpactIds: expectedDirect
       .map((impact) => impact.id)
       .filter((id) => !hitExpectedIds.has(id)),
+    reasonPathContract: {
+      passed: reasonPathIssues.length === 0,
+      issues: reasonPathIssues.map(
+        (issue) => `${issue.path}: ${issue.message}`,
+      ),
+    },
     anchorResult: {
       expectedStatuses,
       actualStatuses,
@@ -377,6 +413,9 @@ export function evaluateM0ReleaseGate(input: {
     );
   }
   for (const score of input.impactScores) {
+    if (!score.reasonPathContract.passed) {
+      failures.push(`${score.divergenceId} reasonPath 合同失败`);
+    }
     if (score.directImpactHitRate.rate < 1) {
       failures.push(
         `${score.divergenceId} 一级影响命中率低于 100%：${formatPercent(
@@ -443,12 +482,26 @@ function evidenceSimilarity(
   let best = 0;
   for (const left of golden) {
     for (const right of candidate) {
+      if (
+        left.sourceId !== right.sourceId ||
+        left.sectionId !== right.sectionId
+      ) {
+        continue;
+      }
       const overlap = Math.max(
         0,
         Math.min(left.end, right.end) - Math.max(left.start, right.start),
       );
-      const shortest = Math.min(left.end - left.start, right.end - right.start);
-      if (shortest > 0) best = Math.max(best, overlap / shortest);
+      if (overlap < minimumEvidenceOverlapLength) continue;
+      const goldenCoverage = overlap / (left.end - left.start);
+      const candidateCoverage = overlap / (right.end - right.start);
+      if (
+        goldenCoverage < minimumEvidenceCoverage ||
+        candidateCoverage < minimumEvidenceCoverage
+      ) {
+        continue;
+      }
+      best = Math.max(best, Math.min(goldenCoverage, candidateCoverage));
     }
   }
   return best;

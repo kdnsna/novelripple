@@ -140,6 +140,7 @@ try {
         expected,
         candidate: generated.artifact.impactPlan,
         eventIdMap: storyMapScore.eventIdMap,
+        storyMap: confirmedStoryMap.storyMap,
       });
     impactScores.push(impactScore);
     partialImpacts.push(impactScore);
@@ -341,6 +342,14 @@ function printImpactScores(values: ImpactPlanEvalScore[]): void {
       .map(
         (impact) =>
           `${impact.divergenceId}=${formatRate(impact.directImpactHitRate)}`,
+      )
+      .join(", ")}`,
+  );
+  console.log(
+    `reasonPath contract: ${values
+      .map(
+        (impact) =>
+          `${impact.divergenceId}=${impact.reasonPathContract.passed ? "PASS" : "FAIL"}`,
       )
       .join(", ")}`,
   );

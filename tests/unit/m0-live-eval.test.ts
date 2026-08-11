@@ -8,6 +8,7 @@ import {
   scoreFixtureStoryMap,
 } from "@/evals/m0-live-eval";
 import { WorldlineDeltaSchema } from "@/domain/schemas";
+import { sha256 } from "@/domain/source/normalize-source";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 
 describe("M0 live eval scoring", () => {
@@ -66,6 +67,88 @@ describe("M0 live eval scoring", () => {
     );
   });
 
+  it("does not match a Golden Event from a very short Evidence substring and unrelated summary", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const candidate = structuredClone(storyMap);
+    const goldenEvidence = storyMap.events[0].evidence[0];
+    const shortStart = goldenEvidence.start + 2;
+    const shortEnd = shortStart + 4;
+    candidate.events[0].summary = "一个与返港完全无关的候选事件";
+    candidate.events[0].evidence = [
+      {
+        ...goldenEvidence,
+        start: shortStart,
+        end: shortEnd,
+        excerptHash: sha256(source.normalizedText.slice(shortStart, shortEnd)),
+      },
+    ];
+
+    const score = scoreFixtureStoryMap({ source, golden: storyMap, candidate });
+
+    expect(score.eventIdMap.event_01).toBeUndefined();
+    expect(score.missingEventIds).toContain("event_01");
+    expect(score.unmatchedSourceBackedEventIds).toContain("event_01");
+  });
+
+  it("matches normally overlapping wider and narrower Evidence ranges", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const goldenEvidence = storyMap.events[0].evidence[0];
+
+    const widerCandidate = structuredClone(storyMap);
+    const widerStart = goldenEvidence.start - 8;
+    const widerEnd = goldenEvidence.end + 8;
+    widerCandidate.events[0].evidence = [
+      {
+        ...goldenEvidence,
+        start: widerStart,
+        end: widerEnd,
+        excerptHash: sha256(source.normalizedText.slice(widerStart, widerEnd)),
+      },
+    ];
+
+    const narrowerCandidate = structuredClone(storyMap);
+    const inset = Math.floor((goldenEvidence.end - goldenEvidence.start) / 4);
+    const narrowerStart = goldenEvidence.start + inset;
+    const narrowerEnd = goldenEvidence.end - inset;
+    narrowerCandidate.events[0].evidence = [
+      {
+        ...goldenEvidence,
+        start: narrowerStart,
+        end: narrowerEnd,
+        excerptHash: sha256(
+          source.normalizedText.slice(narrowerStart, narrowerEnd),
+        ),
+      },
+    ];
+
+    const widerScore = scoreFixtureStoryMap({
+      source,
+      golden: storyMap,
+      candidate: widerCandidate,
+    });
+    const narrowerScore = scoreFixtureStoryMap({
+      source,
+      golden: storyMap,
+      candidate: narrowerCandidate,
+    });
+
+    expect(widerScore.eventIdMap.event_01).toBe("event_01");
+    expect(narrowerScore.eventIdMap.event_01).toBe("event_01");
+  });
+
+  it("keeps one-to-one Event mapping stable when candidate order changes", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const candidate = structuredClone(storyMap);
+    candidate.events.reverse();
+
+    const score = scoreFixtureStoryMap({ source, golden: storyMap, candidate });
+
+    expect(score.eventIdMap).toEqual(
+      Object.fromEntries(storyMap.events.map((event) => [event.id, event.id])),
+    );
+    expect(new Set(Object.values(score.eventIdMap)).size).toBe(12);
+  });
+
   it("scores required direct impacts and Anchor results structurally", async () => {
     const { storyMap, impactPlans } = await loadRippleFixture();
     const eventIdMap = Object.fromEntries(
@@ -73,7 +156,12 @@ describe("M0 live eval scoring", () => {
     );
 
     const scores = impactPlans.map((plan) =>
-      scoreFixtureImpactPlan({ expected: plan, candidate: plan, eventIdMap }),
+      scoreFixtureImpactPlan({
+        expected: plan,
+        candidate: plan,
+        eventIdMap,
+        storyMap,
+      }),
     );
 
     expect(scores.every((score) => score.directImpactHitRate.rate === 1)).toBe(
@@ -85,6 +173,29 @@ describe("M0 live eval scoring", () => {
       [],
     ]);
     expect(scores.every((score) => score.anchorResult.passed)).toBe(true);
+    expect(scores.every((score) => score.reasonPathContract.passed)).toBe(true);
+  });
+
+  it("does not award a direct Impact hit when its reasonPath contract is invalid", async () => {
+    const { storyMap, impactPlans } = await loadRippleFixture();
+    const eventIdMap = Object.fromEntries(
+      storyMap.events.map((event) => [event.id, event.id]),
+    );
+    const candidate = structuredClone(impactPlans[0]);
+    candidate.impacts[0].reasonPath = ["event_07", "event_08"];
+
+    const score = scoreFixtureImpactPlan({
+      expected: impactPlans[0],
+      candidate,
+      eventIdMap,
+      storyMap,
+    });
+
+    expect(score.directImpactHitRate.rate).toBeLessThan(1);
+    expect(score.reasonPathContract.passed).toBe(false);
+    expect(score.reasonPathContract.issues).toEqual(
+      expect.arrayContaining([expect.stringContaining("affectedEventId")]),
+    );
   });
 
   it("detects a Continuation state patch that restores a removed fact", async () => {
@@ -136,7 +247,12 @@ describe("M0 live eval scoring", () => {
     });
     const eventIdMap = storyMapScore.eventIdMap;
     const impactScores = impactPlans.map((plan) =>
-      scoreFixtureImpactPlan({ expected: plan, candidate: plan, eventIdMap }),
+      scoreFixtureImpactPlan({
+        expected: plan,
+        candidate: plan,
+        eventIdMap,
+        storyMap,
+      }),
     );
     const continuationScore = scoreContinuationStatePatch({
       patch: continuation.scene.statePatch,
@@ -166,5 +282,27 @@ describe("M0 live eval scoring", () => {
     });
     expect(failed.passed).toBe(false);
     expect(failed.failures).toContain("Evidence 有效率低于 100%：50.0%");
+
+    const invalidReasonPath = evaluateM0ReleaseGate({
+      storyMapScore,
+      impactScores: impactScores.map((score, index) =>
+        index === 0
+          ? {
+              ...score,
+              reasonPathContract: {
+                passed: false,
+                issues: [
+                  "impacts.0.reasonPath: reasonPath 的终点必须等于 affectedEventId",
+                ],
+              },
+            }
+          : score,
+      ),
+      continuationScore,
+    });
+    expect(invalidReasonPath.passed).toBe(false);
+    expect(invalidReasonPath.failures).toEqual(
+      expect.arrayContaining([expect.stringContaining("reasonPath 合同")]),
+    );
   });
 });

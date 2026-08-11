@@ -43,7 +43,7 @@ Story Map 是对 Source 的版本化解释，不是 Source 本身。M0 只包含
 
 每个 Story Map 必须绑定唯一 Source 和明确版本；Source 自身以 `contentHash` 保证内容身份。确认或修正地图会创建新版本，旧版本保留；用户确认只对该具体版本有效，Divergence 与 Impact Plan 不得自动漂移到其他版本。
 
-人工 Evidence 确认属于 Story Map Artifact 的 review metadata，只保存 Event ID 与原文定位引用，不复制 Evidence 正文。标题、摘要、参与人物修正、删 Edge、Evidence 确认以及最终确认都会创建新的 revision Artifact；节点拖动只改变浏览器中的视觉位置，不进入领域数据。
+人工 Evidence 确认属于 Story Map Artifact 的 review metadata，只保存 Event ID 与原文定位引用，不复制 Evidence 正文。标题、摘要、参与人物修正、删 Edge、Evidence 确认以及最终确认都会创建新的 revision Artifact；节点拖动只改变浏览器中的视觉位置，不进入领域数据。任何 `update_event` 产生实际修改后，新 revision 必须清除该 Event 的全部 Evidence 确认并保持 `draft`，其他 Event 的确认与旧 Artifact 不变，读者需要重新核对修改后的声明。
 
 ## Character
 
@@ -107,6 +107,14 @@ Anchor 评估状态：
 - 不确定项。
 
 ImpactPlan 是提案，不是 Worldline 中已经成立的事实。模型只输出影响与评估；ID、Story Map 版本、Divergence、模式、Anchor 和状态由服务端绑定。严格与开放计划不得通过改标签互换；开放模式必须没有 Anchor 和 Anchor evaluation。
+
+`reasonPath` 是当前 confirmed Story Map 中 Event ID 组成的有序因果路径，不是相关事件或替代前提的无序列表。每条路径必须满足：
+
+- 只引用当前 confirmed Story Map 中存在的 Event，且同一条路径不得重复 Event；
+- 每项 Impact 的路径都包含 Divergence Event，`fromEventId` 等于路径第一个节点；`direct` Impact 必须从 Divergence Event 开始；
+- `affectedEventId` 非空时，路径最后一个节点等于该 Event；
+- 每项 Anchor Evaluation 的路径从 Divergence Event 开始，并以对应 Anchor 的 `targetEventId` 结束；
+- 原作中的替代前提若不是实际因果路径节点，只写入 `explanation`，不得用语义不清的 ID 列表冒充路径。
 
 Divergence 是父世界线的首次偏离，因此无论严格或开放模式，ImpactPlan 都不得把 `modified` / `removed` 作用于分歧点之前的 Event。分歧前事实只能作为因果前提被引用，不能被倒改。
 

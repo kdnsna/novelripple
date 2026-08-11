@@ -83,6 +83,8 @@ export function RippleSimulatorPanel({
   const eventTitles = Object.fromEntries(
     storyMap.events.map((event) => [event.id, event.title]),
   );
+  const formatReasonPath = (reasonPath: string[]) =>
+    reasonPath.map((eventId) => eventTitles[eventId] ?? eventId).join(" → ");
   const incompatible =
     plan?.anchorEvaluations.some(
       (evaluation) => evaluation.status === "incompatible",
@@ -288,8 +290,8 @@ export function RippleSimulatorPanel({
                       <strong>{impact.summary}</strong>
                       <p><b>为什么：</b>{impact.explanation}</p>
                       <small>
-                        起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
-                        {" · "}路径：{impact.reasonPath.join(" → ")}
+                        因果路径：{formatReasonPath(impact.reasonPath)}
+                        {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
                         {" · "}置信度：{Math.round(impact.confidence * 100)}%
                       </small>
                     </div>
@@ -308,7 +310,9 @@ export function RippleSimulatorPanel({
                 <strong>{anchorStatusLabels[evaluation.status]}</strong>
               </div>
               <p>{evaluation.explanation}</p>
-              <small>{evaluation.reasonPath.join(" → ")}</small>
+              <small>
+                Anchor 因果路径：{formatReasonPath(evaluation.reasonPath)}
+              </small>
             </section>
           ))}
 

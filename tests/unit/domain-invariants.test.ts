@@ -231,6 +231,92 @@ describe("deterministic domain validators", () => {
     );
   });
 
+  it("requires every Impact reasonPath to contain the Divergence Event", () => {
+    const invalid = structuredClone(impactPlan);
+    invalid.impacts[1].fromEventId = "event_2";
+    invalid.impacts[1].reasonPath = ["event_2"];
+
+    expect(validateImpactPlan(invalid, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("Divergence Event"),
+        }),
+      ]),
+    );
+  });
+
+  it("requires a direct Impact reasonPath to start at the Divergence Event", () => {
+    const invalid = structuredClone(impactPlan);
+    invalid.impacts[0].fromEventId = "event_2";
+    invalid.impacts[0].reasonPath = ["event_2", "event_1"];
+
+    expect(validateImpactPlan(invalid, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("direct Impact"),
+        }),
+      ]),
+    );
+  });
+
+  it("requires affectedEventId to be the last Impact reasonPath node", () => {
+    const invalid = structuredClone(impactPlan);
+    invalid.impacts[1].reasonPath = ["event_1"];
+
+    expect(validateImpactPlan(invalid, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("affectedEventId"),
+        }),
+      ]),
+    );
+  });
+
+  it("requires every Anchor reasonPath to start at Divergence and end at its target", () => {
+    const wrongStart = structuredClone(impactPlan);
+    wrongStart.anchorEvaluations[0].reasonPath = ["event_2"];
+    const missingTarget = structuredClone(impactPlan);
+    missingTarget.anchorEvaluations[0].reasonPath = ["event_1"];
+
+    expect(validateImpactPlan(wrongStart, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("Divergence Event"),
+        }),
+      ]),
+    );
+    expect(validateImpactPlan(missingTarget, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("targetEventId"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects repeated Events in Impact and Anchor reasonPaths", () => {
+    const invalid = structuredClone(impactPlan);
+    invalid.impacts[0].reasonPath = ["event_1", "event_1"];
+    invalid.anchorEvaluations[0].reasonPath = [
+      "event_1",
+      "event_1",
+      "event_2",
+    ];
+
+    expect(validateImpactPlan(invalid, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "impacts.0.reasonPath",
+          message: expect.stringContaining("重复 Event"),
+        }),
+        expect.objectContaining({
+          path: "anchorEvaluations.0.reasonPath",
+          message: expect.stringContaining("重复 Event"),
+        }),
+      ]),
+    );
+  });
+
   it("rejects unknown Divergence and Anchor targets", () => {
     const invalid = structuredClone(impactPlan);
     invalid.divergence.eventId = "event_missing";
