@@ -94,7 +94,8 @@ try {
     artifactId: generatedStoryMap.artifact.id,
   });
   const storyMapScore = scoreFixtureStoryMap({
-    source: imported.source,
+    goldenSource: fixture.source,
+    candidateSource: imported.source,
     golden: fixture.storyMap,
     candidate: confirmedStoryMap.storyMap,
   });

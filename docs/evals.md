@@ -69,6 +69,8 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - Anchor 按映射后的结局目标比较，严格不兼容案例必须得到 `incompatible`；
 - Continuation 对照 accepted Worldline Delta 检查结构化 `statePatch`。
 
+Live Eval 跨运行比较时，Golden Source 与本次导入的 Candidate Source 可以拥有不同 ID；评分器先要求两者 `contentHash` 相同，再分别依据各自 Source 校验 Story Map 与 Evidence，只有校验有效的引用才按 section、offset 和双向覆盖率参与事件映射。这是 Eval 专用的同内容比较规则，不改变生产路径的绑定语义：Story Map 和每条 Evidence 仍必须引用其所属 Source 的真实 ID。
+
 Golden 没有穷举全文所有合理事件。因此，有合法 Source Evidence 但未匹配 Golden 的事件只进入 `source-backed unmatched` 人工复核清单，不自动判为 hallucination；叙事语义幻觉、主要因果边认可率和场景正文语义仍由人工按 `fixtures/ripple-001/rubric.md` 复核。确定性非法引用、无有效 Evidence 事件与恢复已删除事实则直接使 Live Eval 失败。
 
 最终人工验收使用脱敏的 [`M0 Live Eval 人工复核模板`](evals/m0-live-review-template.md)。自动报告中的每个 `source-backed unmatched` Event 都必须在人工报告中记录 disposition；即使列表为空也要明确记录 `none`。人工报告只保存 ID、比例、判断和简短理由，不得保存 Source 正文、完整 Prompt、密钥或 raw model output。

@@ -204,11 +204,39 @@ export type M0ReleaseGate = {
 };
 
 export function scoreFixtureStoryMap(input: {
-  source: Source;
+  goldenSource: Source;
+  candidateSource: Source;
   golden: StoryMap;
   candidate: StoryMap;
 }): StoryMapEvalScore {
-  const eventIdMap = matchEvents(input.golden, input.candidate);
+  if (input.goldenSource.contentHash !== input.candidateSource.contentHash) {
+    throw new Error(
+      `无法比较 contentHash 不一致的 Source：Golden=${input.goldenSource.contentHash}，Candidate=${input.candidateSource.contentHash}`,
+    );
+  }
+  const goldenIssues = validateStoryMap(input.golden, input.goldenSource);
+  if (goldenIssues.length > 0) {
+    throw new Error(
+      `Golden Story Map 校验失败：${goldenIssues
+        .map((issue) => `${issue.path}: ${issue.message}`)
+        .join("；")}`,
+    );
+  }
+  const domainIssues = validateStoryMap(input.candidate, input.candidateSource);
+  const sourceBindingIssue = domainIssues.find(
+    (issue) => issue.path === "sourceId",
+  );
+  if (sourceBindingIssue) {
+    throw new Error(
+      `Candidate Story Map Source 绑定校验失败：${sourceBindingIssue.message}`,
+    );
+  }
+  const eventIdMap = matchEvents(
+    input.golden,
+    input.candidate,
+    input.goldenSource,
+    input.candidateSource,
+  );
   const missingEventIds = input.golden.events
     .map((event) => event.id)
     .filter((eventId) => eventIdMap[eventId] === undefined);
@@ -218,9 +246,8 @@ export function scoreFixtureStoryMap(input: {
   );
   const evidence = collectEvidence(input.candidate);
   const validEvidenceCount = evidence.filter((reference) =>
-    isValidEvidence(reference, input.source),
+    isValidEvidence(reference, input.candidateSource),
   ).length;
-  const domainIssues = validateStoryMap(input.candidate, input.source);
   const invalidEvents = new Map<string, Set<string>>();
 
   for (const issue of domainIssues) {
@@ -236,7 +263,7 @@ export function scoreFixtureStoryMap(input: {
     if (
       event.evidence.length === 0 ||
       !event.evidence.some((reference) =>
-        isValidEvidence(reference, input.source),
+        isValidEvidence(reference, input.candidateSource),
       )
     ) {
       const reasons = invalidEvents.get(event.id) ?? new Set<string>();
@@ -437,6 +464,8 @@ export function evaluateM0ReleaseGate(input: {
 function matchEvents(
   golden: StoryMap,
   candidate: StoryMap,
+  goldenSource: Source,
+  candidateSource: Source,
 ): Record<string, string> {
   const pairs = golden.events.flatMap((goldenEvent) =>
     candidate.events.map((candidateEvent) => ({
@@ -445,6 +474,8 @@ function matchEvents(
       similarity: evidenceSimilarity(
         goldenEvent.evidence,
         candidateEvent.evidence,
+        goldenSource,
+        candidateSource,
       ),
       goldenSequence: goldenEvent.sequence,
       candidateSequence: candidateEvent.sequence,
@@ -478,16 +509,15 @@ function matchEvents(
 function evidenceSimilarity(
   golden: SourceReference[],
   candidate: SourceReference[],
+  goldenSource: Source,
+  candidateSource: Source,
 ): number {
   let best = 0;
   for (const left of golden) {
+    if (!isValidEvidence(left, goldenSource)) continue;
     for (const right of candidate) {
-      if (
-        left.sourceId !== right.sourceId ||
-        left.sectionId !== right.sectionId
-      ) {
-        continue;
-      }
+      if (!isValidEvidence(right, candidateSource)) continue;
+      if (left.sectionId !== right.sectionId) continue;
       const overlap = Math.max(
         0,
         Math.min(left.end, right.end) - Math.max(left.start, right.start),
