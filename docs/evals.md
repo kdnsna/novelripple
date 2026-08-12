@@ -7,6 +7,7 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`v0.1.0 M0 正式封版报告（PASS）`](evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)：M0 确定性发布门禁的唯一正式 PASS 记录，并明确它不代表真实模型 Live Eval PASS。
 - [`2026-08-12 Live Eval 配置失败记录（Historical / FAIL）`](evals/runs/2026-08-12-2e85d21-m0-live-eval.md)：保留用于证明配置缺失时 fail closed；它不是封版 PASS 报告。
 - [`M1-02 未优化 baseline 输入审计（FAIL）`](evals/runs/m1-baseline-2026-08-12-c9ae2e3.md)：记录 M1-01 后仓库没有三篇冻结 Benchmark、当前运行环境没有真实 Provider 配置，因此没有模型数据，不能作 section-first 架构判断。
+- [`M1-02A Provider & Evidence Grounding Compatibility（PASS）`](evals/runs/2026-08-12-m1-02a-provider-evidence-compatibility.md)：三篇冻结私人作品在同一 DeepSeek model、显式 `json_object`、Prompt v2 与 Evidence Unit grounding 下均创建 Artifact，Evidence validity 为 100%；完整 M1-02 仍等待人工复核，未授权 M1-03。
 
 后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
 
@@ -104,6 +105,8 @@ M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三�
 完成报告使用 [`M1 人工评测模板`](evals/m1-review-template.md)。每次运行创建新报告，不覆盖旧报告；报告只记录稳定 ID、计数、比例、评分和简短理由。
 
 `npm run eval:m1:baseline -- --manifest <A> --manifest <B> --manifest <C>` 是 M1 的显式、非 CI baseline 入口。它必须使用 Story A/B/C、至少一篇经 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置，直接运行当前生产 Story Map 管线。每次新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`；Gold 只在 candidate 完整生成后评分。自动报告中的 Event recall、Ending Candidate recall 和 Edge 队列在独立人工复核前保持 `null` / pending，不得把字符串近似或被测模型自评冒充人工事实。
+
+M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级路径；baseline 必须记录实际的 `json_schema`、`json_object` 或 `prompt_json` 模式。Story Map Candidate 的 Evidence Unit ID 只负责让模型选择证据，最终 Evidence 仍由服务端确定性解析为现有 `SourceReference[]` 并接受全部领域校验。
 
 ### 指标口径
 
