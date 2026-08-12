@@ -72,7 +72,13 @@ export const artifacts = sqliteTable(
     sourceId: text("source_id").references(() => sources.id),
     worldlineId: text("worldline_id"),
     kind: text("kind", {
-      enum: ["story_map", "story_map_revision", "impact_plan", "continuation"],
+      enum: [
+        "story_map",
+        "story_map_revision",
+        "impact_plan",
+        "ripple_suggestions",
+        "continuation",
+      ],
     }).notNull(),
     schemaVersion: integer("schema_version").notNull(),
     version: integer("version"),

@@ -232,6 +232,122 @@ describe("core domain schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts one to three strict Ripple Suggestions and rejects a fourth", () => {
+    const suggestion = {
+      eventId: "event_1",
+      divergenceType: "choice",
+      instruction: "让人物拒绝公开证据",
+      whyInteresting: "该选择会切断原有公开路径。",
+      affectedCharacterIds: ["character_1"],
+      anchorRisk: "medium",
+    };
+
+    expect(
+      schemas.RippleSuggestionsModelOutputSchema.safeParse({
+        suggestions: [suggestion],
+      }).success,
+    ).toBe(true);
+    expect(
+      schemas.RippleSuggestionsModelOutputSchema.safeParse({
+        suggestions: [
+          suggestion,
+          { ...suggestion, eventId: "event_2" },
+          { ...suggestion, eventId: "event_3" },
+          { ...suggestion, eventId: "event_4" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      schemas.RippleSuggestionSchema.safeParse({
+        ...suggestion,
+        score: 92,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps feedback candidate lineage equal to the regenerated Impact Plan", () => {
+    const impactPlan = {
+      id: "artifact_impact_plan_feedback",
+      storyMapId: "story_map_1",
+      mode: "strict",
+      divergence: {
+        id: "divergence_choice",
+        eventId: "event_1",
+        type: "choice",
+        instruction: "让人物拒绝公开证据",
+      },
+      anchors: [
+        {
+          id: "anchor_1",
+          targetEventId: "event_2",
+          requirement: "证据最终进入公共记录",
+          strength: "hard",
+        },
+      ],
+      impacts: [
+        {
+          id: "impact_direct",
+          scope: "direct",
+          changeType: "modified",
+          fromEventId: "event_1",
+          affectedEventId: "event_1",
+          summary: "公开行动改变",
+          explanation: "反馈要求重新判断直接行动",
+          reasonPath: ["event_1"],
+          confidence: 1,
+        },
+      ],
+      characterChanges: [],
+      threadChanges: { opened: [], closed: [] },
+      anchorEvaluations: [
+        {
+          anchorId: "anchor_1",
+          status: "rerouted",
+          explanation: "改由新路径满足",
+          reasonPath: ["event_1", "event_2"],
+        },
+      ],
+      uncertainties: [],
+      status: "candidate",
+    } as const;
+    const lineage = {
+      priorCandidateArtifactId: "artifact_impact_plan_prior",
+      feedback: "人物看过照片，因此不应退出调查。",
+      newGenerationRunId: "run_feedback",
+      sameStoryMapArtifactId: "artifact_story_map_confirmed",
+      sameDivergence: impactPlan.divergence,
+      sameMode: impactPlan.mode,
+      sameAnchors: impactPlan.anchors,
+    };
+    const artifact = {
+      id: impactPlan.id,
+      projectId: "project_1",
+      sourceId: "source_1",
+      storyMapArtifactId: "artifact_story_map_confirmed",
+      kind: "impact_plan",
+      schemaVersion: 2,
+      impactPlan,
+      basedOnArtifactId: "artifact_impact_plan_prior",
+      generationRunId: "run_feedback",
+      lineage,
+      createdAt: "2026-08-13T00:00:00.000Z",
+    };
+
+    expect(schemas.ImpactPlanArtifactSchema.safeParse(artifact).success).toBe(true);
+    expect(
+      schemas.ImpactPlanArtifactSchema.safeParse({
+        ...artifact,
+        lineage: { ...lineage, sameMode: "open" },
+      }).success,
+    ).toBe(false);
+    expect(
+      schemas.ImpactPlanArtifactSchema.safeParse({
+        ...artifact,
+        lineage: { ...lineage, newGenerationRunId: "run_other" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("does not introduce a second soft-Anchor policy in M0", () => {
     expect(
       schemas.AnchorSchema.safeParse({

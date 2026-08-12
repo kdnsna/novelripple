@@ -7,6 +7,7 @@ import {
 import { SourceReferenceSchema } from "./source";
 import { ImpactPlanSchema } from "./impact-plan";
 import { EvidenceKindSchema, StoryMapSchema } from "./story-map";
+import { RippleSuggestionSchema } from "./ripple-suggestion";
 
 export const EvidenceConfirmationSchema = z
   .object({
@@ -252,6 +253,18 @@ export const StoryMapArtifactSchema = z
     }
   });
 
+const ImpactPlanFeedbackLineageSchema = z
+  .object({
+    priorCandidateArtifactId: z.string().min(1),
+    feedback: z.string().trim().min(1).max(2_000),
+    newGenerationRunId: z.string().min(1),
+    sameStoryMapArtifactId: z.string().min(1),
+    sameDivergence: ImpactPlanSchema.shape.divergence,
+    sameMode: ImpactPlanSchema.shape.mode,
+    sameAnchors: ImpactPlanSchema.shape.anchors,
+  })
+  .strict();
+
 export const ImpactPlanArtifactSchema = z
   .object({
     id: z.string().min(1),
@@ -259,10 +272,11 @@ export const ImpactPlanArtifactSchema = z
     sourceId: z.string().min(1),
     storyMapArtifactId: z.string().min(1),
     kind: z.literal("impact_plan"),
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     impactPlan: ImpactPlanSchema,
     basedOnArtifactId: z.string().min(1),
     generationRunId: z.string().min(1).nullable(),
+    lineage: ImpactPlanFeedbackLineageSchema.nullable().default(null),
     createdAt: z.iso.datetime(),
   })
   .strict()
@@ -275,19 +289,42 @@ export const ImpactPlanArtifactSchema = z
       });
     }
     if (artifact.impactPlan.status === "candidate") {
-      if (artifact.basedOnArtifactId !== artifact.storyMapArtifactId) {
-        context.addIssue({
-          code: "custom",
-          path: ["basedOnArtifactId"],
-          message: "候选 Impact Plan 必须直接基于 confirmed Story Map Artifact",
-        });
-      }
       if (artifact.generationRunId === null) {
         context.addIssue({
           code: "custom",
           path: ["generationRunId"],
           message: "候选 Impact Plan 必须绑定 Generation Run",
         });
+      }
+      if (artifact.lineage === null) {
+        if (
+          artifact.schemaVersion !== 1 ||
+          artifact.basedOnArtifactId !== artifact.storyMapArtifactId
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["basedOnArtifactId"],
+            message: "首个候选 Impact Plan 必须直接基于 confirmed Story Map Artifact",
+          });
+        }
+      } else {
+        const lineage = artifact.lineage;
+        const frozenContractMatches =
+          lineage.priorCandidateArtifactId === artifact.basedOnArtifactId &&
+          lineage.newGenerationRunId === artifact.generationRunId &&
+          lineage.sameStoryMapArtifactId === artifact.storyMapArtifactId &&
+          lineage.sameMode === artifact.impactPlan.mode &&
+          JSON.stringify(lineage.sameDivergence) ===
+            JSON.stringify(artifact.impactPlan.divergence) &&
+          JSON.stringify(lineage.sameAnchors) ===
+            JSON.stringify(artifact.impactPlan.anchors);
+        if (artifact.schemaVersion !== 2 || !frozenContractMatches) {
+          context.addIssue({
+            code: "custom",
+            path: ["lineage"],
+            message: "反馈候选必须保持 Story Map、Divergence、模式与 Anchor 不变",
+          });
+        }
       }
     } else {
       if (artifact.basedOnArtifactId === artifact.storyMapArtifactId) {
@@ -304,6 +341,37 @@ export const ImpactPlanArtifactSchema = z
           message: "人工决策 revision 不得伪装成模型生成结果",
         });
       }
+      if (artifact.schemaVersion !== 1 || artifact.lineage !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["lineage"],
+          message: "人工决策 revision 不得携带模型反馈 lineage",
+        });
+      }
+    }
+  });
+
+export const RippleSuggestionsArtifactSchema = z
+  .object({
+    id: z.string().min(1),
+    projectId: z.string().min(1),
+    sourceId: z.string().min(1),
+    storyMapArtifactId: z.string().min(1),
+    kind: z.literal("ripple_suggestions"),
+    schemaVersion: z.literal(1),
+    suggestions: z.array(RippleSuggestionSchema).min(1).max(3),
+    basedOnArtifactId: z.string().min(1),
+    generationRunId: z.string().min(1),
+    createdAt: z.iso.datetime(),
+  })
+  .strict()
+  .superRefine((artifact, context) => {
+    if (artifact.basedOnArtifactId !== artifact.storyMapArtifactId) {
+      context.addIssue({
+        code: "custom",
+        path: ["basedOnArtifactId"],
+        message: "Ripple Suggestions 必须直接基于 confirmed Story Map Artifact",
+      });
     }
   });
 
@@ -386,6 +454,12 @@ export const ContinuationArtifactSchema = z.discriminatedUnion(
 
 export type StoryMapArtifact = z.infer<typeof StoryMapArtifactSchema>;
 export type ImpactPlanArtifact = z.infer<typeof ImpactPlanArtifactSchema>;
+export type ImpactPlanFeedbackLineage = z.infer<
+  typeof ImpactPlanFeedbackLineageSchema
+>;
+export type RippleSuggestionsArtifact = z.infer<
+  typeof RippleSuggestionsArtifactSchema
+>;
 export type ContinuationDirectionsArtifact = z.infer<
   typeof ContinuationDirectionsArtifactSchema
 >;

@@ -4,6 +4,7 @@ export * from "./divergence";
 export * from "./generation-run";
 export * from "./impact-plan";
 export * from "./project";
+export * from "./ripple-suggestion";
 export * from "./source";
 export * from "./state-fact-id";
 export * from "./story-map";
