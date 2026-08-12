@@ -10,7 +10,6 @@ import {
   assertM1BaselineSuite,
   countBenchmarkCharacters,
   scoreM1StoryMapCandidate,
-  summarizeAnalysisSegments,
   summarizeProviderObservations,
   summarizeStoryMapValidation,
   validateM1BenchmarkManifest,
@@ -239,7 +238,7 @@ describe("M1 baseline contract", () => {
 
     await observed.generate({
       prompt: "private source sentinel",
-      schemaName: "story_map_segment",
+      schemaName: "story_map_extraction",
       jsonSchema: { type: "object" },
       modelConfig: { model: "test-model", structuredOutputMode: "json_schema" },
       repair: {
@@ -250,7 +249,7 @@ describe("M1 baseline contract", () => {
 
     expect(observed.observations).toEqual([
       expect.objectContaining({
-        schemaName: "story_map_segment",
+        schemaName: "story_map_extraction",
         attempt: "repair",
         status: "succeeded",
         inputTokens: 11,
@@ -279,21 +278,13 @@ describe("M1 baseline contract", () => {
     expect(
       summarizeStoryMapValidation({
         calls: [
-          succeededCall("story_map_segment", "initial"),
+          succeededCall("story_map_extraction", "initial"),
           succeededCall("story_map_content", "initial"),
           succeededCall("story_map_content", "repair"),
         ],
         runs: [
-          {
-            kind: "story_map_extract:analysis_segment:source_test:0001",
-            status: "succeeded",
-            attemptCount: 1,
-          },
-          {
-            kind: "story_map_reconcile",
-            status: "succeeded",
-            attemptCount: 2,
-          },
+          { kind: "story_map_extract", status: "succeeded" },
+          { kind: "story_map_reconcile", status: "succeeded" },
         ],
         evidenceValidity,
         storyMapArtifactCreated: true,
@@ -307,14 +298,8 @@ describe("M1 baseline contract", () => {
 
     expect(
       summarizeStoryMapValidation({
-        calls: [failedCall("story_map_segment", "initial")],
-        runs: [
-          {
-            kind: "story_map_extract:analysis_segment:source_test:0001",
-            status: "failed",
-            attemptCount: 0,
-          },
-        ],
+        calls: [failedCall("story_map_extraction", "initial")],
+        runs: [{ kind: "story_map_extract", status: "failed" }],
         evidenceValidity: null,
         storyMapArtifactCreated: false,
       }),
@@ -329,83 +314,16 @@ describe("M1 baseline contract", () => {
     expect(
       summarizeStoryMapValidation({
         calls: [
-          succeededCall("story_map_segment", "initial"),
-          succeededCall("story_map_segment", "repair"),
+          succeededCall("story_map_extraction", "initial"),
+          succeededCall("story_map_extraction", "repair"),
         ],
-        runs: [
-          {
-            kind: "story_map_extract:analysis_segment:source_test:0001",
-            status: "failed",
-            attemptCount: 2,
-          },
-        ],
+        runs: [{ kind: "story_map_extract", status: "failed" }],
         evidenceValidity: null,
         storyMapArtifactCreated: false,
       }),
     ).toMatchObject({
       extractor: { firstPassValidation: "failed", repair: "failed" },
       reconciler: { firstPassValidation: "not_run", repair: "not_run" },
-    });
-  });
-
-  it("reports each Segment without Source body or raw output", () => {
-    const segments = [
-      {
-        id: "analysis_segment:source_test:0001",
-        sourceId: "source_test",
-        sectionIds: ["section_01"],
-        coreStart: 0,
-        coreEnd: 8_000,
-        contextStart: 0,
-        contextEnd: 8_000,
-      },
-      {
-        id: "analysis_segment:source_test:0002",
-        sourceId: "source_test",
-        sectionIds: ["section_02"],
-        coreStart: 8_000,
-        coreEnd: 16_000,
-        contextStart: 4_000,
-        contextEnd: 16_000,
-      },
-    ];
-
-    expect(
-      summarizeAnalysisSegments({
-        segments,
-        runs: [
-          {
-            kind: `story_map_extract:${segments[0]!.id}`,
-            status: "succeeded",
-            attemptCount: 1,
-          },
-          {
-            kind: `story_map_extract:${segments[1]!.id}`,
-            status: "succeeded",
-            attemptCount: 2,
-          },
-        ],
-      }),
-    ).toEqual({
-      count: 2,
-      items: [
-        {
-          segmentId: "analysis_segment:source_test:0001",
-          coreCharacters: 8_000,
-          contextCharacters: 8_000,
-          status: "succeeded",
-          firstPassValidation: "passed",
-          repair: "not_needed",
-        },
-        {
-          segmentId: "analysis_segment:source_test:0002",
-          coreCharacters: 8_000,
-          contextCharacters: 12_000,
-          status: "succeeded",
-          firstPassValidation: "failed",
-          repair: "succeeded",
-        },
-      ],
     });
   });
 
@@ -428,10 +346,10 @@ describe("M1 baseline contract", () => {
       model: "provider-model",
       structuredOutputMode: "json_object",
       promptVersions: [
-        { kind: "story_map_extract", version: "story-map.v3" },
+        { kind: "story_map_extract", version: "story-map.v2" },
       ],
       wallClockDurationMs: 10,
-      calls: [failedCall("story_map_segment", "initial")],
+      calls: [failedCall("story_map_extraction", "initial")],
       generation: {
         callCount: 1,
         repairCount: 0,
@@ -442,28 +360,9 @@ describe("M1 baseline contract", () => {
         outputTokens: null,
         totalTokens: null,
       },
-      analysisSegments: {
-        count: 1,
-        items: [
-          {
-            segmentId: "analysis_segment:source_test:0001",
-            coreCharacters: 10_000,
-            contextCharacters: 10_000,
-            status: "failed",
-            firstPassValidation: "not_observed",
-            repair: "not_run",
-          },
-        ],
-      },
       compatibility: summarizeStoryMapValidation({
-        calls: [failedCall("story_map_segment", "initial")],
-        runs: [
-          {
-            kind: "story_map_extract:analysis_segment:source_test:0001",
-            status: "failed",
-            attemptCount: 0,
-          },
-        ],
+        calls: [failedCall("story_map_extraction", "initial")],
+        runs: [{ kind: "story_map_extract", status: "failed" }],
         evidenceValidity: null,
         storyMapArtifactCreated: false,
       }),
@@ -495,7 +394,7 @@ describe("M1 baseline contract", () => {
     const observed = new InstrumentedAIProvider(provider);
     const request = {
       prompt: "private source sentinel",
-      schemaName: "story_map_segment",
+      schemaName: "story_map_extraction",
       jsonSchema: { type: "object" },
       modelConfig: { model: "test-model", structuredOutputMode: "json_schema" as const },
     };

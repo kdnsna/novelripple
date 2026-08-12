@@ -9,7 +9,6 @@ import {
   normalizeSourceText,
   sha256,
 } from "@/domain/source/normalize-source";
-import type { AnalysisSegment } from "@/domain/source/analysis-segments";
 import type {
   AIProvider,
   AIProviderRequest,
@@ -131,24 +130,6 @@ const StageValidationSchema = z
   })
   .strict();
 
-const AnalysisSegmentObservationSchema = z
-  .object({
-    segmentId: z.string().min(1),
-    coreCharacters: z.number().int().positive(),
-    contextCharacters: z.number().int().positive(),
-    status: z.enum(["succeeded", "failed", "not_run"]),
-    firstPassValidation: StageValidationSchema.shape.firstPassValidation,
-    repair: StageValidationSchema.shape.repair,
-  })
-  .strict();
-
-export const AnalysisSegmentSummarySchema = z
-  .object({
-    count: z.number().int().nonnegative(),
-    items: z.array(AnalysisSegmentObservationSchema),
-  })
-  .strict();
-
 export const M1StoryMapCompatibilitySchema = z
   .object({
     extractor: StageValidationSchema,
@@ -214,7 +195,6 @@ export const M1BaselineStoryReportSchema = z
     wallClockDurationMs: z.number().int().nonnegative(),
     calls: z.array(ProviderObservationSchema),
     generation: ProviderObservationSummarySchema,
-    analysisSegments: AnalysisSegmentSummarySchema,
     compatibility: M1StoryMapCompatibilitySchema,
     reviewTarget: z
       .object({
@@ -266,7 +246,7 @@ export const M1BaselineStoryReportSchema = z
 export const M1BaselineSuiteReportSchema = z
   .object({
     schemaVersion: z.literal(1),
-    kind: z.literal("m1_story_map_baseline"),
+    kind: z.literal("m1_unoptimized_baseline"),
     commitSha: z.string().regex(/^[a-f0-9]{40}$/),
     evaluatedAt: z.iso.datetime(),
     status: z.enum(["awaiting_human_review", "failed"]),
@@ -325,7 +305,6 @@ export type M1StoryMapCompatibility = z.infer<
 type ValidationRunObservation = {
   kind: string;
   status: "pending" | "succeeded" | "failed";
-  attemptCount: 0 | 1 | 2;
 };
 
 export class InstrumentedAIProvider implements AIProvider {
@@ -433,99 +412,52 @@ export function summarizeStoryMapValidation(input: {
 }): M1StoryMapCompatibility {
   return M1StoryMapCompatibilitySchema.parse({
     extractor: summarizeValidationStage(input.calls, input.runs, {
-      schemaName: "story_map_segment",
+      schemaName: "story_map_extraction",
       runKind: "story_map_extract",
-      prefix: true,
     }),
     reconciler: summarizeValidationStage(input.calls, input.runs, {
       schemaName: "story_map_content",
       runKind: "story_map_reconcile",
-      prefix: false,
     }),
     evidenceValidity: input.evidenceValidity,
     storyMapArtifactCreated: input.storyMapArtifactCreated,
   });
 }
 
-export function summarizeAnalysisSegments(input: {
-  segments: AnalysisSegment[];
-  runs: ValidationRunObservation[];
-}): z.infer<typeof AnalysisSegmentSummarySchema> {
-  return AnalysisSegmentSummarySchema.parse({
-    count: input.segments.length,
-    items: input.segments.map((segment) => {
-      const run = input.runs.find(
-        (candidate) =>
-          candidate.kind === `story_map_extract:${segment.id}`,
-      );
-      const validation = summarizeRunValidation(run);
-      return {
-        segmentId: segment.id,
-        coreCharacters: segment.coreEnd - segment.coreStart,
-        contextCharacters: segment.contextEnd - segment.contextStart,
-        status: run?.status ?? "not_run",
-        ...validation,
-      };
-    }),
-  });
-}
-
 function summarizeValidationStage(
   calls: ProviderObservation[],
   runs: ValidationRunObservation[],
-  stage: { schemaName: string; runKind: string; prefix: boolean },
+  stage: { schemaName: string; runKind: string },
 ): z.infer<typeof StageValidationSchema> {
-  const stageRuns = runs.filter((run) =>
-    stage.prefix
-      ? run.kind.startsWith(`${stage.runKind}:`)
-      : run.kind === stage.runKind,
+  const stageRun = runs.find((run) => run.kind === stage.runKind);
+  const initial = calls.find(
+    (call) =>
+      call.schemaName === stage.schemaName && call.attempt === "initial",
   );
-  const stageCalls = calls.filter((call) => call.schemaName === stage.schemaName);
+  const repair = calls.find(
+    (call) =>
+      call.schemaName === stage.schemaName && call.attempt === "repair",
+  );
 
-  if (stageRuns.length === 0 && stageCalls.length === 0) {
+  if (!stageRun && !initial && !repair) {
     return { firstPassValidation: "not_run", repair: "not_run" };
   }
-  if (
-    stageRuns.some((run) => run.status === "failed" && run.attemptCount >= 2)
-  ) {
-    return { firstPassValidation: "failed", repair: "failed" };
-  }
-  if (
-    stageRuns.some((run) => run.status === "failed") &&
-    stageCalls.some(
-      (call) => call.attempt === "repair" && call.status === "failed",
-    )
-  ) {
-    return { firstPassValidation: "failed", repair: "failed" };
-  }
-  if (
-    stageRuns.some((run) => run.status === "failed") ||
-    stageCalls.some(
-      (call) => call.attempt === "initial" && call.status === "failed",
-    )
-  ) {
+  if (!initial || initial.status === "failed") {
     return { firstPassValidation: "not_observed", repair: "not_run" };
   }
-  if (stageRuns.some((run) => run.attemptCount === 2)) {
-    return { firstPassValidation: "failed", repair: "succeeded" };
+  if (repair) {
+    return {
+      firstPassValidation: "failed",
+      repair:
+        repair.status === "succeeded" && stageRun?.status === "succeeded"
+          ? "succeeded"
+          : "failed",
+    };
   }
-  return { firstPassValidation: "passed", repair: "not_needed" };
-}
-
-function summarizeRunValidation(
-  run: ValidationRunObservation | undefined,
-): z.infer<typeof StageValidationSchema> {
-  if (!run) return { firstPassValidation: "not_run", repair: "not_run" };
-  if (run.status === "succeeded" && run.attemptCount === 1) {
+  if (stageRun?.status === "succeeded") {
     return { firstPassValidation: "passed", repair: "not_needed" };
   }
-  if (run.status === "succeeded" && run.attemptCount === 2) {
-    return { firstPassValidation: "failed", repair: "succeeded" };
-  }
-  if (run.status === "failed" && run.attemptCount >= 2) {
-    return { firstPassValidation: "failed", repair: "failed" };
-  }
-  return { firstPassValidation: "not_observed", repair: "not_run" };
+  return { firstPassValidation: "failed", repair: "not_run" };
 }
 
 export function validateM1BenchmarkManifest(input: {
