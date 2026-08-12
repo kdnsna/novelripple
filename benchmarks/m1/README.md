@@ -74,3 +74,18 @@ Manifest 还记录 Story class、public/private、Source 相对路径和未见�
 6. 运行 Story Map、strict/open Ripple 和一个 Continuation scene；
 7. 使用 [`docs/evals/m1-review-template.md`](../../docs/evals/m1-review-template.md) 记录自动指标、人工修正成本、质量评分和用户观察；
 8. 新运行创建新报告，旧 manifest、报告、Source、Artifact 和 Worldline 不得覆盖。
+
+## M1-02 baseline runner
+
+冻结三篇作品及其人工 Gold 后，显式运行：
+
+```bash
+npm run eval:m1:baseline -- \
+  --manifest benchmarks/private/<story-a>/manifest.json \
+  --manifest benchmarks/private/<story-b>/manifest.json \
+  --manifest benchmarks/private/<story-c>/manifest.json
+```
+
+公开作品可以改用 `benchmarks/m1/public/<story-id>/manifest.json`。runner 会先校验 JSON Schema、字符数、A/B/C 分类、stable ID 交叉引用、权利/visibility 路径和 unseen 声明，然后才创建隔离的本地数据库并调用当前生产 Story Map Extractor → Reconciler。Gold 字段不会传给模型，只在完整 candidate 生成后用于评分和人工队列。
+
+每次运行新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`，不覆盖历史运行。JSON 不含 Source 正文、标题、人物名、完整 Prompt、provider raw output 或错误消息；`eval.db` 含生产管线所需的本地 Source 与 Artifact，只能留在 Git ignored 的 `.data/`。初次自动结果为 `awaiting_human_review`，复核者应使用 `eval.db` 和 [`M1 人工评测模板`](../../docs/evals/m1-review-template.md) 完成 revision、确认、strict/open Ripple、Continuation 与修正成本记录。

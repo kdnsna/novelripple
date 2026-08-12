@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 只定义合同、Benchmark 和门禁，当前业务实现仍是 M0 基线。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02 已建立显式 baseline runner，但由于尚无三篇冻结作品与真实 Provider 配置，[首次输入审计结论为 FAIL](docs/evals/runs/m1-baseline-2026-08-12-c9ae2e3.md)。当前业务实现仍是 M0 基线，尚无数据支持修改生产管线。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -108,6 +108,17 @@ npm run build
 ```
 
 配置真实 OpenAI-compatible 模型后，可以显式运行 `npm run eval:live` 对 `ripple-001` 做非默认 Live Eval；终端摘要与 `.data/evals/m0-live-eval.json` 会报告模型、Prompt 版本、事件/人物召回、Evidence、一级影响、Anchor 和 Continuation 合同结果。该命令不会被默认测试或 `npm run check` 调用。
+
+M1 使用独立显式命令采集未经优化的真实作品 Story Map baseline：
+
+```bash
+npm run eval:m1:baseline -- \
+  --manifest benchmarks/private/<story-a>/manifest.json \
+  --manifest benchmarks/private/<story-b>/manifest.json \
+  --manifest benchmarks/private/<story-c>/manifest.json
+```
+
+命令强制要求冻结的 Story A / B / C、至少一篇已由 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置。它直接调用当前生产 Story Map 管线，把脱敏指标和本地评测数据库写入 Git ignored 的 `.data/evals/m1-baseline/<run-id>/`，且不进入默认 CI。自动阶段结束后状态只能是 `awaiting_human_review`；Event、Ending Candidate、Edge、修正成本以及 strict/open Ripple 与 Continuation 必须由独立复核者通过生产 revision/Worldline 流程完成，不能由被测模型替代。
 
 产品范围、领域语义和评测门槛分别见 [`docs/mvp.md`](docs/mvp.md)、[`docs/domain.md`](docs/domain.md) 与 [`docs/evals.md`](docs/evals.md)。
 

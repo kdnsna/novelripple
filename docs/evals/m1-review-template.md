@@ -52,9 +52,35 @@
 - 等待 / 故障时间（不计入 review time）：
 - Material revisions（≤30k 门槛 ≤6）：
 - 人工新增关键 Event（≤30k 门槛 ≤2）：
+- update_event 次数：
+- Character correction 次数：
+- merge / split 需求次数：
+- 删除 Event 数：
+- 新增遗漏 Event 数：
+- Edge correction 数：
+- Evidence correction 数：
+- Ending Candidate correction 数：
+- 是否必须打开 Source / 数据库 / Prompt 才能完成修正：yes / no；打开项：
+- 产品能力缺失导致无法低成本修正：yes / no；稳定 ID 与简短理由：
 - 优先核对队列是否覆盖高风险项：PASS / FAIL / not-applicable
 - 最高成本的修正类别与简短理由：
 - 确认产生新 revision 且旧 Artifact 未变：PASS / FAIL
+
+## Failure diagnosis
+
+只记录观测到的失败及稳定 ID，不在 baseline 报告中直接设计解决方案。每项填写 `none` / count / 简短脱敏证据：
+
+- A. extraction coverage：
+- B. character identity：
+- C. evidence grounding：
+- D. chronology：
+- E. causal edges：
+- F. ending candidates：
+- G. review UX：
+- H. Ripple quality：
+- I. Continuation quality：
+- J. performance/context window：
+- K. provider/schema compatibility：
 
 ## Ripple quality
 
