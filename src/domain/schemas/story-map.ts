@@ -5,33 +5,27 @@ import { StateFactIdSchema } from "./state-fact-id";
 
 export const EvidenceKindSchema = z.enum(["fact", "inference"]);
 
-export const EvidenceClaimSchema = z
-  .object({
-    sectionId: z.string().min(1),
-    exactQuote: z.string().min(1),
-  })
-  .strict();
-
-const evidenceReferenceIdsShape = {
-  evidenceReferenceIds: z.array(z.string().min(1)).min(1),
-};
-
-const characterShape = {
-  name: z.string().min(1),
-  aliases: z.array(z.string().min(1)),
-  role: z.enum(["protagonist", "antagonist", "supporting", "deceased"]),
-  initialState: z.string().min(1),
+const evidenceUnitIdsShape = {
+  evidenceUnitIds: z.array(z.string().min(1)).min(1),
 };
 
 export const CharacterSchema = z
-  .object({ id: z.string().min(1), ...characterShape })
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    aliases: z.array(z.string().min(1)),
+    role: z.enum([
+      "protagonist",
+      "antagonist",
+      "supporting",
+      "deceased",
+    ]),
+    initialState: z.string().min(1),
+  })
   .strict();
 
-export const LocalCharacterCandidateSchema = z
-  .object({ localId: z.string().min(1), ...characterShape })
-  .strict();
-
-const eventContentShape = {
+const eventShape = {
+  id: StateFactIdSchema,
   title: z.string().min(1),
   summary: z.string().min(1),
   sequence: z.number().int().positive(),
@@ -41,16 +35,8 @@ const eventContentShape = {
   confidence: z.number().min(0).max(1).optional(),
 };
 
-const eventShape = {
-  id: StateFactIdSchema,
-  ...eventContentShape,
-};
-
 function requireInferenceConfidence(
-  event: {
-    evidenceKind: z.infer<typeof EvidenceKindSchema>;
-    confidence?: number;
-  },
+  event: { evidenceKind: z.infer<typeof EvidenceKindSchema>; confidence?: number },
   context: z.RefinementCtx,
 ): void {
   if (event.evidenceKind === "inference" && event.confidence === undefined) {
@@ -65,23 +51,21 @@ function requireInferenceConfidence(
 export const EventSchema = z
   .object({ ...eventShape, evidence: z.array(SourceReferenceSchema).min(1) })
   .strict()
-  .superRefine(requireInferenceConfidence);
+  .superRefine((event, context) => {
+    requireInferenceConfidence(event, context);
+  });
 
-export const LocalEventCandidateSchema = z
+export const StoryMapCandidateEventSchema = z
   .object({
-    localId: z.string().min(1),
-    ...eventContentShape,
-    evidence: z.array(EvidenceClaimSchema).min(1),
+    ...eventShape,
+    evidenceKind: EvidenceKindSchema,
+    ...evidenceUnitIdsShape,
   })
   .strict()
   .superRefine(requireInferenceConfidence);
 
-export const ReconciledEventCandidateSchema = z
-  .object({ ...eventShape, ...evidenceReferenceIdsShape })
-  .strict()
-  .superRefine(requireInferenceConfidence);
-
-const storyEdgeContentShape = {
+const storyEdgeShape = {
+  id: z.string().min(1),
   from: z.string().min(1),
   to: z.string().min(1),
   type: z.enum(["causes", "enables", "foreshadows"]),
@@ -90,25 +74,12 @@ const storyEdgeContentShape = {
   confirmed: z.boolean(),
 };
 
-const storyEdgeShape = {
-  id: z.string().min(1),
-  ...storyEdgeContentShape,
-};
-
 export const StoryEdgeSchema = z
   .object({ ...storyEdgeShape, evidence: z.array(SourceReferenceSchema).min(1) })
   .strict();
 
-export const LocalStoryEdgeCandidateSchema = z
-  .object({
-    localId: z.string().min(1),
-    ...storyEdgeContentShape,
-    evidence: z.array(EvidenceClaimSchema).min(1),
-  })
-  .strict();
-
-export const ReconciledStoryEdgeCandidateSchema = z
-  .object({ ...storyEdgeShape, ...evidenceReferenceIdsShape })
+export const StoryMapCandidateEdgeSchema = z
+  .object({ ...storyEdgeShape, ...evidenceUnitIdsShape })
   .strict();
 
 const endingCandidateShape = {
@@ -124,8 +95,11 @@ export const EndingCandidateSchema = z
   })
   .strict();
 
-export const ReconciledEndingCandidateSchema = z
-  .object({ ...endingCandidateShape, ...evidenceReferenceIdsShape })
+export const StoryMapCandidateEndingSchema = z
+  .object({
+    ...endingCandidateShape,
+    ...evidenceUnitIdsShape,
+  })
   .strict();
 
 const storyMapContentShape = {
@@ -139,24 +113,20 @@ const storyMapContentShape = {
 
 export const StoryMapContentSchema = z.object(storyMapContentShape).strict();
 
-export const StoryMapLocalExtractionCandidateSchema = z
-  .object({
-    characters: z.array(LocalCharacterCandidateSchema),
-    events: z.array(LocalEventCandidateSchema),
-    edges: z.array(LocalStoryEdgeCandidateSchema),
-  })
-  .strict();
-
-export const StoryMapReconciliationCandidateSchema = z
+export const StoryMapExtractionCandidateSchema = z
   .object({
     title: z.string().min(1),
     logline: z.string().min(1),
     characters: z.array(CharacterSchema).min(1),
-    events: z.array(ReconciledEventCandidateSchema).min(1),
-    edges: z.array(ReconciledStoryEdgeCandidateSchema),
-    endingCandidates: z.array(ReconciledEndingCandidateSchema).min(1),
+    events: z.array(StoryMapCandidateEventSchema).min(1),
+    edges: z.array(StoryMapCandidateEdgeSchema),
   })
   .strict();
+
+export const StoryMapContentCandidateSchema =
+  StoryMapExtractionCandidateSchema.extend({
+    endingCandidates: z.array(StoryMapCandidateEndingSchema).min(1),
+  });
 
 export const StoryMapSchema = z
   .object({
@@ -172,12 +142,11 @@ export const StoryMapSchema = z
 export type Character = z.infer<typeof CharacterSchema>;
 export type Event = z.infer<typeof EventSchema>;
 export type StoryEdge = z.infer<typeof StoryEdgeSchema>;
-export type EvidenceClaim = z.infer<typeof EvidenceClaimSchema>;
 export type StoryMapContent = z.infer<typeof StoryMapContentSchema>;
-export type StoryMapLocalExtractionCandidate = z.infer<
-  typeof StoryMapLocalExtractionCandidateSchema
+export type StoryMapExtractionCandidate = z.infer<
+  typeof StoryMapExtractionCandidateSchema
 >;
-export type StoryMapReconciliationCandidate = z.infer<
-  typeof StoryMapReconciliationCandidateSchema
+export type StoryMapContentCandidate = z.infer<
+  typeof StoryMapContentCandidateSchema
 >;
 export type StoryMap = z.infer<typeof StoryMapSchema>;
