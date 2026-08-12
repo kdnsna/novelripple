@@ -56,10 +56,8 @@ test("guides review by priority, invalidates changed Evidence, confirms, and rec
     page.getByRole("button", { name: "保存为新 revision" }),
   );
 
-  const invalidatedEventEvidence = page.locator(
-    '[data-testid^="review-queue-item-unconfirmed_evidence:event:event_01:"]',
-  );
-  await invalidatedEventEvidence.click();
+  await page.getByRole("button", { name: "查看完整图" }).click();
+  await page.getByTestId("event-node-event_01").click();
   await expect(page.getByRole("button", { name: "确认 Evidence 1" })).toBeEnabled();
   await clickRevisionAction(page, page.getByRole("button", { name: "确认 Evidence 1" }));
 
@@ -150,21 +148,12 @@ test("supports merge, evidenced Event add/delete, reorder, Edge lifecycle, and s
     page.getByRole("button", { name: "新增 Edge revision" }),
   );
 
-  await page
-    .locator(
-      '[data-testid^="review-queue-item-unconfirmed_evidence:edge:edge_manual_"]',
-    )
-    .click();
+  await openManualEdgeAdvisory(page);
   await clickRevisionAction(
     page,
     page.getByRole("button", { name: "确认 Edge Evidence 1" }),
   );
-  await page.getByText(/项分叉建议与软提示/).click();
-  await page
-    .locator(
-      '[data-testid^="review-queue-item-validator_advisory:edge_unconfirmed:edge_manual_"]',
-    )
-    .click();
+  await openManualEdgeAdvisory(page);
   await page.getByLabel("Edge 类型").selectOption("causes");
   await page.getByLabel("解释").fill("人工修改后的直接因果");
   await clickRevisionAction(
@@ -172,11 +161,7 @@ test("supports merge, evidenced Event add/delete, reorder, Edge lifecycle, and s
     page.getByRole("button", { name: "保存 Edge revision" }),
   );
 
-  await page
-    .locator(
-      '[data-testid^="review-queue-item-unconfirmed_evidence:edge:edge_manual_"]',
-    )
-    .click();
+  await openManualEdgeAdvisory(page);
   await expect(
     page.getByRole("button", { name: "确认 Edge Evidence 1" }),
   ).toBeEnabled();
@@ -246,4 +231,13 @@ async function completeRequiredReview(page: Page) {
 
 async function currentVersionText(page: Page): Promise<string> {
   return (await page.getByText(/Story Map v\d+ · (draft|confirmed)/).textContent())!;
+}
+
+async function openManualEdgeAdvisory(page: Page) {
+  await page.getByText(/项分叉建议与软提示/).click();
+  await page
+    .locator(
+      '[data-testid^="review-queue-item-validator_advisory:edge_unconfirmed:edge_manual_"]',
+    )
+    .click();
 }

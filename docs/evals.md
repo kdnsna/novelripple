@@ -12,6 +12,7 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`M1-02 Real Story baseline（FAIL）`](evals/runs/m1-baseline-2026-08-12-37aeb6b.md)：正式 `deepseek-chat` baseline 的人物与 Ending coverage 未过门槛；人工复核缺少稳定 ID 一对一评分，用户未能理解并完成 First Ripple，数据库中 Ripple / Worldline / Continuation 均为 0。报告保留 section-first 证据，但 M1-02 未完成，不能自动进入 M1-03。
 - [`M1-02 架构决策补充（PASS — SECTION-FIRST REQUIRED）`](evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)：用户接受现有真实失败数据作为架构门的充分证据；核心人物漏检已单独触发 section-first 条件。原产品质量 FAIL 报告保持不变，M1-03 仍等待独立授权。
 - [`M1-03 Section-first 真实作品回归（FAIL）`](evals/runs/m1-03-section-first-2026-08-13.md)：统一 section-first 候选在同一 `deepseek-chat / json_object` 上三篇均因局部逐字 Evidence claim 在一次 repair 后仍无效而未创建 Artifact；按预设 retention gate 已撤销生产实现，不能把不完整运行的 token 降低解释为质量改善。
+- [`M1-04 Guided Review 真实候选回归（FAIL）`](evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)：三篇冻结私人候选均可派生优先队列与 readiness，公开 fixture 的全部不可变修正和 E2E 通过；但没有取得合格的人工作品核对计时、material revision 与 Event addition 数据，不能放行 correction-cost gate。
 
 后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
 

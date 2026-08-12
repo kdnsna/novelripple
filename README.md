@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02A Provider / Evidence 兼容性门已通过。[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL，[架构决策补充](docs/evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)根据核心人物漏检和全书调用成本正式得出 `SECTION-FIRST REQUIRED`。M1-03 已按独立授权完成一次统一 section-first 实现与真实回归，但三篇均在局部 Evidence validation 后无法形成 Artifact，因此按预设 retention gate 撤销实现；详见 [`M1-03 失败报告`](docs/evals/runs/m1-03-section-first-2026-08-13.md)。当前 main 保持在已验证的 v2 生产管线，不进入下一 Issue。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销，生产生成管线仍是已验证的 v2。M1-04 已实现 Guided Review 的确定性能力，但三篇私人作品尚缺有效人工计时与语义修正记录，因此 correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -70,7 +70,7 @@ M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 U
 
 仓库已经建立最薄的 OpenAI-compatible 模型调用边界，并实现可调用的 Story Map Extractor → Reconciler → 确定性校验 → 版本化 Artifact 管线。服务端从不可变 Source 的 Section / 自然段确定性派生带稳定 ID 的 Evidence Unit；模型候选只返回 Unit ID，服务端再生成现有 SourceReference 的 Source、Section、UTF-16 偏移与 Hash。未知、重复、跨 Source 或领域引用非法时均 fail closed，不做模糊匹配或相似度 fallback。
 
-项目页已接入 Story Workspace：用户可以显式生成 draft Story Map，在三栏界面中对照完整 Source、自动布局的事件图与 Evidence，按角色过滤、拖动视图节点，并对标题、摘要、参与人物、明显错误的 Edge 和 Evidence 确认进行最小人工修正。任何修正和确认都会创建新的 revision Artifact，不覆盖 AI 原始版本；只有 `confirmed` Story Map 才能进入 Ripple。
+项目页默认进入 Guided Review：系统按可解释风险显示 inference / 低置信度、人物 identity、Ending、重要 Evidence 与高杠杆分叉队列，并展示进入 Ripple 前的 Readiness Checklist；完整 React Flow 图属于次级视图。用户可以 rename / merge 人物、修改别名与角色，更新/删除/基于所选 Source Evidence 新增/重排 Event，重指派 participants，以及新增/修改/删除/确认 Edge。每次修正和确认都创建新的 revision Artifact，不覆盖 AI 原始版本；服务端拒绝 stale revision，且只有通过 readiness 的新 draft 才能确认并进入 Ripple。M1-04 没有真实 split 需求证据，因此未实现 Character split。
 
 Ripple Simulator 已支持 `prevent` / `choice` / `outcome`、严格与开放模式、结构化 Impact Plan 和四种 Anchor 状态。Preview 只使用已确认 Story Map 构造只读 Canonical 上下文；用户接受后才在同一事务中保存 accepted Impact Plan revision、幂等 Canonical Worldline 和子 Worldline。严格模式的 `incompatible` 会在写入前被拦截。
 

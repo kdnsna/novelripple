@@ -103,7 +103,7 @@ Edge type 仍只允许 `causes | enables | foreshadows`。Schema 和 repository 
 
 高杠杆 divergence 使用现有有向 Edge 图确定性计算每个 Event 可到达的后续 Event 数，按 `reachable desc → sequence asc → id asc` 取前三个正值项目，并展示其下游数量。不调用模型，不把建议写入 Story Map。
 
-重要 Evidence 指 inference Event、Ending target Event、高杠杆 Event 和低置信度 Event 的每个 SourceReference。已确认引用按完整 SourceReference key 匹配。硬领域错误不会作为可忽略队列项：正式 Artifact 创建与每次 revision 仍由现有 validator fail closed；只把不构成硬失败的低置信度、未确认关系等列为 advisory。
+重要 Evidence 指 inference / 低置信度 Event 与低置信度 Edge 的 SourceReference。Ending Candidate 通过自己的显式核对操作覆盖；高杠杆 Event 只是分叉建议；结构合法但 `confirmed=false` 的 Edge 进入折叠 advisory，三者都不强迫用户逐条重复确认 Evidence。已确认引用按完整 SourceReference key 匹配。硬领域错误不会作为可忽略队列项：正式 Artifact 创建与每次 revision 仍由现有 validator fail closed。
 
 ## Readiness Checklist
 

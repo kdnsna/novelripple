@@ -12,14 +12,19 @@ async function createConfirmedFixtureProject(page: Page, title: string) {
   await page.getByRole("button", { name: "导入 Source" }).click();
   await page.getByRole("button", { name: "生成 Story Map" }).click();
   await expect(page.getByText("Story Map v1 · draft")).toBeVisible();
+  await page.getByRole("button", { name: "查看完整图" }).click();
   await page.getByTestId("event-node-event_07").click();
   await expect(page.getByRole("heading", { name: "许澄交出红账" })).toBeVisible();
   await page.getByRole("button", { name: "在原文中定位" }).click();
   await expect(page.locator("mark[data-active-evidence='true']")).toContainText(
     "许澄把红色账簿交给周岚",
   );
-  await page.getByRole("button", { name: "确认 Story Map" }).click();
-  await expect(page.getByText("Story Map v2 · confirmed")).toBeVisible();
+  await page.getByRole("button", { name: "返回核对队列" }).click();
+  await completeRequiredReview(page);
+  await page
+    .getByRole("button", { name: "确认 Story Map 并进入 Ripple" })
+    .click();
+  await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
 }
 
 test("generates a strict rerouted preview and creates one child only after acceptance", async ({
@@ -82,7 +87,7 @@ test("generates a strict rerouted preview and creates one child only after accep
 
   await page.reload();
   await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
-  await expect(page.getByText("Story Map v2 · confirmed")).toBeVisible();
+  await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
   await page.getByRole("button", { name: "继续最近 Worldline" }).click();
   await expect(page.getByTestId("continuation-scene")).toContainText(
     "潮标站的第二把锁",
@@ -131,3 +136,38 @@ test("generates and accepts an open-mode preview without ending Anchors", async 
     .click();
   await expect(page.getByRole("status")).toContainText("新 Worldline 已创建");
 });
+
+async function completeRequiredReview(page: Page) {
+  for (let index = 0; index < 30; index += 1) {
+    const finalAction = page.getByRole("button", {
+      name: "确认 Story Map 并进入 Ripple",
+    });
+    if (await finalAction.isEnabled()) return;
+    const candidates = [
+      page.getByRole("button", { name: "确认 Ending Candidate" }),
+      page.getByRole("button", { name: "确认人物身份" }),
+      page
+        .locator("button:not(:disabled)")
+        .filter({ hasText: /^确认 Edge Evidence \d+$/u }),
+      page
+        .locator("button:not(:disabled)")
+        .filter({ hasText: /^确认 Evidence \d+$/u }),
+    ];
+    let acted = false;
+    for (const candidate of candidates) {
+      if ((await candidate.count()) > 0 && (await candidate.first().isVisible())) {
+        const before = await currentVersionText(page);
+        await candidate.first().click();
+        await expect(page.getByText(before, { exact: true })).toBeHidden();
+        acted = true;
+        break;
+      }
+    }
+    if (!acted) throw new Error("Readiness 尚未完成，但没有可执行核对操作");
+  }
+  throw new Error("Readiness 未在 30 次核对内完成");
+}
+
+async function currentVersionText(page: Page): Promise<string> {
+  return (await page.getByText(/Story Map v\d+ · (draft|confirmed)/).textContent())!;
+}

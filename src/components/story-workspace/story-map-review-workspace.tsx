@@ -106,6 +106,7 @@ export function StoryMapReviewWorkspace({
   const activeWorldlines = worldlines.filter(
     (worldline) => worldline.status === "active",
   );
+  const childWorldlineCount = activeWorldlines.length;
   const activeWorldline = activeWorldlines.find(
     (worldline) => worldline.id === activeWorldlineId,
   );
@@ -237,6 +238,24 @@ export function StoryMapReviewWorkspace({
           {storyMap.status === "confirmed" ? (
             <>
               <span className="ripple-gate-open">已通过 Ripple 前置确认门</span>
+              <span>
+                {childWorldlineCount === 0
+                  ? "尚未创建子 Worldline"
+                  : `已创建 ${childWorldlineCount} 条子 Worldline`}
+              </span>
+              {activeWorldlines[0] ? (
+                <button
+                  className="secondary-button compact-button"
+                  onClick={() => {
+                    setViewMode("graph");
+                    setRippleOpen(false);
+                    setActiveWorldlineId(activeWorldlines[0]!.id);
+                  }}
+                  type="button"
+                >
+                  继续最近 Worldline
+                </button>
+              ) : null}
               <button
                 className="primary-button compact-button"
                 onClick={() => {

@@ -1,6 +1,6 @@
 # 领域语义
 
-本文件定义 `v0.1.0` 确立、M1 继续沿用的唯一领域语言。TypeScript / Zod Schema 是它的可执行表示；两者不一致时必须在同一变更中修正。M1-01 只定义真实作品 Benchmark 与评测合同，不新增领域类型或修改 Story Map Schema。
+本文件定义 `v0.1.0` 确立、M1 继续沿用的唯一领域语言。TypeScript / Zod Schema 是它的可执行表示；两者不一致时必须在同一变更中修正。M1-04 只扩展现有 Story Map review metadata 与不可变 revision 操作，不改变 Source、最终 Story Map Evidence、Impact Plan、Worldline 或 Continuation 合同。
 
 ## 事实层级
 
@@ -34,7 +34,7 @@ M0 的可执行结构将两者合并为 Evidence Reference，使用规范化文�
 
 ## StoryMap
 
-Story Map 是对 Source 的版本化解释，不是 Source 本身。M0 只包含：
+Story Map 是对 Source 的版本化解释，不是 Source 本身。当前只包含：
 
 - `characters`：稳定 ID、姓名、别名、角色和初始状态；
 - `events`：顺序、标题、摘要、参与人物、状态变化、事实层级和证据；
@@ -43,11 +43,19 @@ Story Map 是对 Source 的版本化解释，不是 Source 本身。M0 只包含
 
 每个 Story Map 必须绑定唯一 Source 和明确版本；Source 自身以 `contentHash` 保证内容身份。确认或修正地图会创建新版本，旧版本保留；用户确认只对该具体版本有效，Divergence 与 Impact Plan 不得自动漂移到其他版本。
 
-人工 Evidence 确认属于 Story Map Artifact 的 review metadata，只保存 Event ID 与原文定位引用，不复制 Evidence 正文。标题、摘要、参与人物修正、删 Edge、Evidence 确认以及最终确认都会创建新的 revision Artifact；节点拖动只改变浏览器中的视觉位置，不进入领域数据。任何 `update_event` 产生实际修改后，新 revision 必须清除该 Event 的全部 Evidence 确认并保持 `draft`，其他 Event 的确认与旧 Artifact 不变，读者需要重新核对修改后的声明。
+Review Queue 与 Readiness 是当前 Source、Story Map、review metadata 和领域 validator 的纯派生视图，不是数据库事实源。队列按 inference、低置信度、人物 alias / identity 风险、Ending Candidate、高杠杆分叉、重要 Evidence 和软提示排序，不生成不可解释总分。高杠杆分叉由当前 Edge 图的下游可达事件数确定；人物 identity 风险只使用规范化后完全相同的 name / alias，不做模糊合并。
+
+人工确认属于 Story Map Artifact 的 review metadata，只保存 Character / Event / Edge / Ending Candidate 的稳定 ID、原文定位引用，以及产生当前 revision 的 `operation type / timestamp / Story Map version`，不复制 Evidence 正文。每个 revision 只记录自己的一个 operation，完整 Artifact 链就是轻量操作历史，不另建分析平台。
+
+rename / aliases / role、人物 merge、Event 更新/删除/有 Evidence 新增/重排、participant 重指派、Edge 新增/修改/删除以及各类确认都会创建新的 revision Artifact；节点拖动只改变浏览器中的视觉位置，不进入领域数据。Character merge 保留目标 ID、稳定合并别名、重映射全部 Event participant 并失效受影响人物与 Event Evidence 确认。Event 删除同时删除 incident Edge 与以它为目标的 Ending Candidate；Event 重排必须恰好包含当前全部 Event 一次。任何实际语义修改后，新 revision 保持 `draft`，旧 Artifact 与无关确认不变。
+
+新增 Event 和 Edge 必须先从不可变 Source 派生的自然段 Evidence Unit 选择 Evidence；服务端仍只保存现有 `SourceReference[]` 并执行 offset/hash 与引用校验。不存在无 Evidence 新增 Canon Event 的路径。Edge 类型仍只有 `causes`、`enables`、`foreshadows`。
+
+Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending Candidate 已核对、无非法引用、无悬空 Edge，以及 inference / 低置信度 Event 与低置信度 Edge 的重要 Evidence 已核对。服务端基于最新 revision 重新计算；未 ready 或 stale 的确认请求 fail closed。历史 confirmed Artifact 不迁移或覆盖，新的 draft 必须通过该门才能创建 confirmed revision。
 
 ## Character
 
-Story Map 中可被事件引用的人物实体。Character 在所属 Story Map 版本内有唯一 ID。M0 不在 Character 上复制独立 Evidence：可作为剧情事实使用的人物状态必须写入带 Evidence 的 Event；`role` 与 `initialState` 只用于地图浏览和提取定向，不能脱离相关 Event 充当 Canon 事实。别名可以归到同一 Character，但不确定的合并不得静默发生。
+Story Map 中可被事件引用的人物实体。Character 在所属 Story Map 版本内有唯一 ID。当前不在 Character 上复制独立 Evidence：可作为剧情事实使用的人物状态必须写入带 Evidence 的 Event；`role` 与 `initialState` 只用于地图浏览和提取定向，不能脱离相关 Event 充当 Canon 事实。别名可以归到同一 Character，但不确定的合并不得静默发生。Character split 只有真实 benchmark 记录明确需求后才实现；M1-04 没有取得该证据。
 
 ## Event
 
@@ -55,13 +63,13 @@ Story Map 中可被事件引用的人物实体。Character 在所属 Story Map �
 
 ## Edge
 
-同一 Story Map 版本中两个 Event 之间的有向关系。起点和终点都必须存在，不得悬空。M0 只允许：
+同一 Story Map 版本中两个 Event 之间的有向关系。起点和终点都必须存在，不得悬空。只允许：
 
 - `causes`：上游事件对下游事件的发生具有实质因果作用；
 - `enables`：上游事件让下游事件成为可能，但本身不足以导致它发生；
 - `foreshadows`：上游事件在叙事上预示下游事件，不主张因果关系。
 
-无法可靠归入这三类的关系不进入 Story Map，M0 不增加其他 Edge 类型。
+无法可靠归入这三类的关系不进入 Story Map，M1 不增加其他 Edge 类型。
 
 ## Divergence
 
