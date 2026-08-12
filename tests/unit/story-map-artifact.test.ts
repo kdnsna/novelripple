@@ -6,6 +6,11 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { SourceReference, StoryMapContent } from "@/domain/schemas";
+import { deriveStoryMapReview } from "@/domain/review/derive-story-map-review";
+import {
+  deriveEvidenceUnits,
+  sourceReferenceForUnit,
+} from "@/domain/source/evidence-units";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import {
@@ -147,7 +152,13 @@ describe("Story Map Artifact persistence", () => {
       version: 1,
       basedOnArtifactId: null,
       generationRunId: run.id,
-      review: { evidenceConfirmations: [] },
+      review: {
+        evidenceConfirmations: [],
+        edgeEvidenceConfirmations: [],
+        characterConfirmations: [],
+        endingCandidateConfirmations: [],
+        operation: null,
+      },
       storyMap: {
         sourceId: source.id,
         version: 1,
@@ -269,6 +280,120 @@ describe("immutable Story Map review revisions", () => {
       title: `${event.title}（人工校正）`,
       summary: `${event.summary} 已由读者核对。`,
     });
+    expect(revision.review.operation).toMatchObject({
+      type: "update_event",
+      storyMapVersion: 2,
+    });
+    expect(revision.review.operation?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(getStoryMapArtifact(artifact.id)).toEqual(original);
+  });
+
+  it("updates a Character and invalidates its review and affected Event Evidence", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const character = artifact.storyMap.characters[0];
+    const affectedEvent = artifact.storyMap.events.find((event) =>
+      event.participants.includes(character.id),
+    )!;
+    let latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "confirm_character", characterId: character.id },
+    });
+    latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: {
+        type: "confirm_evidence",
+        eventId: affectedEvent.id,
+        evidence: affectedEvent.evidence[0],
+      },
+    });
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: {
+        type: "update_character",
+        characterId: character.id,
+        name: `${character.name}（核对）`,
+        aliases: [character.name],
+        role: "supporting",
+      },
+    });
+
+    expect(
+      revision.storyMap.characters.find((item) => item.id === character.id),
+    ).toMatchObject({
+      name: `${character.name}（核对）`,
+      aliases: [character.name],
+      role: "supporting",
+    });
+    expect(revision.review.characterConfirmations).not.toContain(character.id);
+    expect(revision.review.evidenceConfirmations).not.toContainEqual({
+      eventId: affectedEvent.id,
+      evidence: affectedEvent.evidence[0],
+    });
+    expect(revision.review.operation?.type).toBe("update_character");
+  });
+
+  it("merges Characters, rewrites every participant reference, and preserves the old Artifact", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const targetId = "char_xuchuan";
+    const mergedId = "char_shenyan";
+    const original = structuredClone(artifact);
+    const affectedEventIds = artifact.storyMap.events
+      .filter((event) => event.participants.includes(mergedId))
+      .map((event) => event.id);
+    let latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "confirm_character", characterId: targetId },
+    });
+    latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: { type: "confirm_character", characterId: mergedId },
+    });
+    const evidenceEvent = artifact.storyMap.events.find((event) =>
+      event.participants.includes(mergedId),
+    )!;
+    latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: {
+        type: "confirm_evidence",
+        eventId: evidenceEvent.id,
+        evidence: evidenceEvent.evidence[0],
+      },
+    });
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: {
+        type: "merge_characters",
+        targetCharacterId: targetId,
+        mergedCharacterIds: [mergedId],
+      },
+    });
+
+    expect(revision.storyMap.characters.some((item) => item.id === mergedId)).toBe(
+      false,
+    );
+    expect(
+      revision.storyMap.characters.find((item) => item.id === targetId)?.aliases,
+    ).toEqual(expect.arrayContaining(["沈砚", "沈叔"]));
+    for (const event of revision.storyMap.events) {
+      expect(event.participants).not.toContain(mergedId);
+      expect(new Set(event.participants).size).toBe(event.participants.length);
+    }
+    expect(revision.review.characterConfirmations).not.toContain(targetId);
+    expect(revision.review.characterConfirmations).not.toContain(mergedId);
+    expect(
+      revision.review.evidenceConfirmations.some((confirmation) =>
+        affectedEventIds.includes(confirmation.eventId),
+      ),
+    ).toBe(false);
     expect(getStoryMapArtifact(artifact.id)).toEqual(original);
   });
 
@@ -288,6 +413,216 @@ describe("immutable Story Map review revisions", () => {
     expect(revision.storyMap.edges).not.toContainEqual(removedEdge);
     expect(getStoryMapArtifact(artifact.id)?.storyMap.edges).toContainEqual(
       removedEdge,
+    );
+  });
+
+  it("adds, confirms, updates, and deletes an Edge through immutable revisions", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const evidence = sourceReferenceForUnit(deriveEvidenceUnits(source)[0]!);
+    const added = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: {
+        type: "add_edge",
+        from: "event_01",
+        to: "event_03",
+        edgeType: "enables",
+        explanation: "人工核对的新关系",
+        evidence: [evidence],
+      },
+    });
+    const edge = added.storyMap.edges.find(
+      (candidate) => candidate.explanation === "人工核对的新关系",
+    )!;
+    expect(edge).toMatchObject({
+      from: "event_01",
+      to: "event_03",
+      type: "enables",
+      confidence: 1,
+      confirmed: false,
+      evidence: [evidence],
+    });
+    expect(edge.id).toMatch(/^edge_manual_/);
+
+    const confirmed = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: added.id,
+      change: {
+        type: "confirm_edge_evidence",
+        edgeId: edge.id,
+        evidence,
+      },
+    });
+    expect(confirmed.review.edgeEvidenceConfirmations).toEqual([
+      { edgeId: edge.id, evidence },
+    ]);
+
+    const updated = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: confirmed.id,
+      change: {
+        type: "update_edge",
+        edgeId: edge.id,
+        edgeType: "causes",
+        explanation: "人工核对后的直接因果",
+      },
+    });
+    expect(updated.storyMap.edges.find((candidate) => candidate.id === edge.id)).toMatchObject({
+      type: "causes",
+      explanation: "人工核对后的直接因果",
+    });
+    expect(updated.review.edgeEvidenceConfirmations).toEqual([]);
+
+    const removed = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: updated.id,
+      change: { type: "delete_edge", edgeId: edge.id },
+    });
+    expect(removed.storyMap.edges.some((candidate) => candidate.id === edge.id)).toBe(
+      false,
+    );
+    expect(getStoryMapArtifact(added.id)?.storyMap.edges).toContainEqual(edge);
+  });
+
+  it("adds a missing Event only with valid selected Source Evidence", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const evidence = sourceReferenceForUnit(deriveEvidenceUnits(source)[0]!);
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: {
+        type: "add_event",
+        title: "人工补充事件",
+        summary: "读者从所选原文证据补充一个遗漏事件。",
+        participants: ["char_xucheng"],
+        stateChanges: ["遗漏事实进入故事地图"],
+        evidenceKind: "fact",
+        evidence: [evidence],
+      },
+    });
+
+    expect(revision.storyMap.events.at(-1)).toMatchObject({
+      id: expect.stringMatching(/^event_manual_/),
+      title: "人工补充事件",
+      sequence: artifact.storyMap.events.length + 1,
+      evidence: [evidence],
+    });
+    expect(revision.review.operation?.type).toBe("add_event");
+    expect(getStoryMapArtifact(artifact.id)?.storyMap.events).toHaveLength(
+      artifact.storyMap.events.length,
+    );
+  });
+
+  it("rejects an added Event with foreign Evidence and rolls back the revision", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const evidence = sourceReferenceForUnit(deriveEvidenceUnits(source)[0]!);
+
+    expect(() =>
+      createStoryMapRevision({
+        projectId: project.id,
+        artifactId: artifact.id,
+        change: {
+          type: "add_event",
+          title: "非法补充",
+          summary: "这条事件使用了不属于当前 Source 的 Evidence。",
+          participants: ["char_xucheng"],
+          stateChanges: [],
+          evidenceKind: "fact",
+          evidence: [{ ...evidence, sourceId: "source_foreign" }],
+        },
+      }),
+    ).toThrow("Story Map 校验失败");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([
+      artifact,
+    ]);
+  });
+
+  it("deletes an erroneous Event and cascades incident Edges, Endings, and confirmations", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const removedEvent = artifact.storyMap.events.at(-1)!;
+    let latest = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: {
+        type: "confirm_evidence",
+        eventId: removedEvent.id,
+        evidence: removedEvent.evidence[0],
+      },
+    });
+    for (const ending of artifact.storyMap.endingCandidates.filter(
+      (candidate) => candidate.targetEventId === removedEvent.id,
+    )) {
+      latest = createStoryMapRevision({
+        projectId: project.id,
+        artifactId: latest.id,
+        change: {
+          type: "confirm_ending_candidate",
+          endingCandidateId: ending.id,
+        },
+      });
+    }
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: latest.id,
+      change: { type: "delete_event", eventId: removedEvent.id },
+    });
+
+    expect(revision.storyMap.events.some((event) => event.id === removedEvent.id)).toBe(
+      false,
+    );
+    expect(
+      revision.storyMap.edges.some(
+        (edge) => edge.from === removedEvent.id || edge.to === removedEvent.id,
+      ),
+    ).toBe(false);
+    expect(
+      revision.storyMap.endingCandidates.some(
+        (ending) => ending.targetEventId === removedEvent.id,
+      ),
+    ).toBe(false);
+    expect(
+      revision.review.evidenceConfirmations.some(
+        (confirmation) => confirmation.eventId === removedEvent.id,
+      ),
+    ).toBe(false);
+    expect(revision.storyMap.events.map((event) => event.sequence)).toEqual(
+      revision.storyMap.events.map((_, index) => index + 1),
+    );
+  });
+
+  it("reorders every Event exactly once and rejects partial or unchanged order", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const reversedIds = artifact.storyMap.events.map((event) => event.id).reverse();
+
+    const revision = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "reorder_events", eventIds: reversedIds },
+    });
+    expect(
+      [...revision.storyMap.events]
+        .sort((left, right) => left.sequence - right.sequence)
+        .map((event) => event.id),
+    ).toEqual(reversedIds);
+
+    expect(() =>
+      createStoryMapRevision({
+        projectId: project.id,
+        artifactId: revision.id,
+        change: { type: "reorder_events", eventIds: reversedIds },
+      }),
+    ).toThrow("修改没有产生变化");
+    expect(() =>
+      createStoryMapRevision({
+        projectId: project.id,
+        artifactId: revision.id,
+        change: { type: "reorder_events", eventIds: reversedIds.slice(1) },
+      }),
+    ).toThrow("事件重排必须包含当前全部 Event");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)[0]).toEqual(
+      revision,
     );
   });
 
@@ -459,12 +794,61 @@ describe("immutable Story Map review revisions", () => {
     ).toThrow("Story Map 版本已更新");
   });
 
-  it("confirms by creating one immutable revision and is idempotent", async () => {
-    const { project, artifact } = await createInitialArtifact();
+  it("refuses premature confirmation, then confirms a ready map immutably and idempotently", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+
+    expect(() =>
+      confirmStoryMapArtifact({
+        projectId: project.id,
+        artifactId: artifact.id,
+      }),
+    ).toThrow("Story Map 尚未完成必要核对");
+
+    let latest = artifact;
+    const initialReview = deriveStoryMapReview(latest, source);
+    for (const characterId of initialReview.coreCharacterIds) {
+      latest = createStoryMapRevision({
+        projectId: project.id,
+        artifactId: latest.id,
+        change: { type: "confirm_character", characterId },
+      });
+    }
+    for (const ending of latest.storyMap.endingCandidates) {
+      latest = createStoryMapRevision({
+        projectId: project.id,
+        artifactId: latest.id,
+        change: {
+          type: "confirm_ending_candidate",
+          endingCandidateId: ending.id,
+        },
+      });
+    }
+    for (const requirement of deriveStoryMapReview(latest, source)
+      .importantEvidence) {
+      latest = createStoryMapRevision({
+        projectId: project.id,
+        artifactId: latest.id,
+        change:
+          requirement.targetKind === "event"
+            ? {
+                type: "confirm_evidence",
+                eventId: requirement.targetId,
+                evidence: requirement.evidence,
+              }
+            : {
+                type: "confirm_edge_evidence",
+                edgeId: requirement.targetId,
+                evidence: requirement.evidence,
+              },
+      });
+    }
+    expect(deriveStoryMapReview(latest, source).readiness.readyForRipple).toBe(
+      true,
+    );
 
     const confirmed = confirmStoryMapArtifact({
       projectId: project.id,
-      artifactId: artifact.id,
+      artifactId: latest.id,
     });
     const repeated = confirmStoryMapArtifact({
       projectId: project.id,
@@ -472,10 +856,16 @@ describe("immutable Story Map review revisions", () => {
     });
 
     expect(confirmed).toMatchObject({
-      version: 2,
-      basedOnArtifactId: artifact.id,
+      version: latest.version + 1,
+      basedOnArtifactId: latest.id,
       generationRunId: null,
-      storyMap: { version: 2, status: "confirmed" },
+      storyMap: { version: latest.version + 1, status: "confirmed" },
+      review: {
+        operation: {
+          type: "confirm_story_map",
+          storyMapVersion: latest.version + 1,
+        },
+      },
     });
     expect(repeated).toEqual(confirmed);
     expect(getStoryMapArtifact(artifact.id)?.storyMap.status).toBe("draft");

@@ -91,6 +91,47 @@ describe("core domain schemas", () => {
     ).toBe(false);
   });
 
+  it("keeps old Story Map review JSON readable and defines only the M1-04 correction operations", () => {
+    expect(
+      schemas.StoryMapReviewSchema.parse({ evidenceConfirmations: [] }),
+    ).toEqual({
+      evidenceConfirmations: [],
+      edgeEvidenceConfirmations: [],
+      characterConfirmations: [],
+      endingCandidateConfirmations: [],
+      operation: null,
+    });
+
+    for (const type of ["causes", "enables", "foreshadows"] as const) {
+      expect(
+        schemas.StoryMapRevisionChangeSchema.safeParse({
+          type: "add_edge",
+          from: "event_1",
+          to: "event_2",
+          edgeType: type,
+          explanation: "人工核对的关系",
+          evidence: [reference],
+        }).success,
+      ).toBe(true);
+    }
+    expect(
+      schemas.StoryMapRevisionChangeSchema.safeParse({
+        type: "add_edge",
+        from: "event_1",
+        to: "event_2",
+        edgeType: "correlates",
+        explanation: "不允许的新关系类型",
+        evidence: [reference],
+      }).success,
+    ).toBe(false);
+    expect(
+      schemas.StoryMapRevisionChangeSchema.safeParse({
+        type: "split_character",
+        characterId: "character_1",
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects generated content as a Canon Story Map Event", () => {
     const generatedEvent = {
       ...storyMapCandidate,

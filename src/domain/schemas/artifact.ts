@@ -6,7 +6,7 @@ import {
 } from "./continuation";
 import { SourceReferenceSchema } from "./source";
 import { ImpactPlanSchema } from "./impact-plan";
-import { StoryMapSchema } from "./story-map";
+import { EvidenceKindSchema, StoryMapSchema } from "./story-map";
 
 export const EvidenceConfirmationSchema = z
   .object({
@@ -15,11 +15,68 @@ export const EvidenceConfirmationSchema = z
   })
   .strict();
 
+export const EdgeEvidenceConfirmationSchema = z
+  .object({
+    edgeId: z.string().min(1),
+    evidence: SourceReferenceSchema,
+  })
+  .strict();
+
+export const StoryMapReviewOperationTypeSchema = z.enum([
+  "update_character",
+  "merge_characters",
+  "confirm_character",
+  "update_event",
+  "delete_event",
+  "add_event",
+  "reorder_events",
+  "delete_edge",
+  "add_edge",
+  "update_edge",
+  "confirm_evidence",
+  "confirm_edge_evidence",
+  "confirm_ending_candidate",
+  "confirm_story_map",
+]);
+
+export const StoryMapReviewOperationSchema = z
+  .object({
+    type: StoryMapReviewOperationTypeSchema,
+    timestamp: z.iso.datetime(),
+    storyMapVersion: z.number().int().positive(),
+  })
+  .strict();
+
 export const StoryMapReviewSchema = z
   .object({
     evidenceConfirmations: z.array(EvidenceConfirmationSchema),
+    edgeEvidenceConfirmations: z
+      .array(EdgeEvidenceConfirmationSchema)
+      .default([]),
+    characterConfirmations: z.array(z.string().min(1)).default([]),
+    endingCandidateConfirmations: z.array(z.string().min(1)).default([]),
+    operation: StoryMapReviewOperationSchema.nullable().default(null),
   })
   .strict();
+
+const UpdateCharacterChangeSchema = z
+  .object({
+    type: z.literal("update_character"),
+    characterId: z.string().min(1),
+    name: z.string().trim().min(1).max(200).optional(),
+    aliases: z.array(z.string().trim().min(1).max(200)).optional(),
+    role: z
+      .enum(["protagonist", "antagonist", "supporting", "deceased"])
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (change) =>
+      change.name !== undefined ||
+      change.aliases !== undefined ||
+      change.role !== undefined,
+    { message: "人物修改必须至少包含一个字段" },
+  );
 
 const UpdateEventChangeSchema = z
   .object({
@@ -28,18 +85,88 @@ const UpdateEventChangeSchema = z
     title: z.string().trim().min(1).max(200).optional(),
     summary: z.string().trim().min(1).max(2_000).optional(),
     participants: z.array(z.string().min(1)).min(1).optional(),
+    stateChanges: z.array(z.string().trim().min(1).max(1_000)).optional(),
+    evidenceKind: EvidenceKindSchema.optional(),
+    confidence: z.number().min(0).max(1).optional(),
   })
   .strict()
   .refine(
     (change) =>
       change.title !== undefined ||
       change.summary !== undefined ||
-      change.participants !== undefined,
+      change.participants !== undefined ||
+      change.stateChanges !== undefined ||
+      change.evidenceKind !== undefined ||
+      change.confidence !== undefined,
     { message: "事件修改必须至少包含一个字段" },
   );
 
+const UpdateEdgeChangeSchema = z
+  .object({
+    type: z.literal("update_edge"),
+    edgeId: z.string().min(1),
+    edgeType: z.enum(["causes", "enables", "foreshadows"]).optional(),
+    explanation: z.string().trim().min(1).max(2_000).optional(),
+    evidence: z.array(SourceReferenceSchema).min(1).optional(),
+  })
+  .strict()
+  .refine(
+    (change) =>
+      change.edgeType !== undefined ||
+      change.explanation !== undefined ||
+      change.evidence !== undefined,
+    { message: "Edge 修改必须至少包含一个字段" },
+  );
+
 export const StoryMapRevisionChangeSchema = z.discriminatedUnion("type", [
+  UpdateCharacterChangeSchema,
+  z
+    .object({
+      type: z.literal("merge_characters"),
+      targetCharacterId: z.string().min(1),
+      mergedCharacterIds: z.array(z.string().min(1)).min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("confirm_character"),
+      characterId: z.string().min(1),
+    })
+    .strict(),
   UpdateEventChangeSchema,
+  z
+    .object({
+      type: z.literal("delete_event"),
+      eventId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("add_event"),
+      title: z.string().trim().min(1).max(200),
+      summary: z.string().trim().min(1).max(2_000),
+      participants: z.array(z.string().min(1)).min(1),
+      stateChanges: z.array(z.string().trim().min(1).max(1_000)),
+      evidenceKind: EvidenceKindSchema,
+      confidence: z.number().min(0).max(1).optional(),
+      evidence: z.array(SourceReferenceSchema).min(1),
+    })
+    .strict()
+    .superRefine((change, context) => {
+      if (change.evidenceKind === "inference" && change.confidence === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["confidence"],
+          message: "推断事件必须包含置信度",
+        });
+      }
+    }),
+  z
+    .object({
+      type: z.literal("reorder_events"),
+      eventIds: z.array(z.string().min(1)).min(1),
+    })
+    .strict(),
   z
     .object({
       type: z.literal("delete_edge"),
@@ -48,9 +175,33 @@ export const StoryMapRevisionChangeSchema = z.discriminatedUnion("type", [
     .strict(),
   z
     .object({
+      type: z.literal("add_edge"),
+      from: z.string().min(1),
+      to: z.string().min(1),
+      edgeType: z.enum(["causes", "enables", "foreshadows"]),
+      explanation: z.string().trim().min(1).max(2_000),
+      evidence: z.array(SourceReferenceSchema).min(1),
+    })
+    .strict(),
+  UpdateEdgeChangeSchema,
+  z
+    .object({
       type: z.literal("confirm_evidence"),
       eventId: z.string().min(1),
       evidence: SourceReferenceSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("confirm_edge_evidence"),
+      edgeId: z.string().min(1),
+      evidence: SourceReferenceSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("confirm_ending_candidate"),
+      endingCandidateId: z.string().min(1),
     })
     .strict(),
 ]);

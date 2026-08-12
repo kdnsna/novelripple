@@ -467,6 +467,11 @@ export function validateStoryMapReview(
 ): DomainValidationIssue[] {
   const issues: DomainValidationIssue[] = [];
   const confirmationKeys = new Set<string>();
+  const edgeConfirmationKeys = new Set<string>();
+  const characterIds = new Set(storyMap.characters.map((character) => character.id));
+  const endingCandidateIds = new Set(
+    storyMap.endingCandidates.map((ending) => ending.id),
+  );
 
   review.evidenceConfirmations.forEach((confirmation, index) => {
     const event = storyMap.events.find(
@@ -503,7 +508,84 @@ export function validateStoryMapReview(
     confirmationKeys.add(key);
   });
 
+  review.edgeEvidenceConfirmations.forEach((confirmation, index) => {
+    const edge = storyMap.edges.find(
+      (candidate) => candidate.id === confirmation.edgeId,
+    );
+    const path = `edgeEvidenceConfirmations.${index}`;
+    if (!edge) {
+      issues.push({
+        path,
+        message: `Edge Evidence 确认引用了未知 Edge：${confirmation.edgeId}`,
+      });
+      return;
+    }
+    if (
+      !edge.evidence.some((reference) =>
+        sameSourceReference(reference, confirmation.evidence),
+      )
+    ) {
+      issues.push({ path, message: "Evidence 不属于指定 Edge" });
+      return;
+    }
+    const key = `${confirmation.edgeId}:${sourceReferenceKey(confirmation.evidence)}`;
+    if (edgeConfirmationKeys.has(key)) {
+      issues.push({ path, message: "Edge Evidence 已被重复确认" });
+    }
+    edgeConfirmationKeys.add(key);
+  });
+
+  for (const duplicate of duplicateValues(review.characterConfirmations)) {
+    issues.push({
+      path: "characterConfirmations",
+      message: `人物已被重复确认：${duplicate}`,
+    });
+  }
+  review.characterConfirmations.forEach((characterId, index) => {
+    if (!characterIds.has(characterId)) {
+      issues.push({
+        path: `characterConfirmations.${index}`,
+        message: `人物确认引用了未知 Character：${characterId}`,
+      });
+    }
+  });
+
+  for (const duplicate of duplicateValues(review.endingCandidateConfirmations)) {
+    issues.push({
+      path: "endingCandidateConfirmations",
+      message: `Ending Candidate 已被重复确认：${duplicate}`,
+    });
+  }
+  review.endingCandidateConfirmations.forEach((endingId, index) => {
+    if (!endingCandidateIds.has(endingId)) {
+      issues.push({
+        path: `endingCandidateConfirmations.${index}`,
+        message: `Ending 确认引用了未知 Candidate：${endingId}`,
+      });
+    }
+  });
+
+  if (
+    review.operation !== null &&
+    review.operation.storyMapVersion !== storyMap.version
+  ) {
+    issues.push({
+      path: "operation.storyMapVersion",
+      message: "Review operation 必须记录当前 Story Map version",
+    });
+  }
+
   return issues;
+}
+
+function sourceReferenceKey(reference: SourceReference): string {
+  return [
+    reference.sourceId,
+    reference.sectionId,
+    reference.start,
+    reference.end,
+    reference.excerptHash,
+  ].join(":");
 }
 
 export function assertValidStoryMap(storyMap: StoryMap, source: Source): void {
