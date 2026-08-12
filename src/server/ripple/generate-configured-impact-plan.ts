@@ -7,7 +7,11 @@ import { MockAIProvider } from "@/server/ai/mock-provider";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import { getProjectSource } from "@/server/repositories/project-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
-import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
+import { getImpactPlanArtifact } from "@/server/repositories/ripple-repository";
+import {
+  generateImpactPlan,
+  regenerateImpactPlanFromFeedback,
+} from "@/server/ripple/generate-impact-plan";
 
 export async function generateConfiguredImpactPlan(input: {
   projectId: string;
@@ -36,6 +40,40 @@ export async function generateConfiguredImpactPlan(input: {
       : undefined;
 
   return generateImpactPlan({
+    ...input,
+    provider: createConfiguredAIProvider(config, mockProvider),
+    modelConfig: config.modelConfig,
+  });
+}
+
+export async function regenerateConfiguredImpactPlanFromFeedback(input: {
+  projectId: string;
+  priorCandidateArtifactId: string;
+  feedback: string;
+}) {
+  const priorCandidate = getImpactPlanArtifact(input.priorCandidateArtifactId);
+  if (!priorCandidate || priorCandidate.projectId !== input.projectId) {
+    throw new Error("找不到可反馈的候选 Impact Plan Artifact");
+  }
+  const storyMapArtifact = getStoryMapArtifact(
+    priorCandidate.storyMapArtifactId,
+  );
+  if (!storyMapArtifact || storyMapArtifact.projectId !== input.projectId) {
+    throw new Error("反馈候选未绑定 confirmed Story Map Artifact");
+  }
+  const source = getProjectSource(input.projectId, storyMapArtifact.sourceId);
+  if (!source) throw new Error("找不到 Story Map 对应的 Source");
+
+  const config = readConfiguredAI();
+  const mockProvider =
+    config.providerName === "mock"
+      ? await createFixtureFeedbackProvider({
+          sourceHash: source.contentHash,
+          priorCandidate: priorCandidate.impactPlan,
+        })
+      : undefined;
+
+  return regenerateImpactPlanFromFeedback({
     ...input,
     provider: createConfiguredAIProvider(config, mockProvider),
     modelConfig: config.modelConfig,
@@ -89,4 +127,45 @@ async function createFixtureImpactPlanProvider(input: {
     uncertainties: plan.uncertainties,
   };
   return new MockAIProvider([JSON.stringify(output)]);
+}
+
+async function createFixtureFeedbackProvider(input: {
+  sourceHash: string;
+  priorCandidate: ImpactPlan;
+}): Promise<MockAIProvider> {
+  const fixture = await loadRippleFixture();
+  if (input.sourceHash !== fixture.source.contentHash) {
+    throw new Error("Mock AI 只接受公开基准故事 ripple-001");
+  }
+  const plan = fixture.impactPlans.find(
+    (candidate) =>
+      candidate.mode === input.priorCandidate.mode &&
+      candidate.divergence.eventId === input.priorCandidate.divergence.eventId &&
+      candidate.divergence.type === input.priorCandidate.divergence.type &&
+      candidate.divergence.instruction ===
+        input.priorCandidate.divergence.instruction,
+  );
+  if (!plan) throw new Error("Mock AI 找不到匹配的 ripple-001 标准分叉");
+  const output = {
+    ...toModelOutput(plan),
+    impacts: plan.impacts.map((impact, index) =>
+      index === 0
+        ? {
+            ...impact,
+            explanation: `${impact.explanation} 已根据明确反馈重新判断人物仍掌握的信息。`,
+          }
+        : impact,
+    ),
+  };
+  return new MockAIProvider([JSON.stringify(output)]);
+}
+
+function toModelOutput(plan: ImpactPlan) {
+  return {
+    impacts: plan.impacts,
+    characterChanges: plan.characterChanges,
+    threadChanges: plan.threadChanges,
+    anchorEvaluations: plan.anchorEvaluations,
+    uncertainties: plan.uncertainties,
+  };
 }

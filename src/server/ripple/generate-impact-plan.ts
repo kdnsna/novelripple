@@ -11,6 +11,7 @@ import {
   type ImpactPlan,
   type ImpactPlanModelOutput,
 } from "@/domain/schemas";
+import { z } from "zod";
 import { createCanonicalWorldline } from "@/domain/services/create-worldline";
 import { generateStructured } from "@/server/ai/generate-structured";
 import type {
@@ -20,6 +21,7 @@ import type {
 } from "@/server/ai/types";
 import {
   createImpactPlanArtifact,
+  getImpactPlanArtifact,
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
@@ -115,6 +117,97 @@ export async function generateImpactPlan(input: {
     generationRunId: generation.generation.runId,
   });
 
+  return { artifact, generation: generation.generation };
+}
+
+export async function regenerateImpactPlanFromFeedback(input: {
+  projectId: string;
+  priorCandidateArtifactId: string;
+  feedback: string;
+  provider: AIProvider;
+  modelConfig: ModelConfig;
+}) {
+  const feedback = z.string().trim().min(1).max(2_000).parse(input.feedback);
+  const priorCandidate = getImpactPlanArtifact(input.priorCandidateArtifactId);
+  if (
+    !priorCandidate ||
+    priorCandidate.projectId !== input.projectId ||
+    priorCandidate.impactPlan.status !== "candidate"
+  ) {
+    throw new Error("找不到可反馈的候选 Impact Plan Artifact");
+  }
+  const storyMapArtifact = getStoryMapArtifact(
+    priorCandidate.storyMapArtifactId,
+  );
+  if (
+    !storyMapArtifact ||
+    storyMapArtifact.projectId !== input.projectId ||
+    storyMapArtifact.sourceId !== priorCandidate.sourceId ||
+    storyMapArtifact.storyMap.status !== "confirmed"
+  ) {
+    throw new Error("反馈候选未绑定 confirmed Story Map Artifact");
+  }
+
+  const promptVersion = "impact-plan-feedback.v1";
+  const template = await readFile(
+    path.join(process.cwd(), "prompts", `${promptVersion}.md`),
+    "utf8",
+  );
+  const prompt = [
+    template,
+    "<feedback_context>",
+    JSON.stringify({
+      confirmedStoryMap: storyMapArtifact.storyMap,
+      priorCandidate: priorCandidate.impactPlan,
+      feedback,
+      frozenContract: {
+        storyMapArtifactId: storyMapArtifact.id,
+        divergence: priorCandidate.impactPlan.divergence,
+        mode: priorCandidate.impactPlan.mode,
+        anchors: priorCandidate.impactPlan.anchors,
+      },
+    }),
+    "</feedback_context>",
+  ].join("\n\n");
+  const generation = await generateStructured(
+    {
+      projectId: input.projectId,
+      worldlineId: null,
+      kind: "impact_plan",
+      promptVersion,
+      prompt,
+      schemaName: "impact_plan_feedback",
+      schema: ImpactPlanModelOutputSchema,
+      modelConfig: input.modelConfig,
+      validate: (output) =>
+        validateModelOutput({
+          output,
+          storyMapId: storyMapArtifact.storyMap.id,
+          divergence: priorCandidate.impactPlan.divergence,
+          anchors: priorCandidate.impactPlan.anchors,
+          mode: priorCandidate.impactPlan.mode,
+          storyMap: storyMapArtifact.storyMap,
+        }),
+    },
+    input.provider,
+  );
+  const impactPlan = ImpactPlanSchema.parse({
+    id: `artifact_impact_plan_${randomUUID()}`,
+    storyMapId: storyMapArtifact.storyMap.id,
+    mode: priorCandidate.impactPlan.mode,
+    divergence: priorCandidate.impactPlan.divergence,
+    anchors: priorCandidate.impactPlan.anchors,
+    ...generation.value,
+    status: "candidate",
+  });
+  const artifact = createImpactPlanArtifact({
+    projectId: input.projectId,
+    storyMapArtifact,
+    impactPlan,
+    generationRunId: generation.generation.runId,
+    priorCandidate,
+    feedback,
+  });
   return { artifact, generation: generation.generation };
 }
 

@@ -8,8 +8,12 @@ import type { ImpactPlan } from "@/domain/schemas";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
-import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
 import {
+  generateImpactPlan,
+  regenerateImpactPlanFromFeedback,
+} from "@/server/ripple/generate-impact-plan";
+import {
+  getImpactPlanArtifact,
   listImpactPlanArtifactsForStoryMap,
   listProjectWorldlines,
 } from "@/server/repositories/ripple-repository";
@@ -302,6 +306,141 @@ describe("Ripple Simulator generation", () => {
     expect(
       listProjectGenerationRuns(project.id).find(
         (run) => run.kind === "impact_plan",
+      ),
+    ).toMatchObject({ status: "failed" });
+  });
+
+  it("regenerates a complete candidate while preserving its parent and frozen contract", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const plan = fixture.impactPlans[0];
+    const first = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      divergence: fixture.divergences[0],
+      mode: "strict",
+      endingCandidateIds: ["ending_truth_public"],
+      provider: new MockAIProvider([JSON.stringify(toModelOutput(plan))]),
+      modelConfig,
+    });
+    const parentBefore = structuredClone(first.artifact);
+    const revisedOutput = structuredClone(toModelOutput(plan));
+    revisedOutput.impacts[0].explanation =
+      "人物已经看过照片，因此仍会继续调查，只改变证据保管路径。";
+    const provider = new MockAIProvider([JSON.stringify(revisedOutput)]);
+
+    const regenerated = await regenerateImpactPlanFromFeedback({
+      projectId: project.id,
+      priorCandidateArtifactId: first.artifact.id,
+      feedback: "人物看过照片，因此不应退出调查。",
+      provider,
+      modelConfig,
+    });
+
+    expect(regenerated.artifact.id).not.toBe(first.artifact.id);
+    expect(regenerated.artifact.impactPlan.impacts[0]?.explanation).toContain(
+      "仍会继续调查",
+    );
+    expect(regenerated.artifact).toMatchObject({
+      schemaVersion: 2,
+      storyMapArtifactId: artifact.id,
+      basedOnArtifactId: first.artifact.id,
+      generationRunId: regenerated.generation.runId,
+      lineage: {
+        priorCandidateArtifactId: first.artifact.id,
+        feedback: "人物看过照片，因此不应退出调查。",
+        newGenerationRunId: regenerated.generation.runId,
+        sameStoryMapArtifactId: artifact.id,
+        sameDivergence: first.artifact.impactPlan.divergence,
+        sameMode: first.artifact.impactPlan.mode,
+        sameAnchors: first.artifact.impactPlan.anchors,
+      },
+    });
+    expect(regenerated.artifact.impactPlan.divergence).toEqual(
+      first.artifact.impactPlan.divergence,
+    );
+    expect(regenerated.artifact.impactPlan.anchors).toEqual(
+      first.artifact.impactPlan.anchors,
+    );
+    expect(provider.requests[0]?.prompt).toContain(
+      "人物看过照片，因此不应退出调查。",
+    );
+    expect(provider.requests[0]?.prompt).toContain('"priorCandidate"');
+    expect(getImpactPlanArtifact(first.artifact.id)).toEqual(parentBefore);
+    expect(
+      listImpactPlanArtifactsForStoryMap(project.id, artifact.id),
+    ).toHaveLength(2);
+  });
+
+  it("supports consecutive feedback as immutable candidate revisions", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const output = toModelOutput(fixture.impactPlans[2]);
+    const first = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      divergence: fixture.divergences[2],
+      mode: "open",
+      endingCandidateIds: [],
+      provider: new MockAIProvider([JSON.stringify(output)]),
+      modelConfig,
+    });
+    const second = await regenerateImpactPlanFromFeedback({
+      projectId: project.id,
+      priorCandidateArtifactId: first.artifact.id,
+      feedback: "第一次明确反馈",
+      provider: new MockAIProvider([JSON.stringify(output)]),
+      modelConfig,
+    });
+    const third = await regenerateImpactPlanFromFeedback({
+      projectId: project.id,
+      priorCandidateArtifactId: second.artifact.id,
+      feedback: "第二次明确反馈",
+      provider: new MockAIProvider([JSON.stringify(output)]),
+      modelConfig,
+    });
+
+    expect(third.artifact.basedOnArtifactId).toBe(second.artifact.id);
+    expect(second.artifact.basedOnArtifactId).toBe(first.artifact.id);
+    expect(first.artifact.lineage).toBeNull();
+  });
+
+  it("fails invalid feedback regeneration after one repair without a child Artifact", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const plan = fixture.impactPlans[0];
+    const first = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      divergence: fixture.divergences[0],
+      mode: "strict",
+      endingCandidateIds: ["ending_truth_public"],
+      provider: new MockAIProvider([JSON.stringify(toModelOutput(plan))]),
+      modelConfig,
+    });
+    const invalid = structuredClone(toModelOutput(plan));
+    invalid.impacts[0].reasonPath = ["event_missing"];
+    const provider = new MockAIProvider([
+      JSON.stringify(invalid),
+      JSON.stringify(invalid),
+      JSON.stringify(toModelOutput(plan)),
+    ]);
+
+    await expect(
+      regenerateImpactPlanFromFeedback({
+        projectId: project.id,
+        priorCandidateArtifactId: first.artifact.id,
+        feedback: "修正错误判断",
+        provider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("Structured generation failed schema validation");
+
+    expect(provider.requests).toHaveLength(2);
+    expect(
+      listImpactPlanArtifactsForStoryMap(project.id, artifact.id),
+    ).toHaveLength(1);
+    expect(listProjectWorldlines(project.id)).toEqual([]);
+    expect(
+      listProjectGenerationRuns(project.id).find(
+        (run) => run.promptVersion === "impact-plan-feedback.v1",
       ),
     ).toMatchObject({ status: "failed" });
   });

@@ -27,6 +27,8 @@ export function createImpactPlanArtifact(input: {
   storyMapArtifact: StoryMapArtifact;
   impactPlan: ImpactPlan;
   generationRunId: string;
+  priorCandidate?: ImpactPlanArtifact;
+  feedback?: string;
 }): ImpactPlanArtifact {
   const impactPlan = ImpactPlanSchema.parse(input.impactPlan);
   if (
@@ -52,16 +54,52 @@ export function createImpactPlanArtifact(input: {
     throw new Error("Impact Plan Artifact 必须绑定成功的 Generation Run");
   }
 
+  if ((input.priorCandidate === undefined) !== (input.feedback === undefined)) {
+    throw new Error("反馈候选必须同时提供父 Candidate 与明确反馈");
+  }
+  const priorCandidate = input.priorCandidate;
+  if (
+    priorCandidate &&
+    (priorCandidate.projectId !== input.projectId ||
+      priorCandidate.sourceId !== input.storyMapArtifact.sourceId ||
+      priorCandidate.storyMapArtifactId !== input.storyMapArtifact.id ||
+      priorCandidate.impactPlan.status !== "candidate" ||
+      priorCandidate.impactPlan.storyMapId !== impactPlan.storyMapId ||
+      priorCandidate.impactPlan.mode !== impactPlan.mode ||
+      JSON.stringify(priorCandidate.impactPlan.divergence) !==
+        JSON.stringify(impactPlan.divergence) ||
+      JSON.stringify(priorCandidate.impactPlan.anchors) !==
+        JSON.stringify(impactPlan.anchors))
+  ) {
+    throw new Error("反馈重生成不得改变 Story Map、Divergence、模式或 Anchor");
+  }
+
+  const feedback = input.feedback?.trim();
+  if (input.feedback !== undefined && !feedback) {
+    throw new Error("反馈内容不能为空");
+  }
+
   const artifact = ImpactPlanArtifactSchema.parse({
     id: impactPlan.id,
     projectId: input.projectId,
     sourceId: input.storyMapArtifact.sourceId,
     storyMapArtifactId: input.storyMapArtifact.id,
     kind: "impact_plan",
-    schemaVersion: 1,
+    schemaVersion: priorCandidate ? 2 : 1,
     impactPlan,
-    basedOnArtifactId: input.storyMapArtifact.id,
+    basedOnArtifactId: priorCandidate?.id ?? input.storyMapArtifact.id,
     generationRunId: run.id,
+    lineage: priorCandidate
+      ? {
+          priorCandidateArtifactId: priorCandidate.id,
+          feedback,
+          newGenerationRunId: run.id,
+          sameStoryMapArtifactId: input.storyMapArtifact.id,
+          sameDivergence: impactPlan.divergence,
+          sameMode: impactPlan.mode,
+          sameAnchors: impactPlan.anchors,
+        }
+      : null,
     createdAt: new Date().toISOString(),
   });
 
@@ -78,6 +116,7 @@ export function createImpactPlanArtifact(input: {
       dataJson: JSON.stringify({
         storyMapArtifactId: artifact.storyMapArtifactId,
         impactPlan: artifact.impactPlan,
+        lineage: artifact.lineage,
       }),
       basedOnArtifactId: artifact.basedOnArtifactId,
       generationRunId: artifact.generationRunId,
@@ -170,6 +209,7 @@ export function acceptImpactPlan(input: {
     impactPlan: acceptedPlan,
     basedOnArtifactId: candidate.id,
     generationRunId: null,
+    lineage: null,
     createdAt,
   });
   const canonicalWorldline = createCanonicalWorldline({
@@ -206,6 +246,7 @@ export function acceptImpactPlan(input: {
         dataJson: JSON.stringify({
           storyMapArtifactId: acceptedArtifact.storyMapArtifactId,
           impactPlan: acceptedArtifact.impactPlan,
+          lineage: null,
         }),
         basedOnArtifactId: acceptedArtifact.basedOnArtifactId,
         generationRunId: null,
@@ -293,6 +334,7 @@ function parseImpactPlanArtifact(
   const packet = data as {
     storyMapArtifactId?: unknown;
     impactPlan?: unknown;
+    lineage?: unknown;
   };
 
   return ImpactPlanArtifactSchema.parse({
@@ -305,6 +347,7 @@ function parseImpactPlanArtifact(
     impactPlan: packet.impactPlan,
     basedOnArtifactId: row.basedOnArtifactId,
     generationRunId: row.generationRunId,
+    lineage: packet.lineage ?? null,
     createdAt: normalizeSqliteDate(row.createdAt),
   });
 }
