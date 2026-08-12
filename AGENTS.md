@@ -6,9 +6,9 @@
 
 ## 权威文档索引
 
-- 当前产品范围与 MVP：`docs/mvp.md`
+- 当前阶段、产品范围与已冻结基线：`docs/mvp.md`
 - 领域语义与不变量：`docs/domain.md`
-- 质量与评测规则：`docs/evals.md`
+- 质量、评测规则与封版报告索引：`docs/evals.md`
 - 已采纳的技术决策：`docs/decisions/`
 
 实现计划只引用这些事实源，不复制一套可能漂移的产品或领域定义。
