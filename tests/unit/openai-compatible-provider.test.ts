@@ -11,7 +11,7 @@ const jsonSchema = {
 };
 
 function request(
-  structuredOutputMode: "json_schema" | "prompt_json",
+  structuredOutputMode: "json_schema" | "json_object" | "prompt_json",
 ): AIProviderRequest {
   return {
     prompt: "Return one answer.",
@@ -81,6 +81,25 @@ describe("OpenAI-compatible provider", () => {
         },
       }),
     ]);
+  });
+
+  it("uses explicit json_object mode without schema fallback", async () => {
+    const { client, calls } = createFakeClient();
+    const provider = new OpenAICompatibleProvider({
+      providerName: "deepseek-compatible",
+      apiKey: "test-key",
+      client,
+    });
+
+    await provider.generate(request("json_object"));
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        model: "compatible-model",
+        response_format: { type: "json_object" },
+      }),
+    ]);
+    expect(JSON.stringify(calls)).not.toContain('"json_schema"');
   });
 
   it("uses explicit prompt_json mode without sending response_format", async () => {

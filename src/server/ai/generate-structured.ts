@@ -30,7 +30,11 @@ const InputMetadataSchema = z
     modelConfig: z
       .object({
         model: z.string().min(1),
-        structuredOutputMode: z.enum(["json_schema", "prompt_json"]),
+        structuredOutputMode: z.enum([
+          "json_schema",
+          "json_object",
+          "prompt_json",
+        ]),
       })
       .strict(),
   })

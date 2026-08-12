@@ -8,7 +8,11 @@ const RuntimeConfigSchema = z
   .object({
     providerName: z.enum(["openai-compatible", "mock"]),
     model: z.string().trim().min(1),
-    structuredOutputMode: z.enum(["json_schema", "prompt_json"]),
+    structuredOutputMode: z.enum([
+      "json_schema",
+      "json_object",
+      "prompt_json",
+    ]),
   })
   .strict();
 

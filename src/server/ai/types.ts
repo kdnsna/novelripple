@@ -1,6 +1,9 @@
 import type { z } from "zod";
 
-export type StructuredOutputMode = "json_schema" | "prompt_json";
+export type StructuredOutputMode =
+  | "json_schema"
+  | "json_object"
+  | "prompt_json";
 
 export type ModelConfig = {
   model: string;

@@ -16,14 +16,16 @@ type ChatMessage = {
 type ChatCompletionRequest = {
   model: string;
   messages: ChatMessage[];
-  response_format?: {
-    type: "json_schema";
-    json_schema: {
-      name: string;
-      strict: true;
-      schema: Record<string, unknown>;
-    };
-  };
+  response_format?:
+    | { type: "json_object" }
+    | {
+        type: "json_schema";
+        json_schema: {
+          name: string;
+          strict: true;
+          schema: Record<string, unknown>;
+        };
+      };
 };
 
 type ChatCompletionResponse = {
@@ -89,27 +91,33 @@ export class OpenAICompatibleProvider implements AIProvider {
     const modelConfig = z
       .object({
         model: z.string().min(1),
-        structuredOutputMode: z.enum(["json_schema", "prompt_json"]),
+        structuredOutputMode: z.enum([
+          "json_schema",
+          "json_object",
+          "prompt_json",
+        ]),
       })
       .strict()
       .parse(request.modelConfig);
     const messages = buildMessages(request);
+    const responseFormat =
+      modelConfig.structuredOutputMode === "json_schema"
+        ? {
+            type: "json_schema" as const,
+            json_schema: {
+              name: request.schemaName,
+              strict: true as const,
+              schema: request.jsonSchema,
+            },
+          }
+        : modelConfig.structuredOutputMode === "json_object"
+          ? { type: "json_object" as const }
+          : undefined;
     const completion = await this.#client.chat.completions.create(
       {
         model: modelConfig.model,
         messages,
-        ...(modelConfig.structuredOutputMode === "json_schema"
-          ? {
-              response_format: {
-                type: "json_schema" as const,
-                json_schema: {
-                  name: request.schemaName,
-                  strict: true as const,
-                  schema: request.jsonSchema,
-                },
-              },
-            }
-          : {}),
+        ...(responseFormat ? { response_format: responseFormat } : {}),
       },
       { timeout: requestTimeoutMs },
     );
