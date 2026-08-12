@@ -135,6 +135,9 @@ describe("Ripple Suggestions generation", () => {
     expect(provider.requests[0]?.prompt).toContain(
       "至少一条从该 Event 出发的 `causes` 或 `enables` Edge",
     );
+    expect(provider.requests[0]?.prompt).toContain(
+      '"eligibleEventIds":["event_01","event_02","event_03"',
+    );
     expect(listProjectWorldlines(project.id)).toEqual([]);
     expect(
       listRippleSuggestionsArtifactsForStoryMap(project.id, artifact.id),
@@ -143,7 +146,7 @@ describe("Ripple Suggestions generation", () => {
       listProjectGenerationRuns(project.id).find(
         (run) => run.kind === "ripple_suggestions",
       ),
-    ).toMatchObject({ status: "succeeded", promptVersion: "ripple-suggestions.v2" });
+    ).toMatchObject({ status: "succeeded", promptVersion: "ripple-suggestions.v3" });
   });
 
   it("requires a confirmed Story Map", async () => {

@@ -15,7 +15,7 @@ import type {
 import { createRippleSuggestionsArtifact } from "@/server/repositories/ripple-suggestions-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const promptVersion = "ripple-suggestions.v2";
+const promptVersion = "ripple-suggestions.v3";
 
 export async function generateRippleSuggestions(input: {
   projectId: string;
@@ -41,6 +41,15 @@ export async function generateRippleSuggestions(input: {
     template,
     "<suggestion_context>",
     JSON.stringify({
+      eligibleEventIds: storyMap.events
+        .filter((event) =>
+          storyMap.edges.some(
+            (edge) =>
+              edge.from === event.id &&
+              (edge.type === "causes" || edge.type === "enables"),
+          ),
+        )
+        .map((event) => event.id),
       events: storyMap.events.map((event) => ({
         id: event.id,
         sequence: event.sequence,
