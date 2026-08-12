@@ -6,11 +6,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   InstrumentedAIProvider,
+  M1BaselineStoryReportSchema,
   assertM1BaselineSuite,
   countBenchmarkCharacters,
   scoreM1StoryMapCandidate,
   summarizeProviderObservations,
+  summarizeStoryMapValidation,
   validateM1BenchmarkManifest,
+  type ProviderObservation,
 } from "@/evals/m1-baseline";
 import type { AIProvider } from "@/server/ai/types";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
@@ -73,6 +76,38 @@ function createManifest(overrides: Record<string, unknown> = {}) {
       },
     ],
     ...overrides,
+  };
+}
+
+function succeededCall(
+  schemaName: string,
+  attempt: "initial" | "repair",
+): ProviderObservation {
+  return {
+    schemaName,
+    attempt,
+    status: "succeeded",
+    durationMs: 1,
+    inputTokens: 2,
+    outputTokens: 3,
+    totalTokens: 5,
+    failureCode: null,
+  };
+}
+
+function failedCall(
+  schemaName: string,
+  attempt: "initial" | "repair",
+): ProviderObservation {
+  return {
+    schemaName,
+    attempt,
+    status: "failed",
+    durationMs: 1,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    failureCode: "provider_error",
   };
 }
 
@@ -235,6 +270,111 @@ describe("M1 baseline contract", () => {
       outputTokens: 7,
       totalTokens: 18,
     });
+  });
+
+  it("summarizes first-pass and repair validation without raw model data", () => {
+    const evidenceValidity = { matched: 9, total: 9, rate: 1 };
+
+    expect(
+      summarizeStoryMapValidation({
+        calls: [
+          succeededCall("story_map_extraction", "initial"),
+          succeededCall("story_map_content", "initial"),
+          succeededCall("story_map_content", "repair"),
+        ],
+        runs: [
+          { kind: "story_map_extract", status: "succeeded" },
+          { kind: "story_map_reconcile", status: "succeeded" },
+        ],
+        evidenceValidity,
+        storyMapArtifactCreated: true,
+      }),
+    ).toEqual({
+      extractor: { firstPassValidation: "passed", repair: "not_needed" },
+      reconciler: { firstPassValidation: "failed", repair: "succeeded" },
+      evidenceValidity,
+      storyMapArtifactCreated: true,
+    });
+
+    expect(
+      summarizeStoryMapValidation({
+        calls: [failedCall("story_map_extraction", "initial")],
+        runs: [{ kind: "story_map_extract", status: "failed" }],
+        evidenceValidity: null,
+        storyMapArtifactCreated: false,
+      }),
+    ).toMatchObject({
+      extractor: {
+        firstPassValidation: "not_observed",
+        repair: "not_run",
+      },
+      reconciler: { firstPassValidation: "not_run", repair: "not_run" },
+    });
+
+    expect(
+      summarizeStoryMapValidation({
+        calls: [
+          succeededCall("story_map_extraction", "initial"),
+          succeededCall("story_map_extraction", "repair"),
+        ],
+        runs: [{ kind: "story_map_extract", status: "failed" }],
+        evidenceValidity: null,
+        storyMapArtifactCreated: false,
+      }),
+    ).toMatchObject({
+      extractor: { firstPassValidation: "failed", repair: "failed" },
+      reconciler: { firstPassValidation: "not_run", repair: "not_run" },
+    });
+  });
+
+  it("accepts json_object compatibility reports and serializes no story data", () => {
+    const sensitiveValues = [
+      "private prompt sentinel",
+      "private raw output sentinel",
+      "private source sentinel",
+      "private title sentinel",
+      "private character sentinel",
+    ];
+    const story = M1BaselineStoryReportSchema.parse({
+      storyId: "m1-private-a",
+      storyClass: "A",
+      visibility: "private",
+      unseenByPromptAuthors: true,
+      characterCount: 10_000,
+      status: "failed",
+      provider: "openai-compatible",
+      model: "provider-model",
+      structuredOutputMode: "json_object",
+      promptVersions: [
+        { kind: "story_map_extract", version: "story-map.v2" },
+      ],
+      wallClockDurationMs: 10,
+      calls: [failedCall("story_map_extraction", "initial")],
+      generation: {
+        callCount: 1,
+        repairCount: 0,
+        failedCallCount: 1,
+        wallClockDurationMs: 1,
+        usageComplete: false,
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+      },
+      compatibility: summarizeStoryMapValidation({
+        calls: [failedCall("story_map_extraction", "initial")],
+        runs: [{ kind: "story_map_extract", status: "failed" }],
+        evidenceValidity: null,
+        storyMapArtifactCreated: false,
+      }),
+      reviewTarget: null,
+      storyMap: null,
+      modelFailures: [{ stage: "story_map", code: "provider_error" }],
+    });
+
+    const serialized = JSON.stringify(story);
+    for (const value of sensitiveValues) {
+      expect(serialized).not.toContain(value);
+    }
   });
 
   it("classifies timeout and context failures without retaining provider messages", async () => {

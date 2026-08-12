@@ -118,6 +118,27 @@ const ProviderObservationSummarySchema = z
   })
   .strict();
 
+const StageValidationSchema = z
+  .object({
+    firstPassValidation: z.enum([
+      "passed",
+      "failed",
+      "not_run",
+      "not_observed",
+    ]),
+    repair: z.enum(["not_needed", "succeeded", "failed", "not_run"]),
+  })
+  .strict();
+
+export const M1StoryMapCompatibilitySchema = z
+  .object({
+    extractor: StageValidationSchema,
+    reconciler: StageValidationSchema,
+    evidenceValidity: RateScoreSchema.nullable(),
+    storyMapArtifactCreated: z.boolean(),
+  })
+  .strict();
+
 export const M1StoryMapBaselineScoreSchema = z
   .object({
     coreCharacterRecall: RateScoreSchema,
@@ -161,7 +182,11 @@ export const M1BaselineStoryReportSchema = z
     status: z.enum(["generated", "failed"]),
     provider: z.string().min(1),
     model: z.string().min(1),
-    structuredOutputMode: z.enum(["json_schema", "prompt_json"]),
+    structuredOutputMode: z.enum([
+      "json_schema",
+      "json_object",
+      "prompt_json",
+    ]),
     promptVersions: z.array(
       z
         .object({ kind: z.string().min(1), version: z.string().min(1) })
@@ -170,6 +195,7 @@ export const M1BaselineStoryReportSchema = z
     wallClockDurationMs: z.number().int().nonnegative(),
     calls: z.array(ProviderObservationSchema),
     generation: ProviderObservationSummarySchema,
+    compatibility: M1StoryMapCompatibilitySchema,
     reviewTarget: z
       .object({
         projectId: z.string().min(1),
@@ -272,6 +298,15 @@ export type ProviderObservationSummary = {
   totalTokens: number | null;
 };
 
+export type M1StoryMapCompatibility = z.infer<
+  typeof M1StoryMapCompatibilitySchema
+>;
+
+type ValidationRunObservation = {
+  kind: string;
+  status: "pending" | "succeeded" | "failed";
+};
+
 export class InstrumentedAIProvider implements AIProvider {
   readonly providerName: string;
   readonly observations: ProviderObservation[] = [];
@@ -367,6 +402,62 @@ export function summarizeProviderObservations(
       ? observations.reduce((total, item) => total + (item.totalTokens ?? 0), 0)
       : null,
   };
+}
+
+export function summarizeStoryMapValidation(input: {
+  calls: ProviderObservation[];
+  runs: ValidationRunObservation[];
+  evidenceValidity: z.infer<typeof RateScoreSchema> | null;
+  storyMapArtifactCreated: boolean;
+}): M1StoryMapCompatibility {
+  return M1StoryMapCompatibilitySchema.parse({
+    extractor: summarizeValidationStage(input.calls, input.runs, {
+      schemaName: "story_map_extraction",
+      runKind: "story_map_extract",
+    }),
+    reconciler: summarizeValidationStage(input.calls, input.runs, {
+      schemaName: "story_map_content",
+      runKind: "story_map_reconcile",
+    }),
+    evidenceValidity: input.evidenceValidity,
+    storyMapArtifactCreated: input.storyMapArtifactCreated,
+  });
+}
+
+function summarizeValidationStage(
+  calls: ProviderObservation[],
+  runs: ValidationRunObservation[],
+  stage: { schemaName: string; runKind: string },
+): z.infer<typeof StageValidationSchema> {
+  const stageRun = runs.find((run) => run.kind === stage.runKind);
+  const initial = calls.find(
+    (call) =>
+      call.schemaName === stage.schemaName && call.attempt === "initial",
+  );
+  const repair = calls.find(
+    (call) =>
+      call.schemaName === stage.schemaName && call.attempt === "repair",
+  );
+
+  if (!stageRun && !initial && !repair) {
+    return { firstPassValidation: "not_run", repair: "not_run" };
+  }
+  if (!initial || initial.status === "failed") {
+    return { firstPassValidation: "not_observed", repair: "not_run" };
+  }
+  if (repair) {
+    return {
+      firstPassValidation: "failed",
+      repair:
+        repair.status === "succeeded" && stageRun?.status === "succeeded"
+          ? "succeeded"
+          : "failed",
+    };
+  }
+  if (stageRun?.status === "succeeded") {
+    return { firstPassValidation: "passed", repair: "not_needed" };
+  }
+  return { firstPassValidation: "failed", repair: "not_run" };
 }
 
 export function validateM1BenchmarkManifest(input: {

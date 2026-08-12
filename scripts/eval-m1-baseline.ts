@@ -15,6 +15,7 @@ import {
   countBenchmarkCharacters,
   scoreM1StoryMapCandidate,
   summarizeProviderObservations,
+  summarizeStoryMapValidation,
   validateM1BenchmarkManifest,
   type M1BaselineSuiteReport,
   type M1BenchmarkManifest,
@@ -239,6 +240,12 @@ async function runStoryMapBaseline(
       wallClockDurationMs: elapsedMilliseconds(startedAt),
       calls: instrumented.observations,
       generation: summarizeProviderObservations(instrumented.observations),
+      compatibility: summarizeStoryMapValidation({
+        calls: instrumented.observations,
+        runs: validationRuns(project.id),
+        evidenceValidity: score.evidenceValidity,
+        storyMapArtifactCreated: true,
+      }),
       reviewTarget: {
         projectId: project.id,
         sourceId: imported.source.id,
@@ -260,6 +267,12 @@ async function runStoryMapBaseline(
       wallClockDurationMs: elapsedMilliseconds(startedAt),
       calls: instrumented.observations,
       generation: summarizeProviderObservations(instrumented.observations),
+      compatibility: summarizeStoryMapValidation({
+        calls: instrumented.observations,
+        runs: validationRuns(project.id),
+        evidenceValidity: null,
+        storyMapArtifactCreated: false,
+      }),
       reviewTarget: null,
       storyMap: null,
       modelFailures: [
@@ -304,6 +317,13 @@ function promptVersions(projectId: string) {
       left.kind.localeCompare(right.kind) ||
       left.version.localeCompare(right.version),
   );
+}
+
+function validationRuns(projectId: string) {
+  return listProjectGenerationRuns(projectId).map((run) => ({
+    kind: run.kind,
+    status: run.status,
+  }));
 }
 
 function parseManifestArguments(): string[] {
@@ -360,13 +380,8 @@ function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
   console.log(`Status: ${value.status}`);
   for (const story of value.stories) {
     console.log(
-      `${story.storyId} [${story.storyClass}]: ${story.status}; calls=${story.generation.callCount}; repairs=${story.generation.repairCount}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}`,
+      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}`,
     );
-    if (story.storyMap) {
-      console.log(
-        `${story.storyId}: characters=${story.storyMap.identity.candidateTotal}; events=${story.storyMap.events.candidateTotal}; evidence=${formatRate(story.storyMap.evidenceValidity)}; event/ending recall=human-review-required`,
-      );
-    }
   }
   console.log(`Sanitized JSON: ${reportPath}`);
   console.log("下一步：使用 eval.db 完成人工 revision/确认与 strict/open Ripple；不得把正文复制到报告。 ");
@@ -374,4 +389,10 @@ function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
 
 function formatRate(value: { matched: number; total: number; rate: number }) {
   return `${value.matched}/${value.total} (${(value.rate * 100).toFixed(1)}%)`;
+}
+
+function formatOptionalRate(
+  value: { matched: number; total: number; rate: number } | null,
+) {
+  return value ? formatRate(value) : "not_available";
 }
