@@ -87,10 +87,6 @@ export function deriveStoryMapReview(
   const reviewedEndings = new Set(review.endingCandidateConfirmations);
   const coreCharacterIds = deriveCoreCharacterIds(artifact);
   const highLeverage = deriveHighLeverageEvents(storyMap);
-  const highLeverageIds = new Set(highLeverage.map((item) => item.eventId));
-  const endingTargetIds = new Set(
-    storyMap.endingCandidates.map((ending) => ending.targetEventId),
-  );
 
   for (const event of storyMap.events) {
     const evidenceReviewed = event.evidence.every((evidence) =>
@@ -215,11 +211,7 @@ export function deriveStoryMapReview(
     });
   }
 
-  const importantEvidence = deriveImportantEvidenceRequirements({
-    artifact,
-    endingTargetIds,
-    highLeverageIds,
-  });
+  const importantEvidence = deriveImportantEvidenceRequirements(artifact);
   for (const requirement of importantEvidence) {
     const confirmed = isEvidenceConfirmed(artifact, requirement);
     if (!confirmed) {
@@ -444,25 +436,21 @@ function deriveIdentityMergeRisks(
     .sort((left, right) => left.characterIds.join(":").localeCompare(right.characterIds.join(":")));
 }
 
-function deriveImportantEvidenceRequirements(input: {
-  artifact: StoryMapArtifact;
-  endingTargetIds: Set<string>;
-  highLeverageIds: Set<string>;
-}): ImportantEvidenceRequirement[] {
+function deriveImportantEvidenceRequirements(
+  artifact: StoryMapArtifact,
+): ImportantEvidenceRequirement[] {
   const requirements: ImportantEvidenceRequirement[] = [];
-  for (const event of input.artifact.storyMap.events) {
+  for (const event of artifact.storyMap.events) {
     const important =
       event.evidenceKind === "inference" ||
-      (event.confidence !== undefined && event.confidence < LOW_CONFIDENCE_THRESHOLD) ||
-      input.endingTargetIds.has(event.id) ||
-      input.highLeverageIds.has(event.id);
+      (event.confidence !== undefined && event.confidence < LOW_CONFIDENCE_THRESHOLD);
     if (!important) continue;
     for (const evidence of event.evidence) {
       requirements.push({ targetKind: "event", targetId: event.id, evidence });
     }
   }
-  for (const edge of input.artifact.storyMap.edges) {
-    if (edge.confirmed && edge.confidence >= LOW_CONFIDENCE_THRESHOLD) continue;
+  for (const edge of artifact.storyMap.edges) {
+    if (edge.confidence >= LOW_CONFIDENCE_THRESHOLD) continue;
     for (const evidence of edge.evidence) {
       requirements.push({ targetKind: "edge", targetId: edge.id, evidence });
     }
