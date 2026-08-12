@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02A Provider / Evidence 兼容性门已通过。[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL，[架构决策补充](docs/evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)根据核心人物漏检和全书调用成本正式得出 `SECTION-FIRST REQUIRED`。M1-03 尚未开始，等待独立明确授权。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02A Provider / Evidence 兼容性门已通过。[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL，[架构决策补充](docs/evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)根据核心人物漏检和全书调用成本正式得出 `SECTION-FIRST REQUIRED`。M1-03 已按独立授权完成一次统一 section-first 实现与真实回归，但三篇均在局部 Evidence validation 后无法形成 Artifact，因此按预设 retention gate 撤销实现；详见 [`M1-03 失败报告`](docs/evals/runs/m1-03-section-first-2026-08-13.md)。当前 main 保持在已验证的 v2 生产管线，不进入下一 Issue。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
