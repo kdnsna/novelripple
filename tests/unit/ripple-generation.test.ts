@@ -18,8 +18,8 @@ import {
   createProject,
   importProjectSource,
 } from "@/server/repositories/project-repository";
-import { confirmStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
+import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
 let temporaryDirectory: string;
 const previousEnvironment = new Map<string, string | undefined>();
@@ -72,9 +72,10 @@ async function createConfirmedContext() {
     projectId: project.id,
     sourceId: imported.source.id,
   });
-  const artifact = confirmStoryMapArtifact({
+  const artifact = completeReviewAndConfirm({
     projectId: project.id,
-    artifactId: generated.artifact.id,
+    source: imported.source,
+    artifact: generated.artifact,
   });
 
   return { fixture, project, source: imported.source, artifact };

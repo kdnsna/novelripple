@@ -21,10 +21,10 @@ import {
   importProjectSource,
 } from "@/server/repositories/project-repository";
 import {
-  confirmStoryMapArtifact,
   getStoryMapArtifact,
 } from "@/server/repositories/story-map-artifact-repository";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
+import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
 let temporaryDirectory: string;
 const previousEnvironment = new Map<string, string | undefined>();
@@ -87,9 +87,10 @@ async function createCandidate(planIndex: 0 | 1 | 2) {
     projectId: project.id,
     sourceId: imported.source.id,
   });
-  const storyMapArtifact = confirmStoryMapArtifact({
+  const storyMapArtifact = completeReviewAndConfirm({
     projectId: project.id,
-    artifactId: generated.artifact.id,
+    source: imported.source,
+    artifact: generated.artifact,
   });
   const plan = fixture.impactPlans[planIndex];
   const endingCandidateIds =

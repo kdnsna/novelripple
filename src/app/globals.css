@@ -1554,6 +1554,358 @@ input:focus-visible,
   margin-top: 20px;
 }
 
+.guided-review-toolbar {
+  grid-template-columns: minmax(270px, 1fr) 150px minmax(330px, auto);
+}
+
+.view-mode-switch .secondary-button {
+  min-width: 130px;
+}
+
+.story-map-readiness {
+  display: grid;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: #f8f5ef;
+  grid-template-columns: 190px 1fr 220px;
+  align-items: center;
+  gap: 18px;
+}
+
+.story-map-readiness h2 {
+  margin: 3px 0 0;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.story-map-readiness ul {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  list-style: none;
+}
+
+.story-map-readiness li {
+  color: #8b6a61;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.story-map-readiness li[data-ready="true"] {
+  color: var(--sage);
+}
+
+.story-map-readiness li span {
+  margin-right: 4px;
+}
+
+.story-map-readiness > p {
+  margin: 0;
+  color: var(--rust-dark);
+  font-size: 9px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.story-map-readiness > p[data-ready="true"] {
+  color: var(--sage);
+}
+
+.guided-review-grid {
+  grid-template-columns: 330px minmax(440px, 1fr) 430px;
+}
+
+.review-queue-panel,
+.review-editor-panel {
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.queue-count {
+  padding: 4px 7px;
+  border: 1px solid #d5b4aa;
+  background: #f5e8e3;
+  color: var(--rust-dark);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.queue-intro,
+.reviewed-count,
+.queue-empty,
+.editor-empty-guidance {
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.review-tool-grid {
+  display: grid;
+  margin: 14px 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.review-tool-grid button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  background: #f8f5ef;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.review-queue-list {
+  display: grid;
+  gap: 7px;
+}
+
+.review-queue-list > button {
+  display: grid;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: #fbfaf6;
+  color: var(--ink);
+  cursor: pointer;
+  gap: 4px;
+  text-align: left;
+}
+
+.review-queue-list > button.active {
+  border-color: var(--rust);
+  background: #f5e9e2;
+  box-shadow: inset 3px 0 0 var(--rust);
+}
+
+.review-queue-list button > span {
+  color: var(--rust);
+  font-size: 7px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+
+.review-queue-list button > strong {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.review-queue-list button > small {
+  color: var(--ink-soft);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.advisory-queue {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.advisory-queue summary,
+.editor-details summary {
+  margin-bottom: 10px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.character-review-card {
+  display: grid;
+  margin-top: 8px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  background: #f8f5ef;
+  gap: 5px;
+}
+
+.character-review-card > strong {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 13px;
+}
+
+.character-review-card > span,
+.character-review-card > small {
+  color: var(--ink-soft);
+  font-size: 8px;
+}
+
+.character-review-card .secondary-button {
+  margin-top: 5px;
+}
+
+.editor-details {
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.guided-review-form {
+  display: grid;
+  margin-top: 12px;
+  gap: 9px;
+}
+
+.guided-review-form > label,
+.evidence-picker > label,
+.guided-review-form legend {
+  display: grid;
+  color: var(--ink-soft);
+  font-size: 8px;
+  font-weight: 800;
+  gap: 5px;
+}
+
+.guided-review-form input,
+.guided-review-form textarea,
+.guided-review-form select,
+.evidence-picker select {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.guided-review-form fieldset {
+  display: grid;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.guided-review-form fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+}
+
+.guided-review-form fieldset input {
+  width: auto;
+}
+
+.guided-review-form .primary-button,
+.guided-review-form .danger-button {
+  min-height: 40px;
+  justify-content: center;
+}
+
+.danger-button {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #b86f64;
+  border-radius: 3px;
+  background: #9a4d43;
+  color: white;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.danger-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.destructive-editor-action {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.destructive-editor-action p {
+  color: var(--danger);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.evidence-picker {
+  display: grid;
+  margin: 14px 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  background: #f6f2eb;
+  gap: 8px;
+}
+
+.evidence-picker blockquote {
+  max-height: 125px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  background: #fffef9;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.event-reorder-list {
+  display: grid;
+  margin: 14px 0 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.event-reorder-list li {
+  display: grid;
+  min-height: 42px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  background: #f8f5ef;
+  grid-template-columns: 24px 1fr 30px 30px;
+  align-items: center;
+  gap: 5px;
+}
+
+.event-reorder-list li > span {
+  color: var(--rust);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.event-reorder-list li > strong {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.event-reorder-list button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.map-toolbar label {
+  display: grid;
+  color: var(--ink-soft);
+  font-size: 8px;
+  gap: 4px;
+}
+
+.map-toolbar select {
+  min-width: 150px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 9px;
+}
+
 .detail-heading {
   align-items: flex-start;
 }

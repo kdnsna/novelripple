@@ -5,6 +5,11 @@ import { PersistedSourceReader } from "@/components/project/persisted-source-rea
 import { SourceImportForm } from "@/components/project/source-import-form";
 import { StoryMapGenerationForm } from "@/components/project/story-map-generation-form";
 import { StoryMapReviewWorkspace } from "@/components/story-workspace/story-map-review-workspace";
+import { deriveStoryMapReview } from "@/domain/review/derive-story-map-review";
+import {
+  deriveEvidenceUnits,
+  sourceReferenceForUnit,
+} from "@/domain/source/evidence-units";
 import { listProjectContinuationArtifacts } from "@/server/repositories/continuation-repository";
 import {
   getProject,
@@ -150,9 +155,23 @@ export default async function ProjectPage({
           </div>
           <StoryMapReviewWorkspace
             artifact={selectedArtifact}
+            derivedReview={deriveStoryMapReview(selectedArtifact, selectedSource)}
+            evidenceOptions={deriveEvidenceUnits(selectedSource).map((unit) => ({
+              id: unit.id,
+              sectionId: unit.sectionId,
+              sectionTitle:
+                selectedSource.sections.find(
+                  (section) => section.id === unit.sectionId,
+                )?.title ?? unit.sectionId,
+              start: unit.start,
+              end: unit.end,
+              text: unit.text,
+              reference: sourceReferenceForUnit(unit),
+            }))}
             initialContinuationArtifacts={selectedContinuationArtifacts}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
             initialWorldlines={selectedWorldlines}
+            key={selectedArtifact.id}
             projectId={project.id}
             source={selectedSource}
           />

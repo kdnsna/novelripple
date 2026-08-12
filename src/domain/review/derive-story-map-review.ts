@@ -85,6 +85,7 @@ export function deriveStoryMapReview(
   const queue: StoryMapReviewQueueItem[] = [];
   const reviewedCharacters = new Set(review.characterConfirmations);
   const reviewedEndings = new Set(review.endingCandidateConfirmations);
+  const coreCharacterIds = deriveCoreCharacterIds(artifact);
   const highLeverage = deriveHighLeverageEvents(storyMap);
   const highLeverageIds = new Set(highLeverage.map((item) => item.eventId));
   const endingTargetIds = new Set(
@@ -236,6 +237,24 @@ export function deriveStoryMapReview(
     }
   }
 
+  for (const characterId of coreCharacterIds) {
+    if (reviewedCharacters.has(characterId)) continue;
+    const character = storyMap.characters.find(
+      (candidate) => candidate.id === characterId,
+    )!;
+    queue.push({
+      id: `validator_advisory:core_character:${characterId}`,
+      category: "validator_advisory",
+      priority: 8,
+      targetKind: "character",
+      targetId: characterId,
+      relatedTargetIds: [],
+      title: character.name,
+      reason: "该人物承担核心角色或参与多个事件，需要人工核对身份。",
+      status: "pending",
+    });
+  }
+
   for (const edge of storyMap.edges.filter((candidate) => !candidate.confirmed)) {
     queue.push({
       id: `validator_advisory:edge_unconfirmed:${edge.id}`,
@@ -283,7 +302,6 @@ export function deriveStoryMapReview(
   const illegalIssues = validationIssues.filter(
     (issue) => !danglingIssues.includes(issue),
   );
-  const coreCharacterIds = deriveCoreCharacterIds(artifact);
   const eventsHaveEvidence =
     storyMap.events.every((event) => event.evidence.length > 0) &&
     evidenceIssues.length === 0;

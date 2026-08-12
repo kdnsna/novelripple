@@ -32,11 +32,11 @@ import {
   listProjectWorldlines,
 } from "@/server/repositories/ripple-repository";
 import {
-  confirmStoryMapArtifact,
   getStoryMapArtifact,
 } from "@/server/repositories/story-map-artifact-repository";
 import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
+import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
 let temporaryDirectory: string;
 const previousEnvironment = new Map<string, string | undefined>();
@@ -145,9 +145,10 @@ async function createAcceptedWorldline() {
     projectId: project.id,
     sourceId: imported.source.id,
   });
-  const storyMapArtifact = confirmStoryMapArtifact({
+  const storyMapArtifact = completeReviewAndConfirm({
     projectId: project.id,
-    artifactId: generated.artifact.id,
+    source: imported.source,
+    artifact: generated.artifact,
   });
   const plan = fixture.impactPlans[0];
   const generatedImpact = await generateImpactPlan({
