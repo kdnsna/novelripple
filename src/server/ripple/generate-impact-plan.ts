@@ -25,7 +25,7 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const promptVersion = "impact-plan.v2";
+const promptVersion = "impact-plan.v3";
 
 export async function generateImpactPlan(input: {
   projectId: string;
@@ -148,7 +148,7 @@ export async function regenerateImpactPlanFromFeedback(input: {
     throw new Error("反馈候选未绑定 confirmed Story Map Artifact");
   }
 
-  const promptVersion = "impact-plan-feedback.v1";
+  const promptVersion = "impact-plan-feedback.v2";
   const template = await readFile(
     path.join(process.cwd(), "prompts", `${promptVersion}.md`),
     "utf8",

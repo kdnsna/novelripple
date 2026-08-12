@@ -150,6 +150,9 @@ describe("Ripple Simulator generation", () => {
       expect(provider.requests[0]?.prompt).toContain(
         "reasonPath 不得重复 Event",
       );
+      expect(provider.requests[0]?.prompt).toContain(
+        '"fromEventId":"event_divergence"',
+      );
       expect(provider.requests[0]?.prompt).not.toContain(source.normalizedText);
     }
 
@@ -168,7 +171,7 @@ describe("Ripple Simulator generation", () => {
     );
     expect(impactRuns).toHaveLength(3);
     expect(impactRuns.every((run) => run.worldlineId === null)).toBe(true);
-    expect(impactRuns.every((run) => run.promptVersion === "impact-plan.v2")).toBe(
+    expect(impactRuns.every((run) => run.promptVersion === "impact-plan.v3")).toBe(
       true,
     );
   });
@@ -366,6 +369,9 @@ describe("Ripple Simulator generation", () => {
       "人物看过照片，因此不应退出调查。",
     );
     expect(provider.requests[0]?.prompt).toContain('"priorCandidate"');
+    expect(provider.requests[0]?.prompt).toContain(
+      '"fromEventId":"event_divergence"',
+    );
     expect(getImpactPlanArtifact(first.artifact.id)).toEqual(parentBefore);
     expect(
       listImpactPlanArtifactsForStoryMap(project.id, artifact.id),
@@ -441,7 +447,7 @@ describe("Ripple Simulator generation", () => {
     expect(listProjectWorldlines(project.id)).toEqual([]);
     expect(
       listProjectGenerationRuns(project.id).find(
-        (run) => run.promptVersion === "impact-plan-feedback.v1",
+        (run) => run.promptVersion === "impact-plan-feedback.v2",
       ),
     ).toMatchObject({ status: "failed" });
   });

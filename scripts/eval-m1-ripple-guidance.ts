@@ -249,13 +249,13 @@ async function evaluateStory(
       initialArtifact = result.artifact;
       initialStage = successfulStage(
         result.generation,
-        "impact-plan.v2",
+        "impact-plan.v3",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
       );
     } catch (error) {
       initialStage = failedStage(
-        "impact-plan.v2",
+        "impact-plan.v3",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
         error,
@@ -299,13 +299,13 @@ async function evaluateStory(
       feedbackArtifact = result.artifact;
       feedbackStage = successfulStage(
         result.generation,
-        "impact-plan-feedback.v1",
+        "impact-plan-feedback.v2",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
       );
     } catch (error) {
       feedbackStage = failedStage(
-        "impact-plan-feedback.v1",
+        "impact-plan-feedback.v2",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
         error,
@@ -428,8 +428,8 @@ function failedStory(
       suggestionCount: null,
       failureCode: failureCode ?? "pipeline_failed",
     },
-    initialCandidate: notRunStage("impact-plan.v2"),
-    feedbackCandidate: notRunStage("impact-plan-feedback.v1"),
+    initialCandidate: notRunStage("impact-plan.v3"),
+    feedbackCandidate: notRunStage("impact-plan-feedback.v2"),
     invariants: {
       suggestionsExactlyThree: false,
       noWorldlineWrites: true,
