@@ -14,12 +14,18 @@ import {
   assertM1BaselineSuite,
   countBenchmarkCharacters,
   scoreM1StoryMapCandidate,
+  summarizeAnalysisSegments,
   summarizeProviderObservations,
   summarizeStoryMapValidation,
   validateM1BenchmarkManifest,
   type M1BaselineSuiteReport,
   type M1BenchmarkManifest,
 } from "../src/evals/m1-baseline";
+import type { Source } from "../src/domain/schemas";
+import {
+  deriveAnalysisSegments,
+  type AnalysisSegment,
+} from "../src/domain/source/analysis-segments";
 import {
   createConfiguredAIProvider,
   readConfiguredAI,
@@ -104,7 +110,7 @@ try {
   }
   report = M1BaselineSuiteReportSchema.parse({
     schemaVersion: 1,
-    kind: "m1_unoptimized_baseline",
+    kind: "m1_story_map_baseline",
     commitSha,
     evaluatedAt,
     status: stories.some((story) => story.status === "failed")
@@ -213,7 +219,8 @@ async function runStoryMapBaseline(
   const project = createProject({
     title: `M1 baseline ${benchmark.manifest.id}`,
   });
-  let sourceId: string | undefined;
+  let source: Source | undefined;
+  let segments: AnalysisSegment[] = [];
   const startedAt = performance.now();
   try {
     const imported = importProjectSource({
@@ -221,7 +228,8 @@ async function runStoryMapBaseline(
       fileName: benchmark.fileName,
       bytes: benchmark.sourceBytes,
     });
-    sourceId = imported.source.id;
+    source = imported.source;
+    segments = deriveAnalysisSegments(imported.source);
     const generated = await generateStoryMap({
       projectId: project.id,
       sourceId: imported.source.id,
@@ -240,6 +248,10 @@ async function runStoryMapBaseline(
       wallClockDurationMs: elapsedMilliseconds(startedAt),
       calls: instrumented.observations,
       generation: summarizeProviderObservations(instrumented.observations),
+      analysisSegments: summarizeAnalysisSegments({
+        segments,
+        runs: validationRuns(project.id),
+      }),
       compatibility: summarizeStoryMapValidation({
         calls: instrumented.observations,
         runs: validationRuns(project.id),
@@ -267,6 +279,10 @@ async function runStoryMapBaseline(
       wallClockDurationMs: elapsedMilliseconds(startedAt),
       calls: instrumented.observations,
       generation: summarizeProviderObservations(instrumented.observations),
+      analysisSegments: summarizeAnalysisSegments({
+        segments,
+        runs: validationRuns(project.id),
+      }),
       compatibility: summarizeStoryMapValidation({
         calls: instrumented.observations,
         runs: validationRuns(project.id),
@@ -283,7 +299,7 @@ async function runStoryMapBaseline(
             code: item.failureCode ?? "provider_error",
           })),
         {
-          stage: sourceId ? ("story_map" as const) : ("source_import" as const),
+          stage: source ? ("story_map" as const) : ("source_import" as const),
           code: safeFailureCode(error),
         },
       ],
@@ -307,8 +323,11 @@ function storyIdentity(manifest: M1BenchmarkManifest, config: ConfiguredAI) {
 function promptVersions(projectId: string) {
   const unique = new Map<string, { kind: string; version: string }>();
   for (const run of listProjectGenerationRuns(projectId)) {
-    unique.set(`${run.kind}:${run.promptVersion}`, {
-      kind: run.kind,
+    const kind = run.kind.startsWith("story_map_extract:")
+      ? "story_map_extract"
+      : run.kind;
+    unique.set(`${kind}:${run.promptVersion}`, {
+      kind,
       version: run.promptVersion,
     });
   }
@@ -323,7 +342,20 @@ function validationRuns(projectId: string) {
   return listProjectGenerationRuns(projectId).map((run) => ({
     kind: run.kind,
     status: run.status,
+    attemptCount: attemptCount(run.rawOutput),
   }));
+}
+
+function attemptCount(rawOutput: string | null): 0 | 1 | 2 {
+  if (!rawOutput) return 0;
+  try {
+    const parsed = JSON.parse(rawOutput) as { attempts?: unknown };
+    if (!Array.isArray(parsed.attempts)) return 0;
+    if (parsed.attempts.length >= 2) return 2;
+    return parsed.attempts.length === 1 ? 1 : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function parseManifestArguments(): string[] {
@@ -375,12 +407,12 @@ function safeFailureCode(error: unknown): string {
 }
 
 function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
-  console.log("NovelRipple M1 unoptimized baseline");
+  console.log("NovelRipple M1 Story Map baseline");
   console.log(`Commit: ${value.commitSha}`);
   console.log(`Status: ${value.status}`);
   for (const story of value.stories) {
     console.log(
-      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}`,
+      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; segments=${story.analysisSegments.count}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}`,
     );
   }
   console.log(`Sanitized JSON: ${reportPath}`);
