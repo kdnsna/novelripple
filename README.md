@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02A Provider / Evidence 兼容性门已通过。[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL，[架构决策补充](docs/evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)根据核心人物漏检和全书调用成本正式得出 `SECTION-FIRST REQUIRED`。M1-03 已获独立授权并建立统一 section-first 实现候选，最终是否保留只由同一 Story A/B/C 的真实回归决定。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02A Provider / Evidence 兼容性门已通过。[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL，[架构决策补充](docs/evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)根据核心人物漏检和全书调用成本正式得出 `SECTION-FIRST REQUIRED`。M1-03 尚未开始，等待独立明确授权。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -68,7 +68,7 @@ M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 U
 - Zod 领域 Schema；
 - Vitest 领域测试与 Playwright 浏览器测试。
 
-仓库已经建立最薄的 OpenAI-compatible 模型调用边界，并实现统一的 `Source → Analysis Segments → local extraction → global reconcile → 确定性校验 → 版本化 Artifact` 管线。短作品也走同一路径，只产生一个 Segment；较长作品只在既有 SourceSection 边界切分，局部调用最多两个并发。局部模型 Candidate 返回指定 Section 内的逐字 `exactQuote`，服务端只接受唯一精确匹配并生成临时引用；全局对账只读取局部 Candidate、Section 索引和临时引用，不再次发送整部正文。最终 Story Map 仍保存原有 SourceReference 的 Source、Section、UTF-16 偏移与 Hash。未知、重复、跨 Source、context 越权或领域引用非法时均 fail closed，不做模糊匹配或相似度 fallback。
+仓库已经建立最薄的 OpenAI-compatible 模型调用边界，并实现可调用的 Story Map Extractor → Reconciler → 确定性校验 → 版本化 Artifact 管线。服务端从不可变 Source 的 Section / 自然段确定性派生带稳定 ID 的 Evidence Unit；模型候选只返回 Unit ID，服务端再生成现有 SourceReference 的 Source、Section、UTF-16 偏移与 Hash。未知、重复、跨 Source 或领域引用非法时均 fail closed，不做模糊匹配或相似度 fallback。
 
 项目页已接入 Story Workspace：用户可以显式生成 draft Story Map，在三栏界面中对照完整 Source、自动布局的事件图与 Evidence，按角色过滤、拖动视图节点，并对标题、摘要、参与人物、明显错误的 Edge 和 Evidence 确认进行最小人工修正。任何修正和确认都会创建新的 revision Artifact，不覆盖 AI 原始版本；只有 `confirmed` Story Map 才能进入 Ripple。
 
@@ -118,7 +118,7 @@ npm run eval:m1:baseline -- \
   --manifest benchmarks/private/<story-c>/manifest.json
 ```
 
-命令强制要求冻结的 Story A / B / C、至少一篇已由 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置。它直接调用当前生产 Story Map 管线，把脱敏的 Segment 状态、repair、质量、Token、耗时指标和本地评测数据库写入 Git ignored 的 `.data/evals/m1-baseline/<run-id>/`，且不进入默认 CI。自动阶段结束后状态只能是 `awaiting_human_review`；Event、Ending Candidate、Edge、修正成本以及 strict/open Ripple 与 Continuation 必须由独立复核者通过生产 revision/Worldline 流程完成，不能由被测模型替代。
+命令强制要求冻结的 Story A / B / C、至少一篇已由 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置。它直接调用当前生产 Story Map 管线，把脱敏指标和本地评测数据库写入 Git ignored 的 `.data/evals/m1-baseline/<run-id>/`，且不进入默认 CI。自动阶段结束后状态只能是 `awaiting_human_review`；Event、Ending Candidate、Edge、修正成本以及 strict/open Ripple 与 Continuation 必须由独立复核者通过生产 revision/Worldline 流程完成，不能由被测模型替代。
 
 产品范围、领域语义和评测门槛分别见 [`docs/mvp.md`](docs/mvp.md)、[`docs/domain.md`](docs/domain.md) 与 [`docs/evals.md`](docs/evals.md)。
 
