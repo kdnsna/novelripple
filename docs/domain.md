@@ -1,6 +1,6 @@
 # 领域语义
 
-本文件定义 `v0.1.0` 确立、M1 继续沿用的唯一领域语言。TypeScript / Zod Schema 是它的可执行表示；两者不一致时必须在同一变更中修正。M1-01 只定义真实作品 Benchmark 与评测合同，不新增领域类型或修改 Story Map Schema。
+本文件定义 `v0.1.0` 确立、M1 继续沿用的唯一领域语言。TypeScript / Zod Schema 是它的可执行表示；两者不一致时必须在同一变更中修正。M1-03 增加从 Source 派生的非持久化分析结构和模型 Candidate 合同，但不改变最终 Story Map、SourceReference 或 Artifact Schema。
 
 ## 事实层级
 
@@ -31,6 +31,14 @@ M0 的可执行结构将两者合并为 Evidence Reference，使用规范化文�
 ```
 
 必须满足 `0 <= start < end <= normalizedText.length`，且切片 Hash 与 `excerptHash` 相同。Source 不存在、section 不存在、位置越界、范围为空或 Hash 不匹配时，Evidence 无效，依赖它的候选结构不得被确认。
+
+## AnalysisSegment 与 Candidate Evidence
+
+`AnalysisSegment` 是 Story Map generation 期间从不可变 SourceSection 边界确定性派生的临时分析范围，不是新的领域实体或数据库表。它记录 `sectionIds`、`coreStart/coreEnd` 和 `contextStart/contextEnd`；短作品只有一个 Segment，后续 Segment 最多把一个前置 Section 作为只读 context。Source offset 不因分段重算。
+
+局部模型输出始终是 Candidate：人物、事件和 Edge 使用临时 local ID，Evidence 只声明 `{sectionId, exactQuote}`。服务端要求摘录在当前 Segment 允许的 Section 内逐字且唯一；Event / Edge 的第一条 Evidence 还必须完整位于 core。通过后才由服务端计算 UTF-16 offset、Hash 与临时 Evidence Reference ID。未知 Section、缺失或不唯一摘录、重复声明、context 越权和悬空局部引用都拒绝整个 Segment，不进行模糊匹配或字符串相似度 fallback。
+
+Global Reconciler 不读取整部 Source 正文，只读取各 Segment 已校验 Candidate、Section 索引和临时 Evidence Reference，负责 alias merge、重复 Event 对账、全局 chronology、跨段 Edge 与 Ending Candidate。其输出仍是 Candidate；只有临时引用全部解析回当前 Source 的有效 `SourceReference[]`，并通过现有 Story Map 领域校验后，才能创建版本化 Artifact。
 
 ## StoryMap
 

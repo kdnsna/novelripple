@@ -10,7 +10,7 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`M1-02A 错误模型运行记录（Historical / INVALID）`](evals/runs/2026-08-12-m1-02a-provider-evidence-compatibility.md)：三篇均生成 Artifact，但实际 model 为 `deepseek-v4-flash`，不满足与 M1-02 历史 baseline 使用同一 `deepseek-chat` 的前提，不参与 M1-02A 结论。
 - [`M1-02A Provider & Evidence Grounding Compatibility（PASS）`](evals/runs/2026-08-12-m1-02a-provider-evidence-compatibility-deepseek-chat.md)：三篇冻结私人作品在与 M1-02 相同的 `deepseek-chat`、显式 `json_object`、Prompt v2 与 Evidence Unit grounding 下均创建 Artifact，Evidence validity 为 100%；完整 M1-02 仍等待人工复核，未授权 M1-03。
 - [`M1-02 Real Story baseline（FAIL）`](evals/runs/m1-baseline-2026-08-12-37aeb6b.md)：正式 `deepseek-chat` baseline 的人物与 Ending coverage 未过门槛；人工复核缺少稳定 ID 一对一评分，用户未能理解并完成 First Ripple，数据库中 Ripple / Worldline / Continuation 均为 0。报告保留 section-first 证据，但 M1-02 未完成，不能自动进入 M1-03。
-- [`M1-02 架构决策补充（PASS — SECTION-FIRST REQUIRED）`](evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)：用户接受现有真实失败数据作为架构门的充分证据；核心人物漏检已单独触发 section-first 条件。原产品质量 FAIL 报告保持不变，M1-03 仍等待独立授权。
+- [`M1-02 架构决策补充（PASS — SECTION-FIRST REQUIRED）`](evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)：用户接受现有真实失败数据作为架构门的充分证据；核心人物漏检已单独触发 section-first 条件。原产品质量 FAIL 报告保持不变；其中“等待 M1-03 授权”是该历史报告生成时的状态。
 
 后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
 
@@ -107,9 +107,9 @@ M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三�
 
 完成报告使用 [`M1 人工评测模板`](evals/m1-review-template.md)。每次运行创建新报告，不覆盖旧报告；报告只记录稳定 ID、计数、比例、评分和简短理由。
 
-`npm run eval:m1:baseline -- --manifest <A> --manifest <B> --manifest <C>` 是 M1 的显式、非 CI baseline 入口。它必须使用 Story A/B/C、至少一篇经 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置，直接运行当前生产 Story Map 管线。每次新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`；Gold 只在 candidate 完整生成后评分。自动报告中的 Event recall、Ending Candidate recall 和 Edge 队列在独立人工复核前保持 `null` / pending，不得把字符串近似或被测模型自评冒充人工事实。
+`npm run eval:m1:baseline -- --manifest <A> --manifest <B> --manifest <C>` 是 M1 的显式、非 CI baseline / 回归入口。它必须使用 Story A/B/C、至少一篇经 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置，直接运行当前统一 section-first Story Map 管线。每次新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`；脱敏报告记录各 Segment 的范围计数、运行状态、首次校验 / repair，以及全局 Provider、模型、模式、Token、耗时和 Artifact 状态。Gold 只在 candidate 完整生成后评分。自动报告中的 Event recall、Ending Candidate recall 和 Edge 队列在独立人工复核前保持 `null` / pending，不得把字符串近似或被测模型自评冒充人工事实。
 
-M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级路径；baseline 必须记录实际的 `json_schema`、`json_object` 或 `prompt_json` 模式。Story Map Candidate 的 Evidence Unit ID 只负责让模型选择证据，最终 Evidence 仍由服务端确定性解析为现有 `SourceReference[]` 并接受全部领域校验。
+M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级路径；baseline 必须记录实际的 `json_schema`、`json_object` 或 `prompt_json` 模式。M1-02A 的 Evidence Unit ID 是历史 v2 兼容性协议；当前 v3 局部 Candidate 返回 Section 内逐字 `exactQuote`，服务端确定性解析为临时引用，Global Reconciler 只返回 `evidenceReferenceIds`。最终 Evidence 始终是现有 `SourceReference[]` 并接受全部领域校验。
 
 ### 指标口径
 
