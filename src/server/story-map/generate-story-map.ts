@@ -8,6 +8,10 @@ import {
   StoryMapSchema,
   type StoryMapContentCandidate,
 } from "@/domain/schemas";
+import {
+  deriveEvidenceUnits,
+  type EvidenceUnit,
+} from "@/domain/source/evidence-units";
 import { resolveStoryMapContentCandidate } from "@/domain/source/resolve-story-map-evidence";
 import { generateStructured } from "@/server/ai/generate-structured";
 import type {
@@ -18,8 +22,8 @@ import type {
 import { getProjectSource } from "@/server/repositories/project-repository";
 import { createStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const extractorPromptVersion = "story-map.v1";
-const reconcilerPromptVersion = "story-map-reconcile.v1";
+const extractorPromptVersion = "story-map.v2";
+const reconcilerPromptVersion = "story-map-reconcile.v2";
 
 export async function generateStoryMap(input: {
   projectId: string;
@@ -34,7 +38,8 @@ export async function generateStoryMap(input: {
     loadPrompt(`${extractorPromptVersion}.md`),
     loadPrompt(`${reconcilerPromptVersion}.md`),
   ]);
-  const sourcePacket = buildSourcePacket(source);
+  const evidenceUnits = deriveEvidenceUnits(source);
+  const sourcePacket = buildSourcePacket(source, evidenceUnits);
   const extraction = await generateStructured(
     {
       projectId: input.projectId,
@@ -64,13 +69,15 @@ export async function generateStoryMap(input: {
       schemaName: "story_map_content",
       schema: StoryMapContentCandidateSchema,
       modelConfig: input.modelConfig,
-      validate: (candidate) => validateCandidate(candidate, source),
+      validate: (candidate) =>
+        validateCandidate(candidate, source, evidenceUnits),
     },
     input.provider,
   );
   const resolved = resolveStoryMapContentCandidate(
     reconciliation.value,
     source,
+    evidenceUnits,
   );
   if (!resolved.success) {
     throw new Error(
@@ -98,8 +105,13 @@ export async function generateStoryMap(input: {
 function validateCandidate(
   candidate: StoryMapContentCandidate,
   source: NonNullable<ReturnType<typeof getProjectSource>>,
+  evidenceUnits: EvidenceUnit[],
 ): StructuredValidationIssue[] {
-  const resolved = resolveStoryMapContentCandidate(candidate, source);
+  const resolved = resolveStoryMapContentCandidate(
+    candidate,
+    source,
+    evidenceUnits,
+  );
   if (!resolved.success) return resolved.issues;
 
   const storyMap = StoryMapSchema.parse({
@@ -115,13 +127,20 @@ function validateCandidate(
 
 function buildSourcePacket(
   source: NonNullable<ReturnType<typeof getProjectSource>>,
+  evidenceUnits: EvidenceUnit[],
 ): string {
   return [
     `<immutable_source id="${source.id}">`,
     `<sections>${JSON.stringify(source.sections)}</sections>`,
-    "<normalized_text>",
-    source.normalizedText,
-    "</normalized_text>",
+    "<evidence_units>",
+    JSON.stringify(
+      evidenceUnits.map((unit) => ({
+        id: unit.id,
+        sectionId: unit.sectionId,
+        text: unit.text,
+      })),
+    ),
+    "</evidence_units>",
     "</immutable_source>",
   ].join("\n");
 }

@@ -5,12 +5,9 @@ import { StateFactIdSchema } from "./state-fact-id";
 
 export const EvidenceKindSchema = z.enum(["fact", "inference"]);
 
-export const EvidenceClaimSchema = z
-  .object({
-    sectionId: z.string().min(1),
-    exactQuote: z.string().min(1),
-  })
-  .strict();
+const evidenceUnitIdsShape = {
+  evidenceUnitIds: z.array(z.string().min(1)).min(1),
+};
 
 export const CharacterSchema = z
   .object({
@@ -62,7 +59,7 @@ export const StoryMapCandidateEventSchema = z
   .object({
     ...eventShape,
     evidenceKind: EvidenceKindSchema,
-    evidence: z.array(EvidenceClaimSchema).min(1),
+    ...evidenceUnitIdsShape,
   })
   .strict()
   .superRefine(requireInferenceConfidence);
@@ -82,7 +79,7 @@ export const StoryEdgeSchema = z
   .strict();
 
 export const StoryMapCandidateEdgeSchema = z
-  .object({ ...storyEdgeShape, evidence: z.array(EvidenceClaimSchema).min(1) })
+  .object({ ...storyEdgeShape, ...evidenceUnitIdsShape })
   .strict();
 
 const endingCandidateShape = {
@@ -101,7 +98,7 @@ export const EndingCandidateSchema = z
 export const StoryMapCandidateEndingSchema = z
   .object({
     ...endingCandidateShape,
-    evidence: z.array(EvidenceClaimSchema).min(1),
+    ...evidenceUnitIdsShape,
   })
   .strict();
 
@@ -145,7 +142,6 @@ export const StoryMapSchema = z
 export type Character = z.infer<typeof CharacterSchema>;
 export type Event = z.infer<typeof EventSchema>;
 export type StoryEdge = z.infer<typeof StoryEdgeSchema>;
-export type EvidenceClaim = z.infer<typeof EvidenceClaimSchema>;
 export type StoryMapContent = z.infer<typeof StoryMapContentSchema>;
 export type StoryMapExtractionCandidate = z.infer<
   typeof StoryMapExtractionCandidateSchema

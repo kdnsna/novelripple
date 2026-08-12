@@ -1,4 +1,9 @@
-import type { Source } from "@/domain/schemas";
+import {
+  SourceReferenceSchema,
+  type Source,
+  type SourceReference,
+} from "@/domain/schemas";
+import { sha256 } from "@/domain/source/normalize-source";
 
 export type EvidenceUnit = {
   id: string;
@@ -44,4 +49,16 @@ export function deriveEvidenceUnits(source: Source): EvidenceUnit[] {
   }
 
   return units;
+}
+
+export function sourceReferenceForUnit(
+  unit: EvidenceUnit,
+): SourceReference {
+  return SourceReferenceSchema.parse({
+    sourceId: unit.sourceId,
+    sectionId: unit.sectionId,
+    start: unit.start,
+    end: unit.end,
+    excerptHash: sha256(unit.text),
+  });
 }

@@ -4,6 +4,10 @@ import {
   type Source,
   type SourceReference,
 } from "@/domain/schemas";
+import {
+  deriveEvidenceUnits,
+  type EvidenceUnit,
+} from "@/domain/source/evidence-units";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import {
   createConfiguredAIProvider,
@@ -39,21 +43,18 @@ async function createFixtureMockProvider(source: Source): Promise<MockAIProvider
     throw new Error("Mock AI 只接受公开基准故事 ripple-001");
   }
 
-  const toClaim = (reference: SourceReference) => ({
-    sectionId: reference.sectionId,
-    exactQuote: fixture.source.normalizedText.slice(
-      reference.start,
-      reference.end,
-    ),
-  });
-  const events = fixture.storyMap.events.map((event) => ({
-    ...event,
-    evidence: event.evidence.map(toClaim),
-  }));
-  const edges = fixture.storyMap.edges.map((edge) => ({
-    ...edge,
-    evidence: edge.evidence.map(toClaim),
-  }));
+  const evidenceUnits = deriveEvidenceUnits(source);
+  const withEvidenceUnitIds = <T extends { evidence: SourceReference[] }>(
+    value: T,
+  ) => {
+    const { evidence, ...content } = value;
+    return {
+      ...content,
+      evidenceUnitIds: uniqueUnitIdsForReferences(evidence, evidenceUnits),
+    };
+  };
+  const events = fixture.storyMap.events.map(withEvidenceUnitIds);
+  const edges = fixture.storyMap.edges.map(withEvidenceUnitIds);
   const shared = {
     title: fixture.storyMap.title,
     logline: fixture.storyMap.logline,
@@ -64,14 +65,30 @@ async function createFixtureMockProvider(source: Source): Promise<MockAIProvider
   const extraction = StoryMapExtractionCandidateSchema.parse(shared);
   const reconciled = StoryMapContentCandidateSchema.parse({
     ...shared,
-    endingCandidates: fixture.storyMap.endingCandidates.map((ending) => ({
-      ...ending,
-      evidence: ending.evidence.map(toClaim),
-    })),
+    endingCandidates: fixture.storyMap.endingCandidates.map(
+      withEvidenceUnitIds,
+    ),
   });
 
   return new MockAIProvider([
     JSON.stringify(extraction),
     JSON.stringify(reconciled),
   ]);
+}
+
+function uniqueUnitIdsForReferences(
+  references: SourceReference[],
+  units: EvidenceUnit[],
+): string[] {
+  const unitIds = references.map((reference) => {
+    const unit = units.find(
+      (candidate) =>
+        candidate.sectionId === reference.sectionId &&
+        candidate.start <= reference.start &&
+        candidate.end >= reference.end,
+    );
+    if (!unit) throw new Error("Fixture Evidence 缺少对应 Unit");
+    return unit.id;
+  });
+  return [...new Set(unitIds)];
 }

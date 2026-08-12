@@ -2,152 +2,199 @@ import { describe, expect, it } from "vitest";
 
 import {
   StoryMapContentCandidateSchema,
+  StoryMapExtractionCandidateSchema,
   type SourceReference,
+  type StoryMap,
+  type StoryMapContent,
 } from "@/domain/schemas";
 import {
-  resolveEvidenceClaim,
+  deriveEvidenceUnits,
+  sourceReferenceForUnit,
+  type EvidenceUnit,
+} from "@/domain/source/evidence-units";
+import {
+  resolveEvidenceUnitIds,
   resolveStoryMapContentCandidate,
 } from "@/domain/source/resolve-story-map-evidence";
 import { sha256 } from "@/domain/source/normalize-source";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 
-function toClaim(reference: SourceReference, sourceText: string) {
-  return {
-    sectionId: reference.sectionId,
-    exactQuote: sourceText.slice(reference.start, reference.end),
+function unitIdsForReference(
+  reference: SourceReference,
+  units: EvidenceUnit[],
+): string[] {
+  return units
+    .filter(
+      (unit) =>
+        unit.sectionId === reference.sectionId &&
+        unit.start <= reference.start &&
+        unit.end >= reference.end,
+    )
+    .map((unit) => unit.id);
+}
+
+function candidateFromStoryMap(storyMap: StoryMap, units: EvidenceUnit[]) {
+  const withUnits = <T extends { evidence: SourceReference[] }>(value: T) => {
+    const { evidence, ...rest } = value;
+    return {
+      ...rest,
+      evidenceUnitIds: evidence.flatMap((reference) =>
+        unitIdsForReference(reference, units),
+      ),
+    };
   };
+
+  return StoryMapContentCandidateSchema.parse({
+    title: storyMap.title,
+    logline: storyMap.logline,
+    characters: storyMap.characters,
+    events: storyMap.events.map(withUnits),
+    edges: storyMap.edges.map(withUnits),
+    endingCandidates: storyMap.endingCandidates.map(withUnits),
+  });
+}
+
+function collectReferences(content: StoryMapContent): SourceReference[] {
+  return [
+    ...content.events.flatMap((event) => event.evidence),
+    ...content.edges.flatMap((edge) => edge.evidence),
+    ...content.endingCandidates.flatMap((ending) => ending.evidence),
+  ];
 }
 
 describe("Story Map model candidates", () => {
-  it("accepts quote-based content and deterministically restores Golden evidence", async () => {
+  it("resolves Unit IDs into server-owned SourceReferences", async () => {
     const { source, storyMap } = await loadRippleFixture();
-    const candidate = StoryMapContentCandidateSchema.parse({
-      title: storyMap.title,
-      logline: storyMap.logline,
-      characters: storyMap.characters,
-      events: storyMap.events.map((event) => ({
-        ...event,
-        evidence: event.evidence.map((reference) =>
-          toClaim(reference, source.normalizedText),
-        ),
-      })),
-      edges: storyMap.edges.map((edge) => ({
-        ...edge,
-        evidence: edge.evidence.map((reference) =>
-          toClaim(reference, source.normalizedText),
-        ),
-      })),
-      endingCandidates: storyMap.endingCandidates.map((ending) => ({
-        ...ending,
-        evidence: ending.evidence.map((reference) =>
-          toClaim(reference, source.normalizedText),
-        ),
-      })),
+    const units = deriveEvidenceUnits(source);
+    const candidate = candidateFromStoryMap(storyMap, units);
+
+    const resolved = resolveStoryMapContentCandidate(candidate, source, units);
+
+    expect(resolved.success).toBe(true);
+    if (!resolved.success) return;
+    expect(resolved.content.events).toHaveLength(storyMap.events.length);
+    for (const reference of collectReferences(resolved.content)) {
+      expect(reference.sourceId).toBe(source.id);
+      expect(reference.excerptHash).toBe(
+        sha256(source.normalizedText.slice(reference.start, reference.end)),
+      );
+    }
+  });
+
+  it("computes UTF-16 offsets and hashes from the Unit instead of model text", () => {
+    const unit = {
+      id: "evidence_unit:source_utf16:000001",
+      sourceId: "source_utf16",
+      sectionId: "section_01",
+      start: 4,
+      end: 8,
+      text: "证据片段",
+    };
+
+    expect(sourceReferenceForUnit(unit)).toEqual({
+      sourceId: "source_utf16",
+      sectionId: "section_01",
+      start: 4,
+      end: 8,
+      excerptHash: sha256("证据片段"),
     });
+  });
 
-    const resolved = resolveStoryMapContentCandidate(candidate, source);
+  it("fails closed for unknown, duplicate and other-Source Unit IDs", async () => {
+    const { source } = await loadRippleFixture();
+    const sourceUnits = deriveEvidenceUnits(source);
+    const otherUnits = deriveEvidenceUnits({ ...source, id: "source_other" });
+    const path = "events.0.evidenceUnitIds";
 
-    expect(resolved).toEqual({
-      success: true,
-      content: {
+    expect(resolveEvidenceUnitIds(["unknown"], sourceUnits, path)).toEqual({
+      success: false,
+      issues: [
+        {
+          path: `${path}.0`,
+          message: "Evidence 引用了未知 Unit",
+        },
+      ],
+    });
+    expect(
+      resolveEvidenceUnitIds(
+        [sourceUnits[0]!.id, sourceUnits[0]!.id],
+        sourceUnits,
+        path,
+      ),
+    ).toEqual({
+      success: false,
+      issues: [
+        {
+          path: `${path}.1`,
+          message: "Evidence Unit ID 重复",
+        },
+      ],
+    });
+    expect(
+      resolveEvidenceUnitIds([otherUnits[0]!.id], sourceUnits, path),
+    ).toEqual({
+      success: false,
+      issues: [
+        {
+          path: `${path}.0`,
+          message: "Evidence 引用了未知 Unit",
+        },
+      ],
+    });
+  });
+
+  it("rejects quote claims because model candidates only accept Unit IDs", async () => {
+    const { storyMap } = await loadRippleFixture();
+    const event = storyMap.events[0]!;
+
+    expect(() =>
+      StoryMapExtractionCandidateSchema.parse({
         title: storyMap.title,
         logline: storyMap.logline,
         characters: storyMap.characters,
-        events: storyMap.events,
-        edges: storyMap.edges,
-        endingCandidates: storyMap.endingCandidates,
-      },
-    });
+        events: [
+          {
+            ...event,
+            evidence: [
+              { sectionId: "section_01", exactQuote: "模型不应重抄原文" },
+            ],
+          },
+        ],
+        edges: [],
+      }),
+    ).toThrow();
   });
 
-  it("rejects an exact quote that is absent from its declared section", async () => {
-    const { source } = await loadRippleFixture();
-
-    expect(
-      resolveEvidenceClaim(
-        { sectionId: "section_01", exactQuote: "这句话没有出现在原文中" },
-        source,
-        "events.0.evidence.0",
-      ),
-    ).toEqual({
-      success: false,
-      issue: {
-        path: "events.0.evidence.0.exactQuote",
-        message: "Evidence 摘录未在声明的 Section 中找到",
-      },
+  it("rejects scalar stateChanges and participants without coercion", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const units = deriveEvidenceUnits(source);
+    const content = candidateFromStoryMap(storyMap, units);
+    const validExtraction = StoryMapExtractionCandidateSchema.parse({
+      title: content.title,
+      logline: content.logline,
+      characters: content.characters,
+      events: content.events,
+      edges: content.edges,
     });
-  });
+    const firstEvent = validExtraction.events[0]!;
 
-  it("rejects an ambiguous quote instead of guessing one occurrence", () => {
-    const normalizedText = "重复证据，然后再次出现重复证据。";
-    const source = {
-      id: "source_repeat",
-      projectId: "project_repeat",
-      title: "重复测试",
-      originalText: normalizedText,
-      normalizedText,
-      contentHash: sha256(normalizedText),
-      sections: [
-        {
-          id: "section_01",
-          title: "正文",
-          start: 0,
-          end: normalizedText.length,
-        },
-      ],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    };
-
-    expect(
-      resolveEvidenceClaim(
-        { sectionId: "section_01", exactQuote: "重复证据" },
-        source,
-        "edges.0.evidence.0",
-      ),
-    ).toEqual({
-      success: false,
-      issue: {
-        path: "edges.0.evidence.0.exactQuote",
-        message: "Evidence 摘录在声明的 Section 中不唯一",
-      },
-    });
-  });
-
-  it("computes UTF-16 offsets and the excerpt hash on the server", () => {
-    const normalizedText = "甲🌊乙证据片段丙";
-    const source = {
-      id: "source_utf16",
-      projectId: "project_utf16",
-      title: "UTF-16 测试",
-      originalText: normalizedText,
-      normalizedText,
-      contentHash: sha256(normalizedText),
-      sections: [
-        {
-          id: "section_01",
-          title: "正文",
-          start: 0,
-          end: normalizedText.length,
-        },
-      ],
-      createdAt: "2026-08-11T00:00:00.000Z",
-    };
-
-    expect(
-      resolveEvidenceClaim(
-        { sectionId: "section_01", exactQuote: "证据片段" },
-        source,
-        "events.0.evidence.0",
-      ),
-    ).toEqual({
-      success: true,
-      reference: {
-        sourceId: "source_utf16",
-        sectionId: "section_01",
-        start: 4,
-        end: 8,
-        excerptHash: sha256("证据片段"),
-      },
-    });
+    expect(() =>
+      StoryMapExtractionCandidateSchema.parse({
+        ...validExtraction,
+        events: [
+          { ...firstEvent, stateChanges: "changed" },
+          ...validExtraction.events.slice(1),
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      StoryMapExtractionCandidateSchema.parse({
+        ...validExtraction,
+        events: [
+          { ...firstEvent, participants: firstEvent.participants[0] },
+          ...validExtraction.events.slice(1),
+        ],
+      }),
+    ).toThrow();
   });
 });

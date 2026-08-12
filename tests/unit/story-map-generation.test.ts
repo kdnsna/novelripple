@@ -16,6 +16,10 @@ import {
   StoryMapContentCandidateSchema,
   StoryMapExtractionCandidateSchema,
 } from "@/domain/schemas";
+import {
+  deriveEvidenceUnits,
+  type EvidenceUnit,
+} from "@/domain/source/evidence-units";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
@@ -48,10 +52,27 @@ afterAll(async () => {
   await rm(temporaryDirectory, { recursive: true });
 });
 
-function toClaim(reference: SourceReference, source: Source) {
+function toUnitIds(reference: SourceReference, units: EvidenceUnit[]) {
+  const unit = units.find(
+    (candidate) =>
+      candidate.sectionId === reference.sectionId &&
+      candidate.start <= reference.start &&
+      candidate.end >= reference.end,
+  );
+  if (!unit) throw new Error("Fixture Evidence 缺少对应 Unit");
+  return [unit.id];
+}
+
+function withEvidenceUnitIds<T extends { evidence: SourceReference[] }>(
+  value: T,
+  units: EvidenceUnit[],
+) {
+  const { evidence, ...rest } = value;
   return {
-    sectionId: reference.sectionId,
-    exactQuote: source.normalizedText.slice(reference.start, reference.end),
+    ...rest,
+    evidenceUnitIds: evidence.flatMap((reference) =>
+      toUnitIds(reference, units),
+    ),
   };
 }
 
@@ -62,14 +83,13 @@ function createCandidates(
   extraction: StoryMapExtractionCandidate;
   reconciled: StoryMapContentCandidate;
 } {
-  const events = storyMap.events.map((event) => ({
-    ...event,
-    evidence: event.evidence.map((reference) => toClaim(reference, source)),
-  }));
-  const edges = storyMap.edges.map((edge) => ({
-    ...edge,
-    evidence: edge.evidence.map((reference) => toClaim(reference, source)),
-  }));
+  const units = deriveEvidenceUnits(source);
+  const events = storyMap.events.map((event) =>
+    withEvidenceUnitIds(event, units),
+  );
+  const edges = storyMap.edges.map((edge) =>
+    withEvidenceUnitIds(edge, units),
+  );
   const base = {
     title: storyMap.title,
     logline: storyMap.logline,
@@ -103,10 +123,7 @@ function createCandidates(
     reconciled: StoryMapContentCandidateSchema.parse({
       ...base,
       endingCandidates: storyMap.endingCandidates.map((ending) => ({
-        ...ending,
-        evidence: ending.evidence.map((reference) =>
-          toClaim(reference, source),
-        ),
+        ...withEvidenceUnitIds(ending, units),
       })),
     }),
   };
@@ -120,7 +137,7 @@ async function createContext() {
     fileName: "ripple-001.md",
     bytes: new TextEncoder().encode(fixture.source.originalText),
   });
-  const candidates = createCandidates(fixture.storyMap, fixture.source);
+  const candidates = createCandidates(fixture.storyMap, imported.source);
 
   return { fixture, project, source: imported.source, ...candidates };
 }
@@ -198,7 +215,12 @@ describe("traceable Story Map generation pipeline", () => {
     expect(validateStoryMap(result.artifact.storyMap, source)).toEqual([]);
     expect(getProjectSource(project.id, source.id)).toEqual(sourceBefore);
     expect(provider.requests).toHaveLength(2);
-    expect(provider.requests[0]?.prompt).toContain(source.normalizedText);
+    expect(provider.requests[0]?.prompt).toContain("<evidence_units>");
+    expect(provider.requests[0]?.prompt).toContain(
+      `evidence_unit:${source.id}:`,
+    );
+    expect(provider.requests[0]?.prompt).toContain("不得返回 `exactQuote`");
+    expect(provider.requests[0]?.prompt).not.toContain("<normalized_text>");
     expect(provider.requests[1]?.prompt).toContain("endingCandidates");
 
     const runs = listProjectGenerationRuns(project.id);
@@ -210,12 +232,12 @@ describe("traceable Story Map generation pipeline", () => {
     );
     expect(extractorRun).toMatchObject({
       kind: "story_map_extract",
-      promptVersion: "story-map.v1",
+      promptVersion: "story-map.v2",
       status: "succeeded",
     });
     expect(reconcilerRun).toMatchObject({
       kind: "story_map_reconcile",
-      promptVersion: "story-map-reconcile.v1",
+      promptVersion: "story-map-reconcile.v2",
       status: "succeeded",
     });
   });
