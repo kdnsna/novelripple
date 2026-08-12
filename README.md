@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02 已建立显式 baseline runner，但由于尚无三篇冻结作品与真实 Provider 配置，[首次输入审计结论为 FAIL](docs/evals/runs/m1-baseline-2026-08-12-c9ae2e3.md)。当前业务实现仍是 M0 基线，尚无数据支持修改生产管线。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02 已建立显式 baseline runner，[首次输入审计](docs/evals/runs/m1-baseline-2026-08-12-c9ae2e3.md)作为 Historical / FAIL 保留。当前暂停 M1-02，只执行 M1-02A Provider 与 Evidence Grounding 兼容性验证；尚无数据支持 section-first 或其他生产架构扩张。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -68,7 +68,7 @@ M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 U
 - Zod 领域 Schema；
 - Vitest 领域测试与 Playwright 浏览器测试。
 
-仓库已经建立最薄的 OpenAI-compatible 模型调用边界，并实现可调用的 Story Map Extractor → Reconciler → 确定性校验 → 版本化 Artifact 管线。模型只返回逐字 Evidence 摘录，服务端在不可变 Source 中唯一匹配后计算 UTF-16 偏移与 Hash；无法定位、存在歧义或领域引用非法时均 fail closed。
+仓库已经建立最薄的 OpenAI-compatible 模型调用边界，并实现可调用的 Story Map Extractor → Reconciler → 确定性校验 → 版本化 Artifact 管线。服务端从不可变 Source 的 Section / 自然段确定性派生带稳定 ID 的 Evidence Unit；模型候选只返回 Unit ID，服务端再生成现有 SourceReference 的 Source、Section、UTF-16 偏移与 Hash。未知、重复、跨 Source 或领域引用非法时均 fail closed，不做模糊匹配或相似度 fallback。
 
 项目页已接入 Story Workspace：用户可以显式生成 draft Story Map，在三栏界面中对照完整 Source、自动布局的事件图与 Evidence，按角色过滤、拖动视图节点，并对标题、摘要、参与人物、明显错误的 Edge 和 Evidence 确认进行最小人工修正。任何修正和确认都会创建新的 revision Artifact，不覆盖 AI 原始版本；只有 `confirmed` Story Map 才能进入 Ripple。
 
@@ -80,7 +80,7 @@ Source 只在本地 SQLite 中持久化且永不被生成内容覆盖；执行 S
 
 所有结构化结果都要经过本地 Zod Schema；Schema 与领域校验共享一次明确 repair，二次失败即关闭本次生成且不写入 Artifact。单元测试和浏览器测试使用确定性 Mock，不依赖外部模型。
 
-真实端点通过服务端 `OPENAI_API_KEY`、可选 `OPENAI_BASE_URL`、`OPENAI_MODEL` 与 `OPENAI_STRUCTURED_OUTPUT_MODE` 配置；每次调用显式指定模型以及 `json_schema` 或 `prompt_json` 模式，使用 120 秒请求超时，不自动探测能力、不切换供应商。兼容端点需要实现 OpenAI Chat Completions 协议。版本化 prompt 位于 [`prompts/`](prompts/)；Story Map、Impact Plan 与两阶段 Continuation 均进入固定管线。
+真实端点通过服务端 `OPENAI_API_KEY`、可选 `OPENAI_BASE_URL`、`OPENAI_MODEL` 与 `OPENAI_STRUCTURED_OUTPUT_MODE` 配置；每次调用显式选择 `json_schema`、`json_object` 或 `prompt_json`：前者发送 strict JSON Schema，中者发送原生 JSON object response format 并由本地 Schema 作权威校验，后者不发送 `response_format`。所有模式使用 120 秒请求超时，不自动探测能力、不在失败后切换模式、不切换供应商。兼容端点需要实现 OpenAI Chat Completions 协议。版本化 prompt 位于 [`prompts/`](prompts/)；Story Map、Impact Plan 与两阶段 Continuation 均进入固定管线。
 
 ## 本地启动
 

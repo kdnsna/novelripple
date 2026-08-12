@@ -30,7 +30,10 @@ M0 只需要一个服务端文本生成接口：向用户明确配置且信任�
 
 - 只在服务端读取 API key，浏览器永远拿不到密钥；
 - 使用固定 120 秒请求超时并将 SDK 自动重试设为 `0`，避免 SDK 重试与本地一次 repair 叠加；
-- `json_schema` 模式发送 strict JSON Schema；`prompt_json` 模式只依赖同一 Schema 提示，但不会伪装为端点原生约束；
+- `json_schema` 模式发送 strict JSON Schema，供真正支持 Structured Outputs 的端点使用；
+- `json_object` 模式只发送原生 `{ "type": "json_object" }`，语法约束来自端点，候选是否符合领域合同仍以本地 Zod Schema 与 Validator 为准；
+- `prompt_json` 模式不发送 `response_format`，只依赖同一 Schema 提示，不会伪装为端点原生约束；
+- 三种模式都必须由配置显式选择，不做 capability detection、自动 fallback 或失败后换模式；
 - 响应先解析为 JSON，再通过本地 Zod Schema、Evidence、引用和领域不变量校验；一次完整 repair 仍失败即 fail closed；
 - 不把 Source 正文、完整 Prompt、API key 或 raw model output 写入 Live Eval / 人工复核报告。
 
@@ -47,3 +50,9 @@ Generation Run 的诊断状态保留在本地数据库；对外或人工报告�
 如果未来需要更换 SDK 或改用原生 `fetch`，新实现必须继续满足 `AIProvider.generate`：接收版本化 Prompt、JSON Schema 和显式模型配置，返回文本候选、可选 request ID 与 usage。结构校验、一次 repair、Generation Run、Artifact 提交和领域不变量仍由现有本地管线拥有，不随供应商迁移。
 
 只有真实 M0 兼容性、维护或安全证据证明当前 SDK 成为负担时才替换；不得借替换引入多模型路由、Gateway、Agent 或第二套结构化输出管线。
+
+## M1-02A 兼容性补充（2026-08-12）
+
+M1-02A 在不改变上述单 Provider、一次 repair 和本地权威校验边界的前提下，增加显式 `json_object` 模式，以适配支持 JSON object 但不完整支持 strict JSON Schema 的 OpenAI-compatible 端点。该模式不是降级链路：配置为 `json_object` 时不会尝试 `prompt_json`，配置为 `json_schema` 时也不会因失败自动切换。
+
+Story Map Candidate 的 Evidence 同时改为引用服务端从不可变 Source 确定性派生的 Evidence Unit ID；最终 Artifact 仍保存原有 `SourceReference[]`。这只改变模型候选与 Provider 的兼容边界，不改变 Source、Story Map、Artifact、revision、Impact Plan、Worldline 或 Continuation 领域合同，也不新增数据库表、依赖或第二套 Provider / Eval 系统。
