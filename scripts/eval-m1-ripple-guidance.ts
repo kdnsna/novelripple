@@ -196,7 +196,7 @@ async function evaluateStory(
       suggestionsStage = {
         ...successfulStage(
           result.generation,
-          "ripple-suggestions.v1",
+          "ripple-suggestions.v2",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
         ),
@@ -205,7 +205,7 @@ async function evaluateStory(
     } catch (error) {
       suggestionsStage = {
         ...failedStage(
-          "ripple-suggestions.v1",
+          "ripple-suggestions.v2",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
           error,
@@ -236,6 +236,7 @@ async function evaluateStory(
         projectId: project.id,
         storyMapArtifactId: storyMapArtifact.id,
         divergence: {
+          id: `divergence_${randomUUID()}`,
           eventId: suggestion.eventId,
           type: suggestion.divergenceType,
           instruction: suggestion.instruction,
@@ -423,7 +424,7 @@ function failedStory(
     status: "failed",
     confirmedStoryMapMatched: false,
     suggestions: {
-      ...notRunStage("ripple-suggestions.v1"),
+      ...notRunStage("ripple-suggestions.v2"),
       suggestionCount: null,
       failureCode: failureCode ?? "pipeline_failed",
     },

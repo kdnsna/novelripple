@@ -15,7 +15,7 @@ import type {
 import { createRippleSuggestionsArtifact } from "@/server/repositories/ripple-suggestions-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const promptVersion = "ripple-suggestions.v1";
+const promptVersion = "ripple-suggestions.v2";
 
 export async function generateRippleSuggestions(input: {
   projectId: string;
