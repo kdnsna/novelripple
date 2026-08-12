@@ -1,6 +1,6 @@
 # 领域语义
 
-本文件定义 M0 的唯一领域语言。TypeScript / Zod Schema 是它的可执行表示；两者不一致时必须在同一变更中修正。
+本文件定义 `v0.1.0` 确立、M1 继续沿用的唯一领域语言。TypeScript / Zod Schema 是它的可执行表示；两者不一致时必须在同一变更中修正。M1-01 只定义真实作品 Benchmark 与评测合同，不新增领域类型或修改 Story Map Schema。
 
 ## 事实层级
 

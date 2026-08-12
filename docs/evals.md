@@ -96,6 +96,97 @@ Golden 没有穷举全文所有合理事件。因此，有合法 Source Evidence
 
 这些是 M0 工程基线，不是长期产品 KPI。
 
+## M1 — Real Story 评测集
+
+M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三篇作品必须分别运行并单独报告，不允许只用聚合结果掩盖单篇失败；至少一篇必须满足真正未见作品条件。公共作品可提交脱敏报告，私人作品的正文、manifest、原始输出和本地报告只保存在被 Git 忽略的 `benchmarks/private/` 或 `.data/evals/`。
+
+完成报告使用 [`M1 人工评测模板`](evals/m1-review-template.md)。每次运行创建新报告，不覆盖旧报告；报告只记录稳定 ID、计数、比例、评分和简短理由。
+
+### 指标口径
+
+- `characterCount`：Source 规范化后按 Unicode code point 计数并排除空白；只用于作品规模分组，不进入生产 Schema。
+- 人物身份匹配：人工 gold identity 与 candidate identity 一对一匹配；别名属于同一 identity。总体人物身份 F1 在三篇作品的 gold / candidate identity 上做 micro aggregation。
+- 关键事件召回：人工 gold key event 与 candidate event 一对一匹配；匹配必须有语义一致的事件和有效 Source Evidence，不能只靠相似标题。
+- Evidence validity：沿用生产 Validator 检查 Source、section、offset、非空范围与 Hash；无有效 Evidence 的关键事件同时计入未召回与无证据事件。
+- 主要因果 Edge 认可率：人工逐条判断 gold 主要因果关系是否被 candidate 正确表达；`foreshadows` 不得冒充因果命中。
+- material revision：一次改变人物 identity、关键 Event、主要 Edge、Evidence 结论或 Ending Candidate 的语义修正。纯浏览、缩放、拖动布局和 Evidence 确认不计入。
+- review time：从首次展示 candidate Story Map 到确认 revision 的主动操作时间；等待模型、休息和环境故障不计入，并在报告中单列。
+- “愿意继续阅读”：参与者在看完场景后明确选择 `yes`；缺席或未回答不得按 `yes` 计。
+
+## M1 Story Map 门禁
+
+每篇作品均须满足：
+
+- 核心人物召回率：100%；
+- 关键事件召回率：至少 85%；
+- Evidence validity：100%；
+- 无有效 Evidence 的关键事件：0；
+- 核心人物错误 merge：0；
+- 关键 Ending Candidate 召回率：100%；
+- 主要因果 Edge 人工认可率：至少 75%。
+
+三篇聚合还须满足：
+
+- 总体人物身份 F1：至少 90%；
+- 关键事件召回率：至少 90%。
+
+错误 merge 是硬失败：将两个真实人物合成同一 identity 时，即使总体 F1 仍达标，也不得放行该作品。
+
+## M1 人工修正成本门禁
+
+对不超过 30k 字的作品：
+
+- 同规模已完成评测的 median review time：不超过 15 分钟；
+- 每篇 material revisions：不超过 6；
+- 每篇人工新增关键 Event：不超过 2。
+
+对 30k—60k 字的作品：
+
+- review time 目标：不超过 25 分钟；该值在 M1 作为必须报告的目标，不单独覆盖其他硬失败；
+- 系统必须提供基于风险的优先核对队列，至少覆盖人物 merge、缺失/无效 Evidence、关键 Event、主要 Edge 与 Ending Candidate；
+- 每篇 material revisions 与人工新增关键 Event 必须报告，不用未验证阈值掩盖实际成本。
+
+## M1 Ripple 门禁
+
+- 每篇至少评测一个 strict divergence 和一个 open divergence；
+- direct impact 人工认可率：每篇至少 85%；
+- Anchor 判断与人工 gold 一致率：100%；
+- pre-divergence mutation：0；
+- 系统推荐的 3 个分叉点中，每篇至少 2 个被人工认为“有明确因果空间且值得探索”；
+- 用户反馈后的 Impact Plan 必须生成新的 candidate revision，原 candidate 与任何已接受版本保持不变。
+
+## M1 Continuation 门禁
+
+每篇选择一个已接受 Worldline 并评测一个完整场景：
+
+- 硬事实冲突：0；
+- 恢复 deleted fact：0；
+- pre-divergence rewrite：0；
+- strict Anchor violation：0；
+- worldline consistency：至少 4/5；
+- narrative continuity：至少 3.5/5。
+
+评分采用模板中的 1—5 分量表；多人评分时取该场景的算术平均。三篇中至少 2 篇必须得到“愿意继续阅读”。任何结构化硬失败都不能被主观评分抵消。
+
+## M1 真实用户观察门禁
+
+- 至少完成 3 次独立观察；
+- 至少 2 名不同的非开发参与者；
+- 参与者无需开发者代操作即可完成从导入到阅读一个新场景的 First Ripple；
+- 报告只记录匿名参与者 ID、完成情况、主动操作时长、阻塞点分类和脱敏观察，不记录姓名、联系方式、录屏或作品正文。
+
+## `v0.2.0` M1 Eval 放行
+
+`v0.2.0` 需要同时满足：
+
+1. 三篇作品的单篇硬门禁和聚合门禁全部通过；
+2. 至少一篇真正未见作品通过，且未在运行前用于 Prompt 或阈值调试；
+3. 人工修正成本、Ripple Suggestions、feedback regeneration、Continuation 与真实用户观察均有完整脱敏记录；
+4. 每份报告记录 Story ID、commit SHA、Provider / model、全部 Prompt 版本与 PASS / FAIL；
+5. Prompt 变化有对应的新真实 Eval，不以旧报告代替；
+6. M0 硬不变量和本文件的确定性门禁全部通过；
+7. Git、CI、日志、截图、报告和公开夹具均不含私人作品正文或可恢复正文的 raw output。
+
 ## 分享前检查
 
 1. `npm run lint`；
@@ -104,7 +195,7 @@ Golden 没有穷举全文所有合理事件。因此，有合法 Source Evidence
 4. `npm run test:contract`；
 5. `npm test`；
 6. `npm run build`；
-7. `npm run test:e2e`；
+7. `CI=1 npm run test:e2e`；
 8. 配置真实模型时运行 `npm run eval:live`；
 9. 人工检查首页、故事地图、证据抽屉、Ripple Preview 和刷新恢复；
 10. 确认截图、日志、数据库和夹具不含真实用户作品或密钥。

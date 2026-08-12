@@ -24,6 +24,9 @@ test-results/
 *.db-shm
 *.db-wal
 
+# 私人真实作品 Benchmark（正文与本地标注严禁提交）
+/benchmarks/private/
+
 # 环境变量（含密钥，严禁提交）
 .env
 .env.*

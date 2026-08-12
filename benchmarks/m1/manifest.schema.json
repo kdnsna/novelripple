@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kdnsna/novelripple/blob/main/benchmarks/m1/manifest.schema.json",
+  "title": "NovelRipple M1 Real Story Benchmark Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "title",
+    "rights",
+    "visibility",
+    "sourcePath",
+    "language",
+    "characterCount",
+    "storyClass",
+    "unseenByPromptAuthors",
+    "expectedCoreCharacters",
+    "expectedSupportingCharacters",
+    "expectedKeyEvents",
+    "expectedEndingCandidates",
+    "testDivergences"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^m1-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rights": {
+      "$ref": "#/$defs/rights"
+    },
+    "visibility": {
+      "enum": ["public", "private"]
+    },
+    "sourcePath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "language": {
+      "const": "zh-CN"
+    },
+    "characterCount": {
+      "type": "integer",
+      "minimum": 10000,
+      "maximum": 60000
+    },
+    "storyClass": {
+      "enum": ["A", "B", "C"]
+    },
+    "unseenByPromptAuthors": {
+      "type": "boolean"
+    },
+    "expectedCoreCharacters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/character"
+      }
+    },
+    "expectedSupportingCharacters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/character"
+      }
+    },
+    "expectedKeyEvents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/labeledItem"
+      }
+    },
+    "expectedEndingCandidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/endingCandidate"
+      }
+    },
+    "testDivergences": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/divergence"
+      }
+    }
+  },
+  "$defs": {
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "basis", "redistributionAllowed"],
+      "properties": {
+        "category": {
+          "enum": ["original", "public-domain", "licensed-public", "private"]
+        },
+        "basis": {
+          "type": "string",
+          "minLength": 1
+        },
+        "redistributionAllowed": {
+          "type": "boolean"
+        },
+        "license": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceUrl": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "stableId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "aliases"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stableId"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "labeledItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stableId"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "endingCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "interpretive"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stableId"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interpretive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "divergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "eventId",
+        "type",
+        "mode",
+        "instruction",
+        "anchorIds",
+        "expectedAnchorStatus"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stableId"
+        },
+        "eventId": {
+          "$ref": "#/$defs/stableId"
+        },
+        "type": {
+          "enum": ["prevent", "choice", "outcome"]
+        },
+        "mode": {
+          "enum": ["strict", "open"]
+        },
+        "instruction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anchorIds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stableId"
+          },
+          "uniqueItems": true
+        },
+        "expectedAnchorStatus": {
+          "type": ["string", "null"],
+          "enum": ["preserved", "rerouted", "threatened", "incompatible", null]
+        }
+      }
+    }
+  }
+}
