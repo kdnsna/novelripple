@@ -11,13 +11,18 @@ import {
   type ContinuationSceneArtifact,
   StoryMapRevisionChangeSchema,
   type ImpactPlanArtifact,
+  type RippleSuggestionsArtifact,
   type Worldline,
 } from "@/domain/schemas";
 import {
   generateConfiguredContinuationDirections,
   generateConfiguredContinuationScene,
 } from "@/server/continuation/generate-configured-continuation";
-import { generateConfiguredImpactPlan } from "@/server/ripple/generate-configured-impact-plan";
+import {
+  generateConfiguredImpactPlan,
+  regenerateConfiguredImpactPlanFromFeedback,
+} from "@/server/ripple/generate-configured-impact-plan";
+import { generateConfiguredRippleSuggestions } from "@/server/ripple/generate-configured-ripple-suggestions";
 import {
   createProject,
   importProjectSource,
@@ -38,6 +43,9 @@ export type StoryMapActionResult =
   | { ok: false; error: string };
 export type RipplePreviewActionResult =
   | { ok: true; artifact: ImpactPlanArtifact }
+  | { ok: false; error: string };
+export type RippleSuggestionsActionResult =
+  | { ok: true; artifact: RippleSuggestionsArtifact }
   | { ok: false; error: string };
 export type AcceptImpactPlanActionResult =
   | {
@@ -224,6 +232,53 @@ export async function generateRipplePreviewAction(
   }
 }
 
+export async function generateRippleSuggestionsAction(
+  input: unknown,
+): Promise<RippleSuggestionsActionResult> {
+  const parsed = z
+    .object({
+      projectId: ProjectIdSchema,
+      storyMapArtifactId: z.string().min(1),
+    })
+    .strict()
+    .safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Ripple Suggestions 参数无效。" };
+  }
+  try {
+    const generated = await generateConfiguredRippleSuggestions(parsed.data);
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, artifact: generated.artifact };
+  } catch (error) {
+    return { ok: false, error: rippleErrorMessage(error) };
+  }
+}
+
+export async function regenerateRipplePreviewAction(
+  input: unknown,
+): Promise<RipplePreviewActionResult> {
+  const parsed = z
+    .object({
+      projectId: ProjectIdSchema,
+      priorCandidateArtifactId: z.string().min(1),
+      feedback: z.string().trim().min(1).max(2_000),
+    })
+    .strict()
+    .safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "请输入一条明确反馈。" };
+  }
+  try {
+    const generated = await regenerateConfiguredImpactPlanFromFeedback(
+      parsed.data,
+    );
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, artifact: generated.artifact };
+  } catch (error) {
+    return { ok: false, error: rippleErrorMessage(error) };
+  }
+}
+
 export async function acceptImpactPlanAction(
   input: unknown,
 ): Promise<AcceptImpactPlanActionResult> {
@@ -388,6 +443,9 @@ function rippleErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) return "Ripple 操作失败，未改变 Worldline。";
   const safeFragments = [
     "只有 confirmed Story Map",
+    "找不到可反馈的候选 Impact Plan",
+    "反馈候选未绑定 confirmed Story Map",
+    "反馈内容不能为空",
     "严格模式必须至少选择",
     "开放模式不能选择",
     "找不到 Ending Candidate",

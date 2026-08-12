@@ -43,10 +43,10 @@ async function createFixtureSuggestionsProvider(
   const output: RippleSuggestionsModelOutput = {
     suggestions: [
       {
-        eventId: "event_03",
+        eventId: "event_07",
         divergenceType: "prevent",
-        instruction: "让红色账簿没有被发现",
-        whyInteresting: "两条后续调查与证据公开路径都必须改道。",
+        instruction: "许澄没有把红色账簿交给周岚",
+        whyInteresting: "证据移交、调查与后续公开路径都必须改道。",
         affectedCharacterIds: ["char_xucheng", "char_zhoulan"],
         anchorRisk: "high",
       },

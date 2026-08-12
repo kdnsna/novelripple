@@ -13,6 +13,7 @@ import {
   regenerateImpactPlanFromFeedback,
 } from "@/server/ripple/generate-impact-plan";
 import {
+  createImpactPlanArtifact,
   getImpactPlanArtifact,
   listImpactPlanArtifactsForStoryMap,
   listProjectWorldlines,
@@ -443,5 +444,38 @@ describe("Ripple Simulator generation", () => {
         (run) => run.promptVersion === "impact-plan-feedback.v1",
       ),
     ).toMatchObject({ status: "failed" });
+  });
+
+  it("rejects a feedback Artifact that silently changes the frozen divergence", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const plan = fixture.impactPlans[0];
+    const first = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      divergence: fixture.divergences[0],
+      mode: "strict",
+      endingCandidateIds: ["ending_truth_public"],
+      provider: new MockAIProvider([JSON.stringify(toModelOutput(plan))]),
+      modelConfig,
+    });
+    const run = first.generation;
+
+    expect(() =>
+      createImpactPlanArtifact({
+        projectId: project.id,
+        storyMapArtifact: artifact,
+        impactPlan: {
+          ...first.artifact.impactPlan,
+          id: "artifact_impact_plan_tampered",
+          divergence: {
+            ...first.artifact.impactPlan.divergence,
+            instruction: "静默换成另一条分歧",
+          },
+        },
+        generationRunId: run.runId,
+        priorCandidate: first.artifact,
+        feedback: "只修正一个判断",
+      }),
+    ).toThrow("反馈重生成不得改变 Story Map、Divergence、模式或 Anchor");
   });
 });

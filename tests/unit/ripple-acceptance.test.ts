@@ -8,7 +8,10 @@ import type { ImpactPlan } from "@/domain/schemas";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
-import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
+import {
+  generateImpactPlan,
+  regenerateImpactPlanFromFeedback,
+} from "@/server/ripple/generate-impact-plan";
 import {
   acceptImpactPlan,
   getImpactPlanArtifact,
@@ -213,5 +216,43 @@ describe("ImpactPlan acceptance transaction", () => {
     expect(getStoryMapArtifact(context.storyMapArtifact.id)).toEqual(
       storyMapBefore,
     );
+  });
+
+  it("accepts only the explicitly selected feedback lineage", async () => {
+    const context = await createCandidate(0);
+    const fixture = await loadRippleFixture();
+    const output = toModelOutput(fixture.impactPlans[0]);
+    const regenerated = await regenerateImpactPlanFromFeedback({
+      projectId: context.project.id,
+      priorCandidateArtifactId: context.candidate.id,
+      feedback: "人物仍掌握照片信息，请重新判断。",
+      provider: new MockAIProvider([JSON.stringify(output)]),
+      modelConfig,
+    });
+
+    const accepted = acceptImpactPlan({
+      projectId: context.project.id,
+      candidateArtifactId: regenerated.artifact.id,
+    });
+
+    expect(accepted.acceptedArtifact.basedOnArtifactId).toBe(
+      regenerated.artifact.id,
+    );
+    expect(accepted.worldline.divergence).toEqual(
+      regenerated.artifact.impactPlan.divergence,
+    );
+    expect(listProjectWorldlines(context.project.id)).toHaveLength(2);
+    expect(getImpactPlanArtifact(context.candidate.id)?.impactPlan.status).toBe(
+      "candidate",
+    );
+    expect(
+      getImpactPlanArtifact(regenerated.artifact.id)?.impactPlan.status,
+    ).toBe("candidate");
+    expect(
+      listImpactPlanArtifactsForStoryMap(
+        context.project.id,
+        context.storyMapArtifact.id,
+      ).filter((artifact) => artifact.impactPlan.status === "accepted"),
+    ).toHaveLength(1);
   });
 });

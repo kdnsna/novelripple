@@ -2464,6 +2464,88 @@ input:focus-visible,
   overflow-y: auto;
 }
 
+.ripple-suggestions {
+  display: grid;
+  gap: 0.9rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--paper) 88%, var(--accent-soft));
+}
+
+.ripple-suggestions-heading,
+.ripple-suggestion-card > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ripple-suggestions-heading h3,
+.ripple-suggestion-card h4,
+.impact-comparison h4 {
+  margin: 0;
+}
+
+.ripple-suggestion-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ripple-suggestion-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+.ripple-suggestion-card p,
+.ripple-suggestions > p,
+.impact-comparison p {
+  margin: 0;
+}
+
+.candidate-lineage {
+  padding: 0.65rem 0.8rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink-soft);
+}
+
+.impact-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.impact-comparison > div {
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.impact-comparison ol,
+.impact-comparison ul {
+  margin: 0.55rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.impact-feedback {
+  display: grid;
+  gap: 0.65rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.impact-feedback textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+
 .worldline-count,
 .open-mode-note,
 .preview-write-boundary {

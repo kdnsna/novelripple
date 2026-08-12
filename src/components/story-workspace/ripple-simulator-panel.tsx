@@ -6,11 +6,15 @@ import { useState, useTransition, type FormEvent } from "react";
 import {
   acceptImpactPlanAction,
   generateRipplePreviewAction,
+  generateRippleSuggestionsAction,
+  regenerateRipplePreviewAction,
 } from "@/app/projects/actions";
+import { deriveImpactPlanComparison } from "@/domain/ripple/derive-impact-plan-comparison";
 import type {
   Event,
   ImpactPlan,
   ImpactPlanArtifact,
+  RippleSuggestionsArtifact,
   StoryMapArtifact,
   Worldline,
 } from "@/domain/schemas";
@@ -65,9 +69,13 @@ export function RippleSimulatorPanel({
     "prevent" | "choice" | "outcome"
   >("prevent");
   const [instruction, setInstruction] = useState("");
+  const [rippleEventId, setRippleEventId] = useState(selectedEvent.id);
   const [mode, setMode] = useState<"strict" | "open">("strict");
   const [endingCandidateIds, setEndingCandidateIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<ImpactPlanArtifact | null>(null);
+  const [suggestions, setSuggestions] =
+    useState<RippleSuggestionsArtifact | null>(null);
+  const [feedback, setFeedback] = useState("");
   const [acceptedWorldline, setAcceptedWorldline] = useState<Worldline | null>(
     null,
   );
@@ -76,7 +84,10 @@ export function RippleSimulatorPanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const storyMap = artifact.storyMap;
+  const rippleEvent =
+    storyMap.events.find((event) => event.id === rippleEventId) ?? selectedEvent;
   const plan = preview?.impactPlan ?? null;
+  const comparison = plan ? deriveImpactPlanComparison(storyMap, plan) : null;
   const characterNames = Object.fromEntries(
     storyMap.characters.map((character) => [character.id, character.name]),
   );
@@ -111,7 +122,7 @@ export function RippleSimulatorPanel({
       const result = await generateRipplePreviewAction({
         projectId,
         storyMapArtifactId: artifact.id,
-        eventId: selectedEvent.id,
+        eventId: rippleEvent.id,
         type: divergenceType,
         instruction,
         mode,
@@ -122,6 +133,51 @@ export function RippleSimulatorPanel({
         return;
       }
       setPreview(result.artifact);
+    });
+  }
+
+  function generateSuggestions(): void {
+    setError(null);
+    startTransition(async () => {
+      const result = await generateRippleSuggestionsAction({
+        projectId,
+        storyMapArtifactId: artifact.id,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setSuggestions(result.artifact);
+    });
+  }
+
+  function applySuggestion(
+    suggestion: RippleSuggestionsArtifact["suggestions"][number],
+  ): void {
+    setRippleEventId(suggestion.eventId);
+    setDivergenceType(suggestion.divergenceType);
+    setInstruction(suggestion.instruction);
+    setPreview(null);
+    setFeedback("");
+    setError(null);
+  }
+
+  function regeneratePreview(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!preview) return;
+    setError(null);
+    startTransition(async () => {
+      const result = await regenerateRipplePreviewAction({
+        projectId,
+        priorCandidateArtifactId: preview.id,
+        feedback,
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setPreview(result.artifact);
+      setFeedback("");
     });
   }
 
@@ -155,21 +211,71 @@ export function RippleSimulatorPanel({
     <aside className="workspace-panel detail-panel ripple-simulator-panel">
       <div className="panel-heading detail-heading">
         <div>
-          <span className="panel-kicker">Ripple Simulator · 事件 {selectedEvent.sequence}</span>
-          <h2>{selectedEvent.title}</h2>
+          <span className="panel-kicker">Ripple Simulator · 事件 {rippleEvent.sequence}</span>
+          <h2>{rippleEvent.title}</h2>
         </div>
         <button className="text-button" onClick={onClose} type="button">
           返回 Evidence
         </button>
       </div>
 
-      <p className="event-summary">{selectedEvent.summary}</p>
+      <p className="event-summary">{rippleEvent.summary}</p>
 
       {!plan ? (
+        <>
+          <section className="ripple-suggestions" aria-label="推荐分叉点">
+            <div className="ripple-suggestions-heading">
+              <div>
+                <span className="panel-kicker">不知道从哪里改？</span>
+                <h3>先看三个值得改变的节点</h3>
+              </div>
+              <button
+                className="secondary-button"
+                disabled={pending}
+                onClick={generateSuggestions}
+                type="button"
+              >
+                {pending ? "正在生成…" : "生成 3 个推荐分叉点"}
+              </button>
+            </div>
+            {suggestions ? (
+              <div className="ripple-suggestion-list">
+                {suggestions.suggestions.map((suggestion) => {
+                  const event = storyMap.events.find(
+                    (candidate) => candidate.id === suggestion.eventId,
+                  );
+                  return (
+                    <article
+                      className="ripple-suggestion-card"
+                      key={`${suggestions.id}:${suggestion.eventId}`}
+                    >
+                      <div>
+                        <span>{divergenceLabels[suggestion.divergenceType]}</span>
+                        <small>Anchor 风险：{suggestion.anchorRisk}</small>
+                      </div>
+                      <h4>{event?.title ?? suggestion.eventId}</h4>
+                      <strong>{suggestion.instruction}</strong>
+                      <p>{suggestion.whyInteresting}</p>
+                      <button
+                        className="secondary-button compact-button"
+                        onClick={() => applySuggestion(suggestion)}
+                        type="button"
+                      >
+                        使用这个建议
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <p>推荐只是候选；生成后不会自动推演或创建 Worldline。</p>
+            )}
+          </section>
+
         <form className="ripple-form" onSubmit={generatePreview}>
-          <label htmlFor={`divergence-type-${selectedEvent.id}`}>分歧类型</label>
+          <label htmlFor={`divergence-type-${rippleEvent.id}`}>分歧类型</label>
           <select
-            id={`divergence-type-${selectedEvent.id}`}
+            id={`divergence-type-${rippleEvent.id}`}
             onChange={(event) =>
               setDivergenceType(
                 event.target.value as "prevent" | "choice" | "outcome",
@@ -184,11 +290,11 @@ export function RippleSimulatorPanel({
             ))}
           </select>
 
-          <label htmlFor={`divergence-instruction-${selectedEvent.id}`}>
+          <label htmlFor={`divergence-instruction-${rippleEvent.id}`}>
             改变内容
           </label>
           <textarea
-            id={`divergence-instruction-${selectedEvent.id}`}
+            id={`divergence-instruction-${rippleEvent.id}`}
             maxLength={500}
             onChange={(event) => setInstruction(event.target.value)}
             placeholder="用一句话说明这个事件怎样改变"
@@ -249,6 +355,7 @@ export function RippleSimulatorPanel({
             {pending ? "正在推演…" : "生成 Ripple Preview"}
           </button>
         </form>
+        </>
       ) : (
         <div className="ripple-preview" data-testid="ripple-preview">
           <div className="preview-heading">
@@ -265,6 +372,52 @@ export function RippleSimulatorPanel({
             <h4>改变了什么</h4>
             <strong>{plan.divergence.instruction}</strong>
           </section>
+
+          {preview?.lineage ? (
+            <p className="candidate-lineage">基于上一候选重新推演</p>
+          ) : null}
+
+          {comparison ? (
+            <section className="impact-comparison" aria-label="原路径与新路径">
+              <div>
+                <h4>原路径</h4>
+                <ol>
+                  {comparison.originalPath.map((event) => (
+                    <li key={event.eventId}>{event.title}</li>
+                  ))}
+                </ol>
+              </div>
+              <div>
+                <h4>新路径</h4>
+                <ol>
+                  {comparison.newPath.map((impact) => (
+                    <li key={impact.impactId}>{impact.summary}</li>
+                  ))}
+                </ol>
+              </div>
+              {(
+                [
+                  ["removed", "删除"],
+                  ["modified", "修改"],
+                  ["added", "新增"],
+                  ["preserved", "保持不变的关键事实"],
+                ] as const
+              ).map(([changeType, label]) => (
+                <div key={changeType}>
+                  <h4>{label}</h4>
+                  {comparison.changes[changeType].length > 0 ? (
+                    <ul>
+                      {comparison.changes[changeType].map((change) => (
+                        <li key={change.impactId}>{change.summary}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>无</p>
+                  )}
+                </div>
+              ))}
+            </section>
+          ) : null}
 
           {(["direct", "downstream", "ending"] as const).map((scope) => (
             <section className="impact-group" key={scope}>
@@ -350,6 +503,28 @@ export function RippleSimulatorPanel({
               </ul>
             </details>
           ) : null}
+
+          <form className="impact-feedback" onSubmit={regeneratePreview}>
+            <label htmlFor={`impact-feedback-${preview!.id}`}>
+              指出一个关键判断问题
+            </label>
+            <textarea
+              id={`impact-feedback-${preview!.id}`}
+              maxLength={2_000}
+              onChange={(event) => setFeedback(event.target.value)}
+              placeholder="只写一条明确修正，不会进入聊天"
+              required
+              rows={3}
+              value={feedback}
+            />
+            <button
+              className="secondary-button"
+              disabled={pending || feedback.trim().length === 0}
+              type="submit"
+            >
+              {pending ? "正在重新推演…" : "根据反馈重新推演"}
+            </button>
+          </form>
 
           {incompatible ? (
             <div className="blocked-message">

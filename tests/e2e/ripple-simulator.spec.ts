@@ -130,11 +130,60 @@ test("generates and accepts an open-mode preview without ending Anchors", async 
 
   await expect(page.getByTestId("ripple-preview")).toBeVisible();
   await expect(page.getByText("开放模式 · 无结局 Anchor")).toBeVisible();
-  await expect(page.getByText("旧东闸的实际泄洪能力低于原路径")).toBeVisible();
+  await expect(
+    page.locator(".impact-item").getByText("旧东闸的实际泄洪能力低于原路径"),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "接受 ImpactPlan 并创建 Worldline" })
     .click();
   await expect(page.getByRole("status")).toContainText("新 Worldline 已创建");
+});
+
+test("uses suggestions as candidates and regenerates one immutable feedback lineage", async ({
+  page,
+}) => {
+  await createConfirmedFixtureProject(page, `Ripple guidance ${Date.now()}`);
+
+  await page.getByRole("button", { name: "生成 3 个推荐分叉点" }).click();
+  await expect(page.locator(".ripple-suggestion-card")).toHaveCount(3);
+  await expect(page.getByText("尚未创建子 Worldline")).toBeVisible();
+  await page
+    .locator(".ripple-suggestion-card")
+    .filter({ hasText: "许澄没有把红色账簿交给周岚" })
+    .getByRole("button", { name: "使用这个建议" })
+    .click();
+
+  await expect(page.getByLabel("分歧类型")).toHaveValue("prevent");
+  await expect(page.getByLabel("改变内容")).toHaveValue(
+    "许澄没有把红色账簿交给周岚",
+  );
+  await expect(page.getByTestId("ripple-preview")).toHaveCount(0);
+
+  await page.getByLabel("严格模式").check();
+  await page
+    .getByLabel("白鸥号沉船事故的系统性真相最终进入公共记录")
+    .check();
+  await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
+
+  await expect(page.getByRole("heading", { name: "原路径" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "新路径" })).toBeVisible();
+  for (const heading of ["删除", "修改", "新增", "保持不变的关键事实"]) {
+    await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+  }
+  await page
+    .getByLabel("指出一个关键判断问题")
+    .fill("人物已经看过照片，因此不应退出调查。");
+  await page.getByRole("button", { name: "根据反馈重新推演" }).click();
+
+  await expect(page.getByText("基于上一候选重新推演")).toBeVisible();
+  await expect(page.getByText(/已根据明确反馈重新判断/)).toBeVisible();
+  await expect(page.getByText("已创建 0 条子 Worldline")).toHaveCount(0);
+  await expect(page.getByText("尚未创建子 Worldline")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "接受 ImpactPlan 并创建 Worldline" })
+    .click();
+  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
 });
 
 async function completeRequiredReview(page: Page) {
