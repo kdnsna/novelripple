@@ -1,20 +1,21 @@
 # M1-02A Provider & Evidence Grounding Compatibility（PASS）
 
-> **Historical / INVALID：**完成前追溯确认本 run 使用 `deepseek-v4-flash`，不满足“与 M1-02 历史 baseline 使用同一个 `deepseek-chat` model”的前提。以下运行数据保持原样，仅作审计记录；它不参与 M1-02A 最终结论。正式验收见 [`deepseek-chat` PASS 报告](2026-08-12-m1-02a-provider-evidence-compatibility-deepseek-chat.md)。
-
 > 本报告只包含脱敏指标和 Story A / B / C 类别，不包含私人作品标题、人物名、事件摘要、原文摘录、Source 正文、完整 Prompt、raw model output、密钥或详细校验错误。
 
 ## Run identity
 
 - 运行日期：2026-08-12
-- 实现 Commit SHA：`14be7468d7131ce9b9610db395578a73612e1b5c`
-- Run ID：`20260812083345231-14be746-0db11d1e`
-- Provider / model：`openai-compatible / deepseek-v4-flash`
+- 运行 Commit SHA：`37aeb6b52192a27b66537682eba14313d6ecfd70`
+- M1-02A 实现 Commit SHA：`14be7468d7131ce9b9610db395578a73612e1b5c`
+- Run ID：`20260812085148247-37aeb6b-5e79e596`
+- Provider / model：`openai-compatible / deepseek-chat`
 - Structured Output mode：`json_object`
 - Prompt versions：`story-map.v2`、`story-map-reconcile.v2`
 - 新 runtime dependency：`none`
-- 本地脱敏指标：`/Users/kdnsna/Projects/06-项目代码/novelripple/.data/evals/m1-baseline/20260812083345231-14be746-0db11d1e/metrics.json`
+- 本地脱敏指标：`/Users/kdnsna/Projects/06-项目代码/novelripple/.data/evals/m1-baseline/20260812085148247-37aeb6b-5e79e596/metrics.json`
 - 本地人工复核数据库：同目录 `eval.db`；它被 Git 忽略，不进入公开报告或 CI
+
+本报告是 M1-02A 的正式验收记录。较早的 `20260812083345231-14be746-0db11d1e` run 使用了 `deepseek-v4-flash`，未满足“与 M1-02 历史 baseline 使用同一个 `deepseek-chat` model”的前提，因此只保留为 Historical / INVALID 数据，不参与本门结论，也没有被删除或覆盖。
 
 ## Compatibility decision
 
@@ -28,19 +29,19 @@ Open-source preflight 只使用 [DeepSeek JSON Output 官方文档](https://api-
 
 | Story | Extractor first pass | Extractor repair | Reconciler first pass | Reconciler repair | Evidence validity | Artifact | input tokens | output tokens | total tokens | wall-clock |
 | --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
-| A | failed | succeeded | passed | not needed | 95 / 95（100%） | created | 90,693 | 33,504 | 124,197 | 213,181 ms |
-| B | failed | succeeded | passed | not needed | 130 / 130（100%） | created | 188,239 | 56,810 | 245,049 | 332,922 ms |
-| C | failed | succeeded | passed | not needed | 97 / 97（100%） | created | 120,454 | 37,844 | 158,298 | 207,863 ms |
+| A | failed | succeeded | passed | not needed | 45 / 45（100%） | created | 82,312 | 12,044 | 94,356 | 58,283 ms |
+| B | passed | not needed | failed | succeeded | 52 / 52（100%） | created | 182,476 | 13,754 | 196,230 | 68,359 ms |
+| C | failed | succeeded | failed | succeeded | 43 / 43（100%） | created | 158,220 | 17,183 | 175,403 | 78,803 ms |
 
-三篇均使用同一 Provider、model、Prompt 版本与 `json_object` 模式。每篇 Extractor 的首轮 Candidate 均未通过本地 Schema，但唯一一次完整 repair 成功；Reconciler 均首轮通过。没有 Provider call failure、第二次 repair、fallback 或半成品 Artifact。
+三篇均使用与 M1-02 历史失败 run 相同的 `deepseek-chat` model，以及同一 Provider、Prompt 版本与 `json_object` 模式。所有首轮失败都由该阶段唯一一次完整 repair 修复；没有 Provider call failure、第二次 repair、fallback 或半成品 Artifact。
 
 Suite 状态为 `awaiting_human_review`。人工复核队列位于上述 `metrics.json` 的 `stories[*].storyMap.events.manualReviewQueue`、`edges.manualReviewQueue` 与 `endingCandidates.manualReviewQueue`；对应 review target 在 `stories[*].reviewTarget`。队列规模如下：
 
 | Story | Event candidates | Edge candidates | Ending candidates |
 | --- | ---: | ---: | ---: |
-| A | 15 | 12 | 1 |
-| B | 24 | 19 | 2 |
-| C | 14 | 15 | 3 |
+| A | 13 | 10 | 1 |
+| B | 14 | 12 | 2 |
+| C | 15 | 11 | 2 |
 
 这些队列尚未产生人工 Event recall、人物 identity、主要因果 Edge 或 Ending Candidate 结论，不能提前用自动 Evidence PASS 冒充完整 M1-02 baseline PASS。
 

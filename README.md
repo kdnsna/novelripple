@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02 已建立显式 baseline runner，[首次输入审计](docs/evals/runs/m1-baseline-2026-08-12-c9ae2e3.md)作为 Historical / FAIL 保留。[M1-02A 兼容性门](docs/evals/runs/2026-08-12-m1-02a-provider-evidence-compatibility.md)已通过，M1-02 可以继续人工 baseline；尚无数据支持 section-first 或其他生产架构扩张。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同已切换为 [`M1 — Real Story`](docs/mvp.md)：用三篇权利清晰的真实中短篇验证故事理解、人工修正成本与新世界线阅读价值。M1-01 已定义合同、Benchmark 和门禁；M1-02 已建立显式 baseline runner，[首次输入审计](docs/evals/runs/m1-baseline-2026-08-12-c9ae2e3.md)作为 Historical / FAIL 保留。[M1-02A 兼容性门](docs/evals/runs/2026-08-12-m1-02a-provider-evidence-compatibility-deepseek-chat.md)已通过，M1-02 可以继续人工 baseline；尚无数据支持 section-first 或其他生产架构扩张。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
