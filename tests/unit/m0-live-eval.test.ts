@@ -34,7 +34,8 @@ describe("M0 live eval scoring", () => {
     const { source, storyMap } = await loadRippleFixture();
 
     const score = scoreFixtureStoryMap({
-      source,
+      goldenSource: source,
+      candidateSource: source,
       golden: storyMap,
       candidate: storyMap,
     });
@@ -48,6 +49,81 @@ describe("M0 live eval scoring", () => {
     expect(Object.keys(score.eventIdMap)).toHaveLength(12);
   });
 
+  it("maps all Events when equal Source content is imported under a different Source ID", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const candidateSource = structuredClone(source);
+    candidateSource.id = "source_live_eval_candidate_001";
+    const candidate = structuredClone(storyMap);
+    candidate.sourceId = candidateSource.id;
+    for (const reference of [
+      ...candidate.events.flatMap((event) => event.evidence),
+      ...candidate.edges.flatMap((edge) => edge.evidence),
+      ...candidate.endingCandidates.flatMap((ending) => ending.evidence),
+    ]) {
+      reference.sourceId = candidateSource.id;
+    }
+
+    const input = {
+      goldenSource: source,
+      candidateSource,
+      golden: storyMap,
+      candidate,
+    };
+    const score = scoreFixtureStoryMap(input);
+
+    expect(source.id).toBe("source_ripple_001");
+    expect(candidate.sourceId).toBe(candidateSource.id);
+    expect(candidateSource.id).not.toBe(source.id);
+    expect(score.eventRecall).toEqual({ matched: 12, total: 12, rate: 1 });
+    expect(Object.keys(score.eventIdMap)).toHaveLength(12);
+  });
+
+  it("fails closed when Golden and Candidate Source contentHash values differ", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const candidateSource = structuredClone(source);
+    candidateSource.normalizedText = `${candidateSource.normalizedText}\n不同内容`;
+    candidateSource.contentHash = sha256(candidateSource.normalizedText);
+
+    const input = {
+      goldenSource: source,
+      candidateSource,
+      golden: storyMap,
+      candidate: storyMap,
+    };
+
+    expect(() => scoreFixtureStoryMap(input)).toThrow(/contentHash/);
+  });
+
+  it("fails closed when the Golden Story Map is invalid for its Source", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const golden = structuredClone(storyMap);
+    golden.events[0]!.evidence[0]!.excerptHash = `sha256:${"0".repeat(64)}`;
+
+    const input = {
+      goldenSource: source,
+      candidateSource: source,
+      golden,
+      candidate: storyMap,
+    };
+
+    expect(() => scoreFixtureStoryMap(input)).toThrow(/Golden Story Map/);
+  });
+
+  it("fails closed when the Candidate Story Map binds to the wrong Source ID", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const candidate = structuredClone(storyMap);
+    candidate.sourceId = "source_wrong_candidate_binding";
+
+    expect(() =>
+      scoreFixtureStoryMap({
+        goldenSource: source,
+        candidateSource: source,
+        golden: storyMap,
+        candidate,
+      }),
+    ).toThrow(/Candidate Story Map.*Source/);
+  });
+
   it("reports missing structure and invalid Evidence instead of guessing", async () => {
     const { source, storyMap } = await loadRippleFixture();
     const candidate = structuredClone(storyMap);
@@ -57,9 +133,15 @@ describe("M0 live eval scoring", () => {
     );
     candidate.events[0]!.evidence[0]!.excerptHash = `sha256:${"0".repeat(64)}`;
 
-    const score = scoreFixtureStoryMap({ source, golden: storyMap, candidate });
+    const score = scoreFixtureStoryMap({
+      goldenSource: source,
+      candidateSource: source,
+      golden: storyMap,
+      candidate,
+    });
 
-    expect(score.eventRecall.matched).toBe(11);
+    expect(score.eventRecall.matched).toBe(10);
+    expect(score.eventIdMap.event_01).toBeUndefined();
     expect(score.criticalMissingEventIds).toContain("event_03");
     expect(score.evidenceValidity.rate).toBeLessThan(1);
     expect(score.invalidOrHallucinatedEvents).toContainEqual(
@@ -83,7 +165,12 @@ describe("M0 live eval scoring", () => {
       },
     ];
 
-    const score = scoreFixtureStoryMap({ source, golden: storyMap, candidate });
+    const score = scoreFixtureStoryMap({
+      goldenSource: source,
+      candidateSource: source,
+      golden: storyMap,
+      candidate,
+    });
 
     expect(score.eventIdMap.event_01).toBeUndefined();
     expect(score.missingEventIds).toContain("event_01");
@@ -122,12 +209,14 @@ describe("M0 live eval scoring", () => {
     ];
 
     const widerScore = scoreFixtureStoryMap({
-      source,
+      goldenSource: source,
+      candidateSource: source,
       golden: storyMap,
       candidate: widerCandidate,
     });
     const narrowerScore = scoreFixtureStoryMap({
-      source,
+      goldenSource: source,
+      candidateSource: source,
       golden: storyMap,
       candidate: narrowerCandidate,
     });
@@ -141,7 +230,12 @@ describe("M0 live eval scoring", () => {
     const candidate = structuredClone(storyMap);
     candidate.events.reverse();
 
-    const score = scoreFixtureStoryMap({ source, golden: storyMap, candidate });
+    const score = scoreFixtureStoryMap({
+      goldenSource: source,
+      candidateSource: source,
+      golden: storyMap,
+      candidate,
+    });
 
     expect(score.eventIdMap).toEqual(
       Object.fromEntries(storyMap.events.map((event) => [event.id, event.id])),
@@ -241,7 +335,8 @@ describe("M0 live eval scoring", () => {
     const { source, storyMap, impactPlans, continuation } =
       await loadRippleFixture();
     const storyMapScore = scoreFixtureStoryMap({
-      source,
+      goldenSource: source,
+      candidateSource: source,
       golden: storyMap,
       candidate: storyMap,
     });
