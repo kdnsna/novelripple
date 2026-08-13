@@ -2,6 +2,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { z } from "zod";
 
 import {
   M0LiveEvalFailureReportSchema,
@@ -35,9 +36,10 @@ import { acceptImpactPlan } from "../src/server/repositories/ripple-repository";
 import { confirmStoryMapArtifact } from "../src/server/repositories/story-map-artifact-repository";
 
 const evaluatedAt = new Date().toISOString();
+const runId = `${evaluatedAt.replace(/[:.]/g, "-").replace("T", "-").slice(0, 19)}-live`;
 const reportPath = path.resolve(
   process.env.LIVE_EVAL_REPORT_PATH ??
-    path.join(".data", "evals", "m0-live-eval.json"),
+    path.join(".data", "evals", "m0-live-eval", `${runId}.json`),
 );
 const previousDatabasePath = process.env.DB_FILE_NAME;
 let temporaryDirectory: string | undefined;
@@ -378,9 +380,25 @@ function formatRate(score: {
   return `${score.matched}/${score.total} (${(score.rate * 100).toFixed(1)}%)`;
 }
 
+/**
+ * 失败信息脱敏：报告不得包含 raw model output、Provider 回显或本地路径。
+ * ZodError 的问题路径与类型描述是安全且可诊断的；其余错误只保留类型名。
+ */
 function errorMessage(error: unknown): string {
-  return (error instanceof Error ? error.message : "Unknown Live Eval failure").slice(
-    0,
-    2_000,
-  );
+  if (error instanceof z.ZodError) {
+    const issues = error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join(".") || "$"}: ${issue.message}`)
+      .join("; ");
+    return `配置或输出 Schema 无效：${issues}`;
+  }
+  if (!(error instanceof Error)) return "Unknown Live Eval failure";
+  const safeMessages = [
+    "Live Eval 必须显式配置真实 openai-compatible 供应商",
+    "OpenAI-compatible response contained no text content",
+  ];
+  if (safeMessages.some((message) => error.message.includes(message))) {
+    return error.message;
+  }
+  return `${error.name}: 生成或校验失败，详情不写入报告。`;
 }

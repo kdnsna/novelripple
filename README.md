@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销，生产生成管线仍是已验证的 v2。M1-04 已实现 Guided Review 的确定性能力，但三篇私人作品尚缺有效人工计时与语义修正记录，因此 correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销，生产生成管线仍是已验证的 v2。M1-04 已实现 Guided Review 的确定性能力，并取得 Story A 一次真人计时观察（7 分钟、16 次修正），但修正成本仍超过门槛、B/C 未测，correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。M1-05 Ripple Suggestions 与反馈重推已完成并通过人工语义复核，见 [`M1-05 回归报告`](docs/evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -107,7 +107,7 @@ npm run test:e2e
 npm run build
 ```
 
-配置真实 OpenAI-compatible 模型后，可以显式运行 `npm run eval:live` 对 `ripple-001` 做非默认 Live Eval；终端摘要与 `.data/evals/m0-live-eval.json` 会报告模型、Prompt 版本、事件/人物召回、Evidence、一级影响、Anchor 和 Continuation 合同结果。该命令不会被默认测试或 `npm run check` 调用。
+配置真实 OpenAI-compatible 模型后，可以显式运行 `npm run eval:live` 对 `ripple-001` 做非默认 Live Eval；终端摘要与 `.data/evals/m0-live-eval/<run-id>.json` 会报告模型、Prompt 版本、事件/人物召回、Evidence、一级影响、Anchor 和 Continuation 合同结果。每次运行写入新文件，不覆盖历史报告；失败详情经过脱敏，不含 raw model output 或 Provider 回显。该命令不会被默认测试或 `npm run check` 调用。
 
 M1 使用独立显式命令采集未经优化的真实作品 Story Map baseline：
 

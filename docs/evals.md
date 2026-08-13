@@ -12,10 +12,10 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`M1-02 Real Story baseline（FAIL）`](evals/runs/m1-baseline-2026-08-12-37aeb6b.md)：正式 `deepseek-chat` baseline 的人物与 Ending coverage 未过门槛；人工复核缺少稳定 ID 一对一评分，用户未能理解并完成 First Ripple，数据库中 Ripple / Worldline / Continuation 均为 0。报告保留 section-first 证据，但 M1-02 未完成，不能自动进入 M1-03。
 - [`M1-02 架构决策补充（PASS — SECTION-FIRST REQUIRED）`](evals/runs/m1-02-architecture-decision-2026-08-12-1882e37.md)：用户接受现有真实失败数据作为架构门的充分证据；核心人物漏检已单独触发 section-first 条件。原产品质量 FAIL 报告保持不变，M1-03 仍等待独立授权。
 - [`M1-03 Section-first 真实作品回归（FAIL）`](evals/runs/m1-03-section-first-2026-08-13.md)：统一 section-first 候选在同一 `deepseek-chat / json_object` 上三篇均因局部逐字 Evidence claim 在一次 repair 后仍无效而未创建 Artifact；按预设 retention gate 已撤销生产实现，不能把不完整运行的 token 降低解释为质量改善。
-- [`M1-04 Guided Review 真实候选回归（FAIL）`](evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)：三篇冻结私人候选均可派生优先队列与 readiness，公开 fixture 的全部不可变修正和 E2E 通过；但没有取得合格的人工作品核对计时、material revision 与 Event addition 数据，不能放行 correction-cost gate。
-- [`M1-05 Ripple Suggestions 与反馈重推真实回归（FAIL）`](evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)：同一 `deepseek-chat / json_object` 下三篇均生成 3 个推荐、初始 candidate 与反馈后不可变 revision，自动硬不变量全部通过；但推荐是否值得改变、反馈是否真实解决问题仍缺少人工判断，不能放行语义质量门。
+- [`M1-04 Guided Review 真实候选回归（FAIL）`](evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)：三篇冻结私人候选均可派生优先队列与 readiness，公开 fixture 的全部不可变修正和 E2E 通过；Story A 已取得一次真人计时观察（7 分钟、16 次修正），但 B/C 未测且 A 的 material revisions 超过门槛，不能放行 correction-cost gate。
+- [`M1-05 Ripple Suggestions 与反馈重推真实回归（PASS）`](evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)：同一 `deepseek-chat / json_object` 下三篇均生成 3 个推荐、初始 candidate 与反馈后不可变 revision，自动硬不变量全部通过；2026-08-13 人工语义复核完成（每篇推荐价值 ≥2/3、反馈问题解决），M1-05 放行。
 
-后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
+后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。同一运行在人工复核后结论翻转（如 FAIL → PASS）时，应在原报告追加"人工语义复核记录"章节并同步更新本索引条目，两处结论必须一致；跨运行的新结果始终写入新文件。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
 
 ## 硬不变量
 
@@ -73,7 +73,7 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 
 ### 4. Live Eval 与人工复核
 
-`npm run eval:live` 使用真实 OpenAI-compatible 配置和 `ripple-001`，不属于 `npm test`、`npm run check` 或默认 CI。它在临时 SQLite 数据库中实际运行 Story Map、三个 Ripple 案例和一条 Continuation，向终端打印摘要，并将不含 Source 正文、Prompt、密钥或原始模型响应的 JSON 报告写入 `.data/evals/m0-live-eval.json`。供应商、模型与 Structured Output 模式来自 `.env.local` / `.env` 中的现有服务端配置；Mock 配置会被明确拒绝。
+`npm run eval:live` 使用真实 OpenAI-compatible 配置和 `ripple-001`，不属于 `npm test`、`npm run check` 或默认 CI。它在临时 SQLite 数据库中实际运行 Story Map、三个 Ripple 案例和一条 Continuation，向终端打印摘要，并将不含 Source 正文、Prompt、密钥或原始模型响应的 JSON 报告写入 `.data/evals/m0-live-eval/<run-id>.json`（每次运行新文件，不覆盖历史）。供应商、模型与 Structured Output 模式来自 `.env.local` / `.env` 中的现有服务端配置；Mock 配置会被明确拒绝。
 
 自动评分只判断可以确定重现的合同：
 
@@ -208,6 +208,7 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 5. `npm test`；
 6. `npm run build`；
 7. `CI=1 npm run test:e2e`；
-8. 配置真实模型时运行 `npm run eval:live`；
-9. 人工检查首页、故事地图、证据抽屉、Ripple Preview 和刷新恢复；
-10. 确认截图、日志、数据库和夹具不含真实用户作品或密钥。
+8. 检查所有已提交报告不含绝对路径、开发机用户名或私人路径细节；
+9. 配置真实模型时运行 `npm run eval:live`；
+10. 人工检查首页、故事地图、证据抽屉、Ripple Preview 和刷新恢复；
+11. 确认截图、日志、数据库和夹具不含真实用户作品或密钥。
