@@ -1,4 +1,5 @@
 # M1-03 Unified Section-First Story Map Extraction
+> **状态：已回滚，未进入生产。** 本方案在 M1-03 真实作品回归中三篇均失败（局部逐字 Evidence claim 一次 repair 后仍无效），已按 retention gate 于 commit `7d5226a` 整体撤销；生产管线保持已验证的 v2，Evidence Unit 模块继续被 M1-04 复用。保留本文档仅作决策记录。
 
 日期：2026-08-12  
 状态：设计已获确认，待实施  

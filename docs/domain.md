@@ -128,6 +128,12 @@ Divergence 是父世界线的首次偏离，因此无论严格或开放模式，
 
 Ripple Preview 只保存 `candidate` Impact Plan Artifact 与对应 Generation Run，并从 confirmed Story Map 构造只读 Canonical 上下文；它不写入 Canonical 或子 Worldline。只有用户明确接受后，候选计划才能产生新的 `accepted` revision，原 candidate 保留不变。
 
+## Ripple Suggestions 与反馈谱系
+
+Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。
+
+Impact Plan 反馈重生成是完整的新 Generation Run 与完整 `ImpactPlanModelOutput`，不是局部 patch 或聊天。每次反馈产生新的不可变 `candidate` revision，并保存 `lineage`：父 candidate Artifact、反馈文本、新 Generation Run、同一 Story Map Artifact、同一 Divergence、同一 mode 与同一 Anchors。这些字段由服务端从父 candidate 冻结，客户端不可替换；原 candidate 与任何已接受版本保持不变。只有用户明确接受的一个候选谱系才能创建 Worldline。
+
 ## Worldline
 
 Worldline 采用“不可变基线 + 增量”：

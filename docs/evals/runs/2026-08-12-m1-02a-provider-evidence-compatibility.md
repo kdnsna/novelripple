@@ -1,4 +1,4 @@
-# M1-02A Provider & Evidence Grounding Compatibility（PASS）
+# M1-02A Provider & Evidence Grounding Compatibility（Historical / INVALID）
 
 > **Historical / INVALID：**完成前追溯确认本 run 使用 `deepseek-v4-flash`，不满足“与 M1-02 历史 baseline 使用同一个 `deepseek-chat` model”的前提。以下运行数据保持原样，仅作审计记录；它不参与 M1-02A 最终结论。正式验收见 [`deepseek-chat` PASS 报告](2026-08-12-m1-02a-provider-evidence-compatibility-deepseek-chat.md)。
 
@@ -13,7 +13,7 @@
 - Structured Output mode：`json_object`
 - Prompt versions：`story-map.v2`、`story-map-reconcile.v2`
 - 新 runtime dependency：`none`
-- 本地脱敏指标：`/Users/kdnsna/Projects/06-项目代码/novelripple/.data/evals/m1-baseline/20260812083345231-14be746-0db11d1e/metrics.json`
+- 本地脱敏指标：`.data/evals/m1-baseline/20260812083345231-14be746-0db11d1e/metrics.json`（Git ignored，不公开）
 - 本地人工复核数据库：同目录 `eval.db`；它被 Git 忽略，不进入公开报告或 CI
 
 ## Compatibility decision

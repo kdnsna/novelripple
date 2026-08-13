@@ -33,12 +33,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests
-        run: npm run test:unit
-
-      - name: Contract tests
-        run: npm run test:contract
-
+      # npm test 已包含全部单元与契约测试，不重复执行 test:unit / test:contract。
       - name: Full Vitest suite
         run: npm test
 

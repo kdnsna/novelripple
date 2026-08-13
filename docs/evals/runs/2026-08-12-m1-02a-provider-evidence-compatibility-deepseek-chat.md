@@ -12,7 +12,7 @@
 - Structured Output mode：`json_object`
 - Prompt versions：`story-map.v2`、`story-map-reconcile.v2`
 - 新 runtime dependency：`none`
-- 本地脱敏指标：`/Users/kdnsna/Projects/06-项目代码/novelripple/.data/evals/m1-baseline/20260812085148247-37aeb6b-5e79e596/metrics.json`
+- 本地脱敏指标：`.data/evals/m1-baseline/20260812085148247-37aeb6b-5e79e596/metrics.json`（Git ignored，不公开）
 - 本地人工复核数据库：同目录 `eval.db`；它被 Git 忽略，不进入公开报告或 CI
 
 本报告是 M1-02A 的正式验收记录。较早的 `20260812083345231-14be746-0db11d1e` run 使用了 `deepseek-v4-flash`，未满足“与 M1-02 历史 baseline 使用同一个 `deepseek-chat` model”的前提，因此只保留为 Historical / INVALID 数据，不参与本门结论，也没有被删除或覆盖。

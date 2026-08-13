@@ -44,8 +44,6 @@ describe("test isolation", () => {
       "npm ci",
       "npm run lint",
       "npm run typecheck",
-      "npm run test:unit",
-      "npm run test:contract",
       "npm test",
       "npm run build",
       "npx playwright install --with-deps chromium",
@@ -59,6 +57,9 @@ describe("test isolation", () => {
     expect(workflow).toContain("playwright-report/");
     expect(workflow).toContain("test-results/");
     expect(workflow).not.toContain("eval:live");
+    // npm test 已包含单元与契约测试，CI 不重复执行 test:unit / test:contract。
+    expect(workflow).not.toContain("run: npm run test:unit");
+    expect(workflow).not.toContain("run: npm run test:contract");
     const commandPositions = commands.map((command) => workflow.indexOf(command));
     expect(commandPositions.every((position) => position >= 0)).toBe(true);
     expect(commandPositions).toEqual(
