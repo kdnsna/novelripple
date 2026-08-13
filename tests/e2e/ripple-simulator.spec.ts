@@ -212,6 +212,14 @@ async function completeRequiredReview(page: Page) {
         break;
       }
     }
+    if (!acted) {
+      // 当前选择可能是图中 Event 或已核对项：切到第一个待核队列项再试。
+      const firstPending = page.locator(".review-queue-list button").first();
+      if ((await firstPending.count()) > 0) {
+        await firstPending.click();
+        acted = true;
+      }
+    }
     if (!acted) throw new Error("Readiness 尚未完成，但没有可执行核对操作");
   }
   throw new Error("Readiness 未在 30 次核对内完成");

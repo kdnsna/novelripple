@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type {
   Event,
@@ -26,9 +26,16 @@ export function SourceReader({
   const evidence = activeEvidence ?? selectedEvent.evidence[0];
   const evidenceMark = useRef<HTMLElement>(null);
   const section = sections.find((item) => item.id === evidence?.sectionId);
-  const excerpt = evidence
-    ? normalizedText.slice(evidence.start, evidence.end)
-    : "该事件属于新世界线生成内容，没有原著片段。";
+
+  // 只在证据区间变化时重新切片，避免每次队列点击都全量切片大文本。
+  const sourceSlices = useMemo(
+    () => ({
+      before: evidence ? normalizedText.slice(0, evidence.start) : "",
+      mark: evidence ? normalizedText.slice(evidence.start, evidence.end) : null,
+      after: evidence ? normalizedText.slice(evidence.end) : "",
+    }),
+    [evidence, normalizedText],
+  );
 
   useEffect(() => {
     evidenceMark.current?.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -59,11 +66,11 @@ export function SourceReader({
       <pre className="workspace-source-text" data-testid="source-reader">
         {evidence ? (
           <>
-            {normalizedText.slice(0, evidence.start)}
+            {sourceSlices.before}
             <mark data-active-evidence="true" ref={evidenceMark}>
-              {excerpt}
+              {sourceSlices.mark}
             </mark>
-            {normalizedText.slice(evidence.end)}
+            {sourceSlices.after}
           </>
         ) : (
           normalizedText

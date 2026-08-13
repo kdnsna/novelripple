@@ -47,7 +47,7 @@ test("guides review by priority, invalidates changed Evidence, confirms, and rec
   );
   await clickRevisionAction(page, page.getByRole("button", { name: "确认 Evidence 1" }));
 
-  await page.getByRole("button", { name: "查看完整图" }).click();
+  // revision 后工作区保持当前视图（不再整体重挂载）
   await page.getByTestId("event-node-event_01").click();
   await page.getByRole("button", { name: "修正事件" }).click();
   await page.getByLabel("事件标题").fill("许澄回到祁雾港");
@@ -56,11 +56,11 @@ test("guides review by priority, invalidates changed Evidence, confirms, and rec
     page.getByRole("button", { name: "保存为新 revision" }),
   );
 
-  await page.getByRole("button", { name: "查看完整图" }).click();
   await page.getByTestId("event-node-event_01").click();
   await expect(page.getByRole("button", { name: "确认 Evidence 1" })).toBeEnabled();
   await clickRevisionAction(page, page.getByRole("button", { name: "确认 Evidence 1" }));
 
+  await page.getByRole("button", { name: "返回核对队列" }).click();
   await completeRequiredReview(page);
   const finalAction = page.getByRole("button", {
     name: "确认 Story Map 并进入 Ripple",
@@ -70,6 +70,8 @@ test("guides review by priority, invalidates changed Evidence, confirms, and rec
   await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
   await expect(page.getByText("已通过 Ripple 前置确认门")).toBeVisible();
   await expect(page.getByText(/Ripple Simulator · 事件/)).toBeVisible();
+  // 等待 confirm 的 replace 导航把 confirmed revision 与 ripple 参数写进 URL。
+  await page.waitForURL(/ripple=opened/);
 
   const confirmedVersion = await currentVersionText(page);
   await page.reload();
@@ -89,13 +91,15 @@ test("supports merge, evidenced Event add/delete, reorder, Edge lifecycle, and s
   await stalePage.goto(page.url());
 
   await page.getByRole("button", { name: "调整顺序" }).click();
+  await page.getByRole("button", { name: "下移 许澄重返祁雾港" }).click();
   await clickRevisionAction(
     page,
-    page.getByRole("button", { name: "下移 许澄重返祁雾港" }),
+    page.getByRole("button", { name: "保存顺序 revision" }),
   );
 
   await stalePage.getByRole("button", { name: "调整顺序" }).click();
   await stalePage.getByRole("button", { name: "下移 许澄重返祁雾港" }).click();
+  await stalePage.getByRole("button", { name: "保存顺序 revision" }).click();
   await expect(stalePage.locator(".workspace-action-error")).toContainText(
     "Story Map 版本已更新",
   );
@@ -193,8 +197,12 @@ async function createFixtureStoryMap(page: Page, projectTitle: string) {
 
 async function clickRevisionAction(page: Page, action: ReturnType<Page["locator"]>) {
   const before = await currentVersionText(page);
+  const urlBefore = page.url();
   await action.click();
   await expect(page.getByText(before, { exact: true })).toBeHidden();
+  // revision 成功后会以 replace 导航同步 URL（含新 artifact id）；
+  // 等待其完成，保证后续 reload 恢复的是最新 revision。
+  await page.waitForURL((url) => url.href !== urlBefore);
 }
 
 async function completeRequiredReview(page: Page) {
@@ -223,6 +231,14 @@ async function completeRequiredReview(page: Page) {
       }
     }
     if (!acted) {
+      // 当前选择可能是图中 Event 或已核对项：切到第一个待核队列项再试。
+      const firstPending = page.locator(".review-queue-list button").first();
+      if ((await firstPending.count()) > 0) {
+        await firstPending.click();
+        acted = true;
+      }
+    }
+    if (!acted) {
       throw new Error("Review Queue 有待核项目，但当前编辑器没有可执行核对操作");
     }
   }
@@ -234,7 +250,12 @@ async function currentVersionText(page: Page): Promise<string> {
 }
 
 async function openManualEdgeAdvisory(page: Page) {
-  await page.getByText(/项分叉建议与软提示/).click();
+  // revision 后工作区不再重挂载，<details> 会保持用户打开/关闭的状态；
+  // 仅在当前处于关闭状态时点击 summary 展开。
+  const details = page.locator("details.advisory-queue");
+  if ((await details.getAttribute("open")) === null) {
+    await page.getByText(/项分叉建议与软提示/).click();
+  }
   await page
     .locator(
       '[data-testid^="review-queue-item-validator_advisory:edge_unconfirmed:edge_manual_"]',

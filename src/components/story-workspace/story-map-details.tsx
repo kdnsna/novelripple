@@ -2,12 +2,14 @@
 
 import { useState, type FormEvent } from "react";
 
-import type {
-  Event,
-  SourceReference,
-  StoryMapArtifact,
-  StoryMapRevisionChange,
+import {
+  type Event,
+  type SourceReference,
+  type StoryMapArtifact,
+  type StoryMapRevisionChange,
 } from "@/domain/schemas";
+
+import { EvidenceList } from "./review-editor/evidence-list";
 
 type StoryMapDetailsProps = {
   artifact: StoryMapArtifact;
@@ -27,6 +29,8 @@ export function StoryMapDetails({
   onRevise,
 }: StoryMapDetailsProps) {
   const [editing, setEditing] = useState(false);
+  const [deleteArmedEdgeId, setDeleteArmedEdgeId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
   const storyMap = artifact.storyMap;
   const characterNames = Object.fromEntries(
     storyMap.characters.map((character) => [character.id, character.name]),
@@ -38,12 +42,18 @@ export function StoryMapDetails({
   function submitEventCorrection(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    const participants = formData.getAll("participants").map(String);
+    if (participants.length === 0) {
+      setFormError("至少选择一位参与人物。");
+      return;
+    }
+    setFormError(null);
     onRevise({
       type: "update_event",
       eventId: selectedEvent.id,
       title: String(formData.get("title") ?? ""),
       summary: String(formData.get("summary") ?? ""),
-      participants: formData.getAll("participants").map(String),
+      participants,
     });
   }
 
@@ -64,7 +74,9 @@ export function StoryMapDetails({
       <p className="event-summary">{selectedEvent.summary}</p>
       <div className="participant-row">
         {selectedEvent.participants.map((participant) => (
-          <span key={participant}>{characterNames[participant] ?? participant}</span>
+          <span key={participant}>
+            {characterNames[participant] ?? participant}
+          </span>
         ))}
       </div>
 
@@ -80,54 +92,16 @@ export function StoryMapDetails({
         </ul>
       </section>
 
-      <section className="review-detail-section">
-        <div className="subsection-heading">
-          <span>Evidence</span>
-          <small>{selectedEvent.evidence.length} 处</small>
-        </div>
-        <div className="review-evidence-list">
-          {selectedEvent.evidence.map((evidence, index) => {
-            const confirmed = artifact.review.evidenceConfirmations.some(
-              (confirmation) =>
-                confirmation.eventId === selectedEvent.id &&
-                sameSourceReference(confirmation.evidence, evidence),
-            );
-            return (
-              <article className="review-evidence" key={evidenceKey(evidence)}>
-                <blockquote>
-                  {normalizedText.slice(evidence.start, evidence.end)}
-                </blockquote>
-                <small>
-                  {evidence.sectionId} · {evidence.start}—{evidence.end} · Hash 已验证
-                </small>
-                <div>
-                  <button
-                    className="text-button"
-                    onClick={() => onLocateEvidence(evidence)}
-                    type="button"
-                  >
-                    在原文中定位
-                  </button>
-                  <button
-                    className="text-button"
-                    disabled={confirmed || pending}
-                    onClick={() =>
-                      onRevise({
-                        type: "confirm_evidence",
-                        eventId: selectedEvent.id,
-                        evidence,
-                      })
-                    }
-                    type="button"
-                  >
-                    {confirmed ? "Evidence 已确认" : `确认 Evidence ${index + 1}`}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
+      <EvidenceList
+        artifact={artifact}
+        evidence={selectedEvent.evidence}
+        normalizedText={normalizedText}
+        onLocateEvidence={onLocateEvidence}
+        onRevise={onRevise}
+        pending={pending}
+        targetId={selectedEvent.id}
+        targetKind="event"
+      />
 
       <section className="review-detail-section">
         <div className="subsection-heading">
@@ -139,16 +113,31 @@ export function StoryMapDetails({
             <article key={edge.id}>
               <strong>{edge.type}</strong>
               <p>{edge.explanation}</p>
-              <button
-                className="danger-text-button"
-                disabled={pending}
-                onClick={() =>
-                  onRevise({ type: "delete_edge", edgeId: edge.id })
-                }
-                type="button"
-              >
-                删除明显错误的 Edge
-              </button>
+              {deleteArmedEdgeId === edge.id ? (
+                <>
+                  <p>删除后该因果关系不再进入地图；旧 revision 保留。</p>
+                  <button
+                    className="danger-button"
+                    disabled={pending}
+                    onClick={() => {
+                      setDeleteArmedEdgeId(null);
+                      onRevise({ type: "delete_edge", edgeId: edge.id });
+                    }}
+                    type="button"
+                  >
+                    确认删除 Edge
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="danger-text-button"
+                  disabled={pending}
+                  onClick={() => setDeleteArmedEdgeId(edge.id)}
+                  type="button"
+                >
+                  删除错误 Edge
+                </button>
+              )}
             </article>
           ))}
         </div>
@@ -178,7 +167,9 @@ export function StoryMapDetails({
             {storyMap.characters.map((character) => (
               <label key={character.id}>
                 <input
-                  defaultChecked={selectedEvent.participants.includes(character.id)}
+                  defaultChecked={selectedEvent.participants.includes(
+                    character.id,
+                  )}
                   name="participants"
                   type="checkbox"
                   value={character.id}
@@ -187,11 +178,19 @@ export function StoryMapDetails({
               </label>
             ))}
           </fieldset>
+          {formError ? (
+            <p className="form-error" role="alert">
+              {formError}
+            </p>
+          ) : null}
           <div className="correction-actions">
             <button
               className="secondary-button"
               disabled={pending}
-              onClick={() => setEditing(false)}
+              onClick={() => {
+                setEditing(false);
+                setFormError(null);
+              }}
               type="button"
             >
               取消
@@ -212,18 +211,4 @@ export function StoryMapDetails({
       )}
     </aside>
   );
-}
-
-function sameSourceReference(left: SourceReference, right: SourceReference): boolean {
-  return evidenceKey(left) === evidenceKey(right);
-}
-
-function evidenceKey(evidence: SourceReference): string {
-  return [
-    evidence.sourceId,
-    evidence.sectionId,
-    evidence.start,
-    evidence.end,
-    evidence.excerptHash,
-  ].join(":");
 }

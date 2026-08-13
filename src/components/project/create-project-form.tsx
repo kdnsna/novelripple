@@ -26,7 +26,11 @@ export function CreateProjectForm() {
         placeholder="例如：潮汐钟"
         required
       />
-      {state.error ? <p className="form-error">{state.error}</p> : null}
+      {state.error ? (
+        <p className="form-error" role="alert">
+          {state.error}
+        </p>
+      ) : null}
       <button className="primary-button" disabled={pending} type="submit">
         {pending ? "正在创建…" : "创建 Project"}
       </button>

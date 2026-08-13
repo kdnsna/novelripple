@@ -12,6 +12,7 @@ import {
   StoryMapRevisionChangeSchema,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
+  type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
 import {
@@ -37,9 +38,15 @@ import { generateConfiguredStoryMap } from "@/server/story-map/generate-configur
 const ProjectTitleSchema = z.string().trim().min(1).max(200);
 const ProjectIdSchema = z.string().min(1);
 
+/**
+ * 部署边界（有意为之）：当前产品是本地单用户工具，没有会话/所有权概念，
+ * 所有 action 以客户端传入的 projectId 直接读写本地 SQLite。
+ * 若要部署为多用户或公网服务，必须在 action 层引入会话校验；
+ * 见 docs/decisions/0001-web-first-foundation.md 的部署边界补充。
+ */
 export type ProjectActionState = { error: string | null };
 export type StoryMapActionResult =
-  | { ok: true; artifactId: string }
+  | { ok: true; artifact: StoryMapArtifact }
   | { ok: false; error: string };
 export type RipplePreviewActionResult =
   | { ok: true; artifact: ImpactPlanArtifact }
@@ -163,9 +170,10 @@ export async function reviseStoryMapAction(
   }
 
   try {
+    // 不调用 revalidatePath：工作区用 history.replaceState 触发 ACTION_RESTORE
+    // 导航刷新页面数据（Next 16 会 patch replaceState），避免同一 mutation 双往返。
     const artifact = createStoryMapRevision(parsed.data);
-    revalidatePath(`/projects/${parsed.data.projectId}`);
-    return { ok: true, artifactId: artifact.id };
+    return { ok: true, artifact };
   } catch (error) {
     return { ok: false, error: storyMapRevisionErrorMessage(error) };
   }
@@ -184,9 +192,9 @@ export async function confirmStoryMapAction(input: unknown): Promise<StoryMapAct
   }
 
   try {
+    // 同上：确认后的页面刷新由工作区的 replaceState → ACTION_RESTORE 完成。
     const artifact = confirmStoryMapArtifact(parsed.data);
-    revalidatePath(`/projects/${parsed.data.projectId}`);
-    return { ok: true, artifactId: artifact.id };
+    return { ok: true, artifact };
   } catch (error) {
     return { ok: false, error: storyMapRevisionErrorMessage(error) };
   }

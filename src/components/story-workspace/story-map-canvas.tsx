@@ -170,8 +170,8 @@ export function StoryMapCanvas({
           strokeWidth: edge.from === selectedEventId ? 2.4 : 1.25,
           opacity: edge.from === selectedEventId ? 1 : 0.56,
         },
-        labelStyle: { fill: "#776e63", fontSize: 9, fontWeight: 700 },
-        labelBgStyle: { fill: "#f3efe7", fillOpacity: 0.94 },
+        labelStyle: { fill: "var(--ink-soft)", fontSize: 11, fontWeight: 700 },
+        labelBgStyle: { fill: "var(--paper)", fillOpacity: 0.94 },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color: edgeColors[edge.type],
@@ -203,7 +203,6 @@ export function StoryMapCanvas({
         colorMode="light"
         defaultEdgeOptions={{ selectable: false }}
         edges={edges}
-        fitView
         fitViewOptions={{ padding: 0.18, minZoom: 0.52, maxZoom: 1 }}
         maxZoom={1.35}
         minZoom={0.35}
@@ -221,7 +220,7 @@ export function StoryMapCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <GraphInitializer nodeIds={nodeIds} />
-        <Background color="#d8d0c3" gap={24} size={1} />
+        <Background color="var(--line)" gap={24} size={1} />
         <Controls position="bottom-right" showInteractive={false} />
       </ReactFlow>
     </div>

@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
 import {
@@ -34,7 +33,6 @@ export function WorldlineContinuationPanel({
   initialArtifacts,
   onClose,
 }: WorldlineContinuationPanelProps) {
-  const router = useRouter();
   const [directionsArtifact, setDirectionsArtifact] =
     useState<ContinuationDirectionsArtifact | null>(() =>
       findDirections(initialArtifacts),
@@ -78,13 +76,13 @@ export function WorldlineContinuationPanel({
         return;
       }
       setDirectionsArtifact(result.artifact);
-      router.refresh();
     });
   }
 
   function generateScene(directionId: string): void {
     if (!directionsArtifact) return;
     setError(null);
+    const previousSelectedDirectionId = selectedDirectionId;
     setSelectedDirectionId(directionId);
     startTransition(async () => {
       const result = await generateContinuationSceneAction({
@@ -94,11 +92,12 @@ export function WorldlineContinuationPanel({
         selectedDirectionId: directionId,
       });
       if (!result.ok) {
+        setSelectedDirectionId(previousSelectedDirectionId);
         setError(result.error);
         return;
       }
+      setSelectedDirectionId(result.artifact.continuation.selectedDirectionId);
       setSceneArtifact(result.artifact);
-      router.refresh();
     });
   }
 

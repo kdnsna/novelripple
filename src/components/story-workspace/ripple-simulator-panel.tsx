@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useTransition, type FormEvent } from "react";
 
 import {
@@ -44,16 +43,20 @@ const anchorStatusLabels = {
   incompatible: "Incompatible · 不兼容",
 } as const;
 
-export function mapAnchorEvaluationRows(plan: ImpactPlan) {
-  return plan.anchorEvaluations.map((evaluation) => {
+export function mapAnchorEvaluationRows(
+  plan: ImpactPlan,
+): Array<ImpactPlan["anchorEvaluations"][number] & { requirement: string }> {
+  const rows: Array<
+    ImpactPlan["anchorEvaluations"][number] & { requirement: string }
+  > = [];
+  for (const evaluation of plan.anchorEvaluations) {
     const anchor = plan.anchors.find(
       (candidate) => candidate.id === evaluation.anchorId,
     );
-    if (!anchor) {
-      throw new Error(`Anchor 评估缺少对应结局条件：${evaluation.anchorId}`);
-    }
-    return { ...evaluation, requirement: anchor.requirement };
-  });
+    if (!anchor) continue; // 容错：缺失的 Anchor 不渲染，而不是抛错炸掉整个面板
+    rows.push({ ...evaluation, requirement: anchor.requirement });
+  }
+  return rows;
 }
 
 export function RippleSimulatorPanel({
@@ -64,7 +67,6 @@ export function RippleSimulatorPanel({
   onAccepted,
   onEnterWorldline,
 }: RippleSimulatorPanelProps) {
-  const router = useRouter();
   const [divergenceType, setDivergenceType] = useState<
     "prevent" | "choice" | "outcome"
   >("prevent");
@@ -196,7 +198,6 @@ export function RippleSimulatorPanel({
       setAcceptedWorldline(result.worldline);
       setAcceptedArtifact(result.acceptedArtifact);
       onAccepted(result.worldline, result.acceptedArtifact);
-      router.refresh();
     });
   }
 

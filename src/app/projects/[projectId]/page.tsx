@@ -5,7 +5,6 @@ import { PersistedSourceReader } from "@/components/project/persisted-source-rea
 import { SourceImportForm } from "@/components/project/source-import-form";
 import { StoryMapGenerationForm } from "@/components/project/story-map-generation-form";
 import { StoryMapReviewWorkspace } from "@/components/story-workspace/story-map-review-workspace";
-import { deriveStoryMapReview } from "@/domain/review/derive-story-map-review";
 import {
   deriveEvidenceUnits,
   sourceReferenceForUnit,
@@ -34,6 +33,7 @@ type ProjectPageProps = {
     artifact?: string | string[];
     imported?: string | string[];
     generated?: string | string[];
+    ripple?: string | string[];
   }>;
 };
 
@@ -154,8 +154,8 @@ export default async function ProjectPage({
             </details>
           </div>
           <StoryMapReviewWorkspace
-            artifact={selectedArtifact}
-            derivedReview={deriveStoryMapReview(selectedArtifact, selectedSource)}
+            initialArtifact={selectedArtifact}
+            initialRippleOpen={singleValue(query.ripple) === "opened"}
             evidenceOptions={deriveEvidenceUnits(selectedSource).map((unit) => ({
               id: unit.id,
               sectionId: unit.sectionId,
@@ -171,7 +171,6 @@ export default async function ProjectPage({
             initialContinuationArtifacts={selectedContinuationArtifacts}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
             initialWorldlines={selectedWorldlines}
-            key={selectedArtifact.id}
             projectId={project.id}
             source={selectedSource}
           />
