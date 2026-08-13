@@ -138,8 +138,36 @@ export function StoryMapCanvas({
   }, [visibleEvents, visibleStoryEdges]);
   const [nodes, setNodes, onNodesChange] = useNodesState(computedNodes);
 
+  // 图结构签名：只有事件集合或边关系真正变化时才重新 fitView / 重排。
+  // 纯内容 revision（改标题、确认 Evidence 等）不再重置用户拖动的节点位置，
+  // 也避免视口变换与节点重排之间的瞬态错位。
+  const structureKey = useMemo(
+    () =>
+      JSON.stringify({
+        events: visibleEvents.map((event) => event.id),
+        edges: visibleStoryEdges.map(
+          (edge) => `${edge.id}:${edge.from}:${edge.to}:${edge.type}`,
+        ),
+      }),
+    [visibleEvents, visibleStoryEdges],
+  );
+  const layoutNodeIds = useMemo(
+    () => visibleEvents.map((event) => event.id),
+    // 仅依赖结构签名：内容 revision 不触发 GraphInitializer 的重新测量与 fitView。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [structureKey],
+  );
+
   useEffect(() => {
-    setNodes(computedNodes);
+    setNodes((currentNodes) => {
+      const positionById = new Map(
+        currentNodes.map((node) => [node.id, node.position]),
+      );
+      return computedNodes.map((node) => {
+        const previous = positionById.get(node.id);
+        return previous ? { ...node, position: previous } : node;
+      });
+    });
   }, [computedNodes, setNodes]);
 
   useEffect(() => {
@@ -182,10 +210,6 @@ export function StoryMapCanvas({
     [selectedEventId, visibleStoryEdges],
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(computedEdges);
-  const nodeIds = useMemo(
-    () => visibleEvents.map((event) => event.id),
-    [visibleEvents],
-  );
 
   useEffect(() => {
     setEdges(computedEdges);
@@ -219,7 +243,7 @@ export function StoryMapCanvas({
         panOnScroll
         proOptions={{ hideAttribution: true }}
       >
-        <GraphInitializer nodeIds={nodeIds} />
+        <GraphInitializer nodeIds={layoutNodeIds} />
         <Background color="var(--line)" gap={24} size={1} />
         <Controls position="bottom-right" showInteractive={false} />
       </ReactFlow>
