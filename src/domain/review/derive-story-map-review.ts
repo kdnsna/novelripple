@@ -334,6 +334,10 @@ export function deriveStoryMapReview(
   };
 }
 
+/**
+ * M1 修正成本（correction-cost）报告助手：按操作类型统计 revision 链。
+ * 当前由单元测试与后续 M1-04 指标采集使用；在指标接入生产前仅测试引用是有意的。
+ */
 export function summarizeStoryMapReviewOperations(
   artifacts: StoryMapArtifact[],
 ): {

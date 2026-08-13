@@ -166,7 +166,10 @@ export async function reviseStoryMapAction(
 ): Promise<StoryMapActionResult> {
   const parsed = StoryMapRevisionActionInputSchema.safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: "Story Map 修改参数无效。" };
+    return {
+      ok: false,
+      error: "Story Map 修改数据无效：缺少必填字段或字段类型不正确。",
+    };
   }
 
   try {
@@ -188,7 +191,10 @@ export async function confirmStoryMapAction(input: unknown): Promise<StoryMapAct
     .strict()
     .safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: "Story Map 确认参数无效。" };
+    return {
+      ok: false,
+      error: "Story Map 确认数据无效：项目或 Artifact 标识缺失。",
+    };
   }
 
   try {
@@ -419,6 +425,9 @@ function continuationErrorMessage(error: unknown): string {
 }
 
 function storyMapRevisionErrorMessage(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return "Story Map 修改数据无效：字段缺失或类型不正确，未创建 revision。";
+  }
   if (!(error instanceof Error)) return "Story Map 修改失败，未创建 revision。";
   const safeFragments = [
     "Story Map 版本已更新",
