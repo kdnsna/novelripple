@@ -1,8 +1,10 @@
 import { validateStoryMap } from "@/domain/invariants/validate-story-map";
-import type {
-  Source,
-  SourceReference,
-  StoryMapArtifact,
+import {
+  sameSourceReference,
+  sourceReferenceKey,
+  type Source,
+  type SourceReference,
+  type StoryMapArtifact,
 } from "@/domain/schemas";
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.75;
@@ -216,7 +218,7 @@ export function deriveStoryMapReview(
     const confirmed = isEvidenceConfirmed(artifact, requirement);
     if (!confirmed) {
       queue.push({
-        id: `unconfirmed_evidence:${requirement.targetKind}:${requirement.targetId}:${referenceKey(requirement.evidence)}`,
+        id: `unconfirmed_evidence:${requirement.targetKind}:${requirement.targetId}:${sourceReferenceKey(requirement.evidence)}`,
         category: "unconfirmed_evidence",
         priority: 7,
         targetKind: requirement.targetKind,
@@ -457,7 +459,7 @@ function deriveImportantEvidenceRequirements(
   }
   const seen = new Set<string>();
   return requirements.filter((requirement) => {
-    const key = `${requirement.targetKind}:${requirement.targetId}:${referenceKey(requirement.evidence)}`;
+    const key = `${requirement.targetKind}:${requirement.targetId}:${sourceReferenceKey(requirement.evidence)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -488,21 +490,4 @@ function normalizeIdentityLabel(value: string): string {
 
 function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
-}
-
-function sameSourceReference(
-  left: SourceReference,
-  right: SourceReference,
-): boolean {
-  return referenceKey(left) === referenceKey(right);
-}
-
-function referenceKey(reference: SourceReference): string {
-  return [
-    reference.sourceId,
-    reference.sectionId,
-    reference.start,
-    reference.end,
-    reference.excerptHash,
-  ].join(":");
 }

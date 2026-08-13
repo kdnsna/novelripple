@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import {
@@ -52,13 +52,21 @@ export function getProject(projectId: string): Project | null {
   return row ? ProjectSchema.parse(row) : null;
 }
 
-export function listProjects(): Project[] {
-  return getDatabase()
+export function listProjects(limit?: number): Project[] {
+  const query = getDatabase()
     .select()
     .from(projects)
-    .orderBy(desc(projects.createdAt))
-    .all()
-    .map((row) => ProjectSchema.parse(row));
+    .orderBy(desc(projects.createdAt));
+  const rows = (limit === undefined ? query.all() : query.limit(limit).all());
+  return rows.map((row) => ProjectSchema.parse(row));
+}
+
+export function countProjects(): number {
+  const row = getDatabase()
+    .select({ count: sql<number>`count(*)` })
+    .from(projects)
+    .get();
+  return row?.count ?? 0;
 }
 
 export function importProjectSource(input: {

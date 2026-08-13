@@ -1,6 +1,9 @@
 import Link from "next/link";
 
-import { listProjects } from "@/server/repositories/project-repository";
+import {
+  countProjects,
+  listProjects,
+} from "@/server/repositories/project-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +26,8 @@ const principles = [
 ] as const;
 
 export default function Home() {
-  const projects = listProjects();
+  const projects = listProjects(3);
+  const projectCount = countProjects();
 
   return (
     <main className="landing-shell">
@@ -56,9 +60,9 @@ export default function Home() {
             原著保持只读，每一次改变都先经过证据和因果检查。
           </p>
           <p className="fixture-note" role="status">
-            {projects.length === 0
+            {projectCount === 0
               ? "当前没有故事项目"
-              : `当前有 ${projects.length} 个故事项目`}
+              : `当前有 ${projectCount} 个故事项目`}
           </p>
           <div className="hero-actions">
             <Link className="primary-action" href="/projects/new">
@@ -77,7 +81,7 @@ export default function Home() {
           {projects.length > 0 ? (
             <div className="recent-projects">
               <span>最近项目</span>
-              {projects.slice(0, 3).map((project) => (
+              {projects.map((project) => (
                 <Link href={`/projects/${project.id}`} key={project.id}>
                   {project.title}
                 </Link>

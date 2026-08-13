@@ -8,6 +8,7 @@ import {
 } from "@/domain/invariants/validate-story-map";
 import { deriveStoryMapReview } from "@/domain/review/derive-story-map-review";
 import {
+  sameSourceReference,
   StoryMapArtifactSchema,
   StoryMapContentSchema,
   StoryMapRevisionChangeSchema,
@@ -16,7 +17,6 @@ import {
   type StoryMapContent,
   type StoryMapReview,
   type StoryMapRevisionChange,
-  type SourceReference,
 } from "@/domain/schemas";
 import { getDatabase } from "@/server/db/client";
 import { artifacts } from "@/server/db/schema";
@@ -602,19 +602,6 @@ function stableIdentityLabels(labels: string[]): string[] {
 
 function normalizeIdentityLabel(label: string): string {
   return label.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase();
-}
-
-function sameSourceReference(
-  left: SourceReference,
-  right: SourceReference,
-): boolean {
-  return (
-    left.sourceId === right.sourceId &&
-    left.sectionId === right.sectionId &&
-    left.start === right.start &&
-    left.end === right.end &&
-    left.excerptHash === right.excerptHash
-  );
 }
 
 function parseStoryMapArtifact(

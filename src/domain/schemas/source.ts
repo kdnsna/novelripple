@@ -39,3 +39,21 @@ export const SourceSchema = z
 export type Source = z.infer<typeof SourceSchema>;
 export type SourceReference = z.infer<typeof SourceReferenceSchema>;
 export type SourceSection = z.infer<typeof SourceSectionSchema>;
+
+/** Evidence 引用的唯一稳定键；全仓库只有这一处实现，不得在组件、领域派生或仓库层重复。 */
+export function sourceReferenceKey(reference: SourceReference): string {
+  return [
+    reference.sourceId,
+    reference.sectionId,
+    reference.start,
+    reference.end,
+    reference.excerptHash,
+  ].join(":");
+}
+
+export function sameSourceReference(
+  left: SourceReference,
+  right: SourceReference,
+): boolean {
+  return sourceReferenceKey(left) === sourceReferenceKey(right);
+}

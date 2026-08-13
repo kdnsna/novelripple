@@ -1,9 +1,11 @@
-import type {
-  ImpactPlan,
-  Source,
-  SourceReference,
-  StoryMap,
-  StoryMapReview,
+import {
+  sameSourceReference,
+  sourceReferenceKey,
+  type ImpactPlan,
+  type Source,
+  type SourceReference,
+  type StoryMap,
+  type StoryMapReview,
 } from "@/domain/schemas";
 import { sha256 } from "@/domain/source/normalize-source";
 
@@ -578,16 +580,6 @@ export function validateStoryMapReview(
   return issues;
 }
 
-function sourceReferenceKey(reference: SourceReference): string {
-  return [
-    reference.sourceId,
-    reference.sectionId,
-    reference.start,
-    reference.end,
-    reference.excerptHash,
-  ].join(":");
-}
-
 export function assertValidStoryMap(storyMap: StoryMap, source: Source): void {
   assertNoIssues("Story Map", validateStoryMap(storyMap, source));
 }
@@ -613,18 +605,5 @@ function assertNoIssues(label: string, issues: DomainValidationIssue[]): void {
     `${label} 校验失败：\n${issues
       .map((issue) => `- ${issue.path}: ${issue.message}`)
       .join("\n")}`,
-  );
-}
-
-function sameSourceReference(
-  left: SourceReference,
-  right: SourceReference,
-): boolean {
-  return (
-    left.sourceId === right.sourceId &&
-    left.sectionId === right.sectionId &&
-    left.start === right.start &&
-    left.end === right.end &&
-    left.excerptHash === right.excerptHash
   );
 }
