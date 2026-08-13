@@ -43,13 +43,20 @@ Story A/B 没有 inference / 低置信度 Evidence blocker；Story C 有 5 处�
 
 | 门禁 | 本次结果 |
 | --- | --- |
-| 不超过 30k 字 median review time `<= 15 min` | **未测量 / FAIL** |
-| 每篇 material revisions `<= 6` | **未测量 / FAIL** |
-| 每篇人工新增关键 Event `<= 2` | **未测量 / FAIL** |
+| 不超过 30k 字 median review time `<= 15 min` | **Story A 7 分钟达标；B/C 未测量 / FAIL** |
+| 每篇 material revisions `<= 6` | **Story A 16 次超限（全部集中于 edge_01）；B/C 未测量 / FAIL** |
+| 每篇人工新增关键 Event `<= 2` | **Story A 0 个达标；B/C 未测量 / FAIL** |
 | 30k—60k 优先核对队列 | 已实现；本轮对应作品规模仍须正式计时 |
-| 无需源码 / 数据库 / Prompt 完成修正 | 公开 E2E 证明能力完整；私人作品尚无独立观察结论 |
+| 无需源码 / 数据库 / Prompt 完成修正 | 公开 E2E 证明能力完整；私人作品 A 已有独立观察结论，B/C 尚无 |
 
 下一次有效观察必须由读者从初始 candidate 开始，用秒表记录主动操作时间，并只在其理解后记录必要语义修正。等待、休息和环境故障不计时；开发者不得代操作或事后猜数。
+
+## 真人计时观察（2026-08-13，部分完成）
+
+- Story A：主动耗时 **7 分钟**；material revisions **16 次**；新增 Event **0 个**。16 次 material revision 全部集中在一条边（edge_01）：类型在 foreshadows / enables 之间翻转 3 次、证据片段前后尝试了 7 段不同原文后才定稿。时长与新增事件两项达标，material revisions 超出每篇 ≤6 的上限。
+- Story B / C：观察者跳过，未测量。
+- 真实发现（观察者实际操作，非推导）：修正"一条边的类型 + 证据"的实际操作成本显著——为一条边反复挑选证据片段 7 次才满意。这是 correction-cost 之外的交互成本信号，列为 M1-06 前的待改进观察点（证据选择器的候选排序 / 预览便利性）。
+- 由于 B/C 未测量，correction-cost gate 仍不能得出完整结论；A 篇实测数据如实记录如上。
 
 ## Open-source preflight
 
@@ -81,4 +88,4 @@ Story A/B 没有 inference / 低置信度 Evidence blocker；Story C 有 5 处�
 - `npm run build`：PASS；
 - `CI=1 npm run test:e2e`：8 tests PASS。
 
-确定性门禁全部通过不替代真人 correction-cost 数据；本报告因此仍保持 `M1-04 FAIL`。
+确定性门禁全部通过不替代真人 correction-cost 数据；2026-08-13 已完成 Story A 真人计时观察（B/C 未测量，A 的 material revisions 超限且暴露证据选择交互成本），本报告仍保持 `M1-04 FAIL`。
