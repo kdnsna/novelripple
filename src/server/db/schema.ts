@@ -70,7 +70,9 @@ export const artifacts = sqliteTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     sourceId: text("source_id").references(() => sources.id),
-    worldlineId: text("worldline_id"),
+    worldlineId: text("worldline_id").references(
+      (): AnySQLiteColumn => worldlines.id,
+    ),
     kind: text("kind", {
       enum: [
         "story_map",

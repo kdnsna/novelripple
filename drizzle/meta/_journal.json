@@ -43,6 +43,13 @@
       "when": 1786460000000,
       "tag": "0005_remove_legacy_demo",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786470000000,
+      "tag": "0006_worldline_fk",
+      "breakpoints": true
     }
   ]
 }
