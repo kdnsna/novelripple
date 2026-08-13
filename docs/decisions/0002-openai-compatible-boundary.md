@@ -56,3 +56,12 @@ Generation Run 的诊断状态保留在本地数据库；对外或人工报告�
 M1-02A 在不改变上述单 Provider、一次 repair 和本地权威校验边界的前提下，增加显式 `json_object` 模式，以适配支持 JSON object 但不完整支持 strict JSON Schema 的 OpenAI-compatible 端点。该模式不是降级链路：配置为 `json_object` 时不会尝试 `prompt_json`，配置为 `json_schema` 时也不会因失败自动切换。
 
 Story Map Candidate 的 Evidence 同时改为引用服务端从不可变 Source 确定性派生的 Evidence Unit ID；最终 Artifact 仍保存原有 `SourceReference[]`。这只改变模型候选与 Provider 的兼容边界，不改变 Source、Story Map、Artifact、revision、Impact Plan、Worldline 或 Continuation 领域合同，也不新增数据库表、依赖或第二套 Provider / Eval 系统。
+
+## `json_schema` strict 线缆 Schema 适配（后文补充）
+
+`z.toJSONSchema` 的 draft-7 输出与 OpenAI strict 模式不兼容：optional 字段不进 `required`，nullable 字段展开为 `anyOf`，两者都会被 strict 端点拒绝。`src/server/ai/strict-json-schema.ts` 在**只有 `json_schema` 模式**下做两层调整：
+
+1. 线缆 Schema：每个对象的 `required` 补齐全部 properties，nullable 字段降为单类型，并用 description 说明"没有适用值时使用空字符串"；
+2. 响应归一化：`""` 哨兵在交给本地 Zod 校验前还原为 `null`。
+
+`json_object` / `prompt_json` 模式仍使用完整领域 Schema 文本，不做转换。本地 Zod Schema 与领域校验始终是权威，nullable / optional 语义没有变化；转换失败或非法 JSON 原样进入既有 repair 流程。该适配由单元测试锁定（含 Story Map 与 Impact Plan 全 Schema 的 strict 兼容断言）。

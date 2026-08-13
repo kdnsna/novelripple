@@ -1,6 +1,10 @@
 import OpenAI from "openai";
 import { z } from "zod";
 
+import {
+  normalizeStrictResponse,
+  toOpenAIStrictSchema,
+} from "@/server/ai/strict-json-schema";
 import type {
   AIProvider,
   AIProviderRequest,
@@ -99,7 +103,16 @@ export class OpenAICompatibleProvider implements AIProvider {
       })
       .strict()
       .parse(request.modelConfig);
-    const messages = buildMessages(request);
+
+    // strict 模式：领域 JSON Schema 需先转为 strict 兼容的线缆 Schema
+    // （optional 入 required、nullable 降为单类型 + 空串哨兵），
+    // 响应再反向归一化，本地 Zod / 领域校验保持权威。
+    const strictPreparation =
+      modelConfig.structuredOutputMode === "json_schema"
+        ? toOpenAIStrictSchema(request.jsonSchema)
+        : null;
+    const wireSchema = strictPreparation?.schema ?? request.jsonSchema;
+    const messages = buildMessages(request, wireSchema);
     const responseFormat =
       modelConfig.structuredOutputMode === "json_schema"
         ? {
@@ -107,7 +120,7 @@ export class OpenAICompatibleProvider implements AIProvider {
             json_schema: {
               name: request.schemaName,
               strict: true as const,
-              schema: request.jsonSchema,
+              schema: wireSchema,
             },
           }
         : modelConfig.structuredOutputMode === "json_object"
@@ -121,23 +134,41 @@ export class OpenAICompatibleProvider implements AIProvider {
       },
       { timeout: requestTimeoutMs },
     );
-    const rawOutput = completion.choices[0]?.message.content;
+    const content = completion.choices[0]?.message.content;
 
-    if (typeof rawOutput !== "string" || rawOutput.length === 0) {
+    if (typeof content !== "string" || content.length === 0) {
       throw new Error("OpenAI-compatible response contained no text content");
     }
 
     const usage = mapUsage(completion.usage);
     return {
-      rawOutput,
+      rawOutput: normalizeStrictOutput(content, strictPreparation),
       ...(completion.id ? { requestId: completion.id } : {}),
       ...(usage ? { usage } : {}),
     };
   }
 }
 
-function buildMessages(request: AIProviderRequest): ChatMessage[] {
-  const schemaText = JSON.stringify(request.jsonSchema);
+function normalizeStrictOutput(
+  rawOutput: string,
+  preparation: ReturnType<typeof toOpenAIStrictSchema> | null,
+): string {
+  if (!preparation || preparation.nullablePaths.length === 0) return rawOutput;
+  try {
+    return JSON.stringify(
+      normalizeStrictResponse(JSON.parse(rawOutput), preparation.nullablePaths),
+    );
+  } catch {
+    // 非法 JSON 原样返回，交给本地校验的 repair 流程处理。
+    return rawOutput;
+  }
+}
+
+function buildMessages(
+  request: AIProviderRequest,
+  schemaTextSource: Record<string, unknown>,
+): ChatMessage[] {
+  const schemaText = JSON.stringify(schemaTextSource);
   const messages: ChatMessage[] = [
     {
       role: "system",
