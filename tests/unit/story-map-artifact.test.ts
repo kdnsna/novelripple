@@ -532,7 +532,38 @@ describe("immutable Story Map review revisions", () => {
           evidence: [{ ...evidence, sourceId: "source_foreign" }],
         },
       }),
-    ).toThrow("Story Map 校验失败");
+    ).toThrow("必须选择由 Source 确定性派生的 Evidence Unit");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([
+      artifact,
+    ]);
+  });
+
+  it("rejects an added Event whose Evidence is not an exact derived Evidence Unit", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const unit = deriveEvidenceUnits(source)[0]!;
+    const half = Math.max(1, Math.floor((unit.end - unit.start) / 2));
+    // 合法引用（offset/hash 正确）但不是派生 Unit 边界：不允许绕过选择器。
+    const subRange = sourceReferenceForUnit({
+      ...unit,
+      end: unit.start + half,
+      text: source.normalizedText.slice(unit.start, unit.start + half),
+    });
+
+    expect(() =>
+      createStoryMapRevision({
+        projectId: project.id,
+        artifactId: artifact.id,
+        change: {
+          type: "add_event",
+          title: "非法补充",
+          summary: "这条事件使用了非 Unit 边界的 Evidence。",
+          participants: ["char_xucheng"],
+          stateChanges: [],
+          evidenceKind: "fact",
+          evidence: [subRange],
+        },
+      }),
+    ).toThrow("必须选择由 Source 确定性派生的 Evidence Unit");
     expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([
       artifact,
     ]);

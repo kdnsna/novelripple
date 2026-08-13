@@ -17,11 +17,16 @@ import {
   type StoryMapContent,
   type StoryMapReview,
   type StoryMapRevisionChange,
+  type SourceReference,
 } from "@/domain/schemas";
 import { getDatabase } from "@/server/db/client";
 import { artifacts } from "@/server/db/schema";
 import { getGenerationRun } from "@/server/repositories/generation-run-repository";
 import { getProjectSource } from "@/server/repositories/project-repository";
+import {
+  deriveEvidenceUnits,
+  sourceReferenceForUnit,
+} from "@/domain/source/evidence-units";
 
 const storyMapKinds = ["story_map", "story_map_revision"] as const;
 
@@ -152,8 +157,8 @@ export function createStoryMapRevision(input: {
     projectId: input.projectId,
     artifactId: input.artifactId,
     operationType: change.type,
-    update(storyMap, review) {
-      applyReviewChange(storyMap, review, change);
+    update(storyMap, review, assertEvidence) {
+      applyReviewChange(storyMap, review, change, assertEvidence);
       return "draft";
     },
   });
@@ -181,6 +186,7 @@ function createRevisionFromLatest(input: {
   update: (
     storyMap: StoryMapArtifact["storyMap"],
     review: StoryMapReview,
+    assertEvidence: (references: SourceReference[]) => void,
   ) => "draft" | "confirmed";
 }): StoryMapArtifact {
   const base = getStoryMapArtifact(input.artifactId);
@@ -189,6 +195,22 @@ function createRevisionFromLatest(input: {
   }
   const source = getProjectSource(base.projectId, base.sourceId);
   if (!source) throw new Error("找不到 Story Map 对应的 Source");
+  const derivedUnitReferences = deriveEvidenceUnits(source).map(
+    sourceReferenceForUnit,
+  );
+  const assertEvidence = (references: SourceReference[]): void => {
+    for (const reference of references) {
+      if (
+        !derivedUnitReferences.some((unit) =>
+          sameSourceReference(unit, reference),
+        )
+      ) {
+        throw new Error(
+          "新增或替换的 Evidence 必须选择由 Source 确定性派生的 Evidence Unit",
+        );
+      }
+    }
+  };
 
   return getDatabase().transaction((transaction) => {
     const latestRow = transaction
@@ -221,7 +243,7 @@ function createRevisionFromLatest(input: {
 
     const nextStoryMap = structuredClone(base.storyMap);
     const nextReview = structuredClone(base.review);
-    const nextStatus = input.update(nextStoryMap, nextReview);
+    const nextStatus = input.update(nextStoryMap, nextReview, assertEvidence);
     const version = base.version + 1;
     const createdAt = new Date().toISOString();
     nextReview.operation = {
@@ -278,6 +300,7 @@ function applyReviewChange(
   storyMap: StoryMapArtifact["storyMap"],
   review: StoryMapReview,
   change: StoryMapRevisionChange,
+  assertEvidence: (references: SourceReference[]) => void,
 ): void {
   if (change.type === "update_character") {
     const character = storyMap.characters.find(
@@ -414,6 +437,7 @@ function applyReviewChange(
   }
 
   if (change.type === "add_event") {
+    assertEvidence(change.evidence);
     storyMap.events.push({
       id: `event_manual_${randomUUID()}`,
       title: change.title,
@@ -466,6 +490,7 @@ function applyReviewChange(
   }
 
   if (change.type === "add_edge") {
+    assertEvidence(change.evidence);
     storyMap.edges.push({
       id: `edge_manual_${randomUUID()}`,
       from: change.from,
@@ -485,7 +510,10 @@ function applyReviewChange(
     const before = JSON.stringify(edge);
     if (change.edgeType !== undefined) edge.type = change.edgeType;
     if (change.explanation !== undefined) edge.explanation = change.explanation;
-    if (change.evidence !== undefined) edge.evidence = change.evidence;
+    if (change.evidence !== undefined) {
+      assertEvidence(change.evidence);
+      edge.evidence = change.evidence;
+    }
     if (JSON.stringify(edge) === before) throw new Error("修改没有产生变化");
     review.edgeEvidenceConfirmations = review.edgeEvidenceConfirmations.filter(
       (confirmation) => confirmation.edgeId !== change.edgeId,
