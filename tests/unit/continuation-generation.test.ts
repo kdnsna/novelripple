@@ -36,6 +36,7 @@ import {
 } from "@/server/repositories/story-map-artifact-repository";
 import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
+import { M1_06_LONG_SCENE_PROSE } from "../helpers/continuation-scene-fixtures";
 import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
 let temporaryDirectory: string;
@@ -102,8 +103,7 @@ const directionOutput: ContinuationDirectionsModelOutput = {
 
 const sceneOutput: ContinuationSceneModelOutput = {
   title: "潮标站的第二把锁",
-  prose:
-    "许澄没有把红账带去报社。雨水沿着旧潮标站的百叶窗往下淌，她把包在防潮布里的账簿放进铁柜，又让沈砚当面记下封条编号。沈砚关掉顶灯，只留下值班台的一圈冷光。他们没有宣称证据已经安全，也没有假装周岚持有原件；电话另一端，周岚只记录时间、地点和两人的口述。铁柜上锁后，许澄把钥匙留在自己手里，决定等风暴过去便亲自把原件、钟锤四页和录音一并提交。远处一束车灯扫过堤岸，两人同时停住了动作。",
+  prose: M1_06_LONG_SCENE_PROSE,
   statePatch: {
     factsAdded: [
       {
@@ -239,6 +239,17 @@ describe("Continuation generation and persistence", () => {
     });
     expect(sceneProvider.requests[0]?.prompt).toContain(selectedDirection.title);
     expect(sceneProvider.requests[0]?.prompt).toContain("acceptedImpactPlan");
+    expect(sceneProvider.requests[0]?.prompt).toContain("styleContext");
+    expect(sceneProvider.requests[0]?.prompt).toContain("representativeExcerpts");
+    expect(sceneProvider.requests[0]?.prompt).toContain("characterEvidence");
+    expect(sceneProvider.requests[0]?.prompt).not.toContain(
+      context.source.normalizedText,
+    );
+    expect(
+      listProjectGenerationRuns(context.project.id).find(
+        (run) => run.kind === "continuation_scene",
+      )?.promptVersion,
+    ).toBe("continuation.v2");
 
     const repeatedScene = await generateContinuationScene({
       projectId: context.project.id,

@@ -3,6 +3,8 @@ import type { ZodType } from "zod";
 
 import * as schemas from "@/domain/schemas";
 
+import { M1_06_LONG_SCENE_PROSE } from "../helpers/continuation-scene-fixtures";
+
 const reference = {
   sourceId: "source_1",
   sectionId: "section_1",
@@ -505,8 +507,7 @@ describe("core domain schemas", () => {
         selectedDirectionId: "direction_1",
         sequence: 1,
         title: "下一个场景",
-        prose:
-          "许澄没有沿用原来的移交路线。她带着仍由自己保管的红账走进雨夜，在沈砚的见证下重新封存原件。周岚只通过电话记录封条编号和时间，没有接触账簿。堤岸外的车灯扫过窗框时，许澄把钥匙收进口袋，决定等风暴过去便亲自提交证据。这个选择没有恢复已经被删除的移交事实，也没有改写原著基线。",
+        prose: M1_06_LONG_SCENE_PROSE,
         statePatch: {
           factsAdded: [
             {

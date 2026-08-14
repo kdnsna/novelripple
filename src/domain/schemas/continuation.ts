@@ -112,7 +112,7 @@ export const ContinuationDirectionsSchema = z
 export const ContinuationSceneModelOutputSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
-    prose: z.string().trim().min(100),
+    prose: z.string().trim().min(1_200),
     statePatch: StatePatchSchema,
   })
   .strict();
@@ -127,7 +127,7 @@ export const ContinuationSchema = z
     selectedDirectionId: z.string().min(1),
     sequence: z.literal(1),
     title: z.string().trim().min(1).max(200),
-    prose: z.string().trim().min(100),
+    prose: z.string().trim().min(1_200),
     statePatch: StatePatchSchema,
     contentKind: z.literal("generated"),
     createdAt: z.iso.datetime(),

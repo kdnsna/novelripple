@@ -14,6 +14,7 @@ import {
 } from "@/domain/invariants/validate-continuation";
 import { createWorldline } from "@/domain/services/create-worldline";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
+import { M1_06_LONG_SCENE_PROSE } from "../helpers/continuation-scene-fixtures";
 
 async function createStrictReroutedState() {
   const fixture = await loadRippleFixture();
@@ -81,8 +82,7 @@ function validDirections(): ContinuationDirectionsModelOutput {
 function validScene(): ContinuationSceneModelOutput {
   return {
     title: "钟楼里的第二份记录",
-    prose:
-      "雨水沿钟楼铜门的接缝渗进来。许澄没有把红账交给周岚，而是把文件袋固定在维修台的金属环上。她让沈砚逐页报出编号，自己用离线相机记录封口与时间。周岚隔着电话听完每一项，提醒她不要把任何未经核对的推断写进记录。楼下忽然传来车门关闭的闷响，顾闻舟显然已经改变了追踪目标。许澄没有移动原件，只把刚生成的校验值念给周岚，让外部见证先于下一次接触成立。",
+    prose: M1_06_LONG_SCENE_PROSE,
     statePatch: {
       factsAdded: [
         {
@@ -104,6 +104,23 @@ function validScene(): ContinuationSceneModelOutput {
 }
 
 describe("Continuation domain", () => {
+  it("rejects scene prose below the M1-06 1200-character floor and accepts above it", async () => {
+    const { fixture } = await createStrictReroutedState();
+    expect(
+      ContinuationSceneModelOutputSchema.safeParse({
+        ...validScene(),
+        prose: "太短。".repeat(300),
+      }).success,
+    ).toBe(false);
+    const longEnough = "风".repeat(1_200);
+    const parsed = ContinuationSceneModelOutputSchema.parse({
+      ...validScene(),
+      prose: longEnough,
+    });
+    expect(parsed.prose).toHaveLength(1_200);
+    expect(fixture.storyMap.id).toBeTruthy();
+  });
+
   it("derives a baseline-plus-delta state without copying the Canon Story Map", async () => {
     const { delta } = await createStrictReroutedState();
 

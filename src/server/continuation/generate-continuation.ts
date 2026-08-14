@@ -6,6 +6,7 @@ import {
   validateContinuationDirections,
   validateContinuationStatePatch,
 } from "@/domain/invariants/validate-continuation";
+import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { assertValidStoryMap } from "@/domain/invariants/validate-story-map";
 import {
   ContinuationDirectionsModelOutputSchema,
@@ -33,7 +34,8 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const promptVersion = "continuation.v1";
+const directionsPromptVersion = "continuation.v1";
+const scenePromptVersion = "continuation.v2";
 
 export async function generateContinuationDirections(input: {
   projectId: string;
@@ -56,7 +58,7 @@ export async function generateContinuationDirections(input: {
       projectId: input.projectId,
       worldlineId: context.worldline.id,
       kind: "continuation_directions",
-      promptVersion,
+      promptVersion: directionsPromptVersion,
       prompt,
       schemaName: "continuation_directions",
       schema: ContinuationDirectionsModelOutputSchema,
@@ -132,7 +134,7 @@ export async function generateContinuationScene(input: {
       projectId: input.projectId,
       worldlineId: context.worldline.id,
       kind: "continuation_scene",
-      promptVersion,
+      promptVersion: scenePromptVersion,
       prompt,
       schemaName: "continuation_scene",
       schema: ContinuationSceneModelOutputSchema,
@@ -227,6 +229,8 @@ async function buildPrompt(
   context: ContinuationContext,
   selectedDirection?: ContinuationDirection,
 ): Promise<string> {
+  const promptVersion =
+    stage === "scene" ? scenePromptVersion : directionsPromptVersion;
   const template = await readFile(
     path.join(process.cwd(), "prompts", `${promptVersion}.md`),
     "utf8",
@@ -273,6 +277,16 @@ async function buildPrompt(
       excerpt: context.source.normalizedText.slice(reference.start, reference.end),
     })),
   );
+  const styleContext =
+    stage === "scene" && selectedDirection
+      ? selectContinuationContext({
+          storyMap,
+          source: context.source,
+          worldline: context.worldline,
+          acceptedImpactPlan: context.acceptedImpactPlanArtifact,
+          selectedDirection,
+        })
+      : undefined;
   const packet = {
     stage,
     readonlyCanonical,
@@ -281,6 +295,7 @@ async function buildPrompt(
     acceptedImpactPlan: context.acceptedImpactPlanArtifact.impactPlan,
     relevantEvidence,
     currentState: context.currentState,
+    ...(styleContext ? { styleContext } : {}),
     ...(selectedDirection ? { selectedDirection } : {}),
   };
 
