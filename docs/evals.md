@@ -15,6 +15,7 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`M1-04 Guided Review 真实候选回归（FAIL）`](evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)：三篇冻结私人候选均可派生优先队列与 readiness，公开 fixture 的全部不可变修正和 E2E 通过；Story A 已取得一次真人计时观察（7 分钟、16 次修正），但 B/C 未测且 A 的 material revisions 超过门槛，不能放行 correction-cost gate。
 - [`M1-05 Ripple Suggestions 与反馈重推真实回归（PASS）`](evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)：同一 `deepseek-chat / json_object` 下三篇均生成 3 个推荐、初始 candidate 与反馈后不可变 revision，自动硬不变量全部通过；2026-08-13 人工语义复核完成（每篇推荐价值 ≥2/3、反馈问题解决），M1-05 放行。
 - [`M1-06 单场景 Continuation 质量（PASS）`](evals/runs/m1-06-continuation-2026-08-14-d3abd3fd.md)：`deepseek-v4-flash / json_object` 下三篇均一次完成 directions→scene 全链路，场景长度 1274–1396 汉字全在目标区间、六项一致性 hard gate 与五项隔离全部通过；2026-08-14 人工量表完成（三篇 worldline/character/narrative/interest 全 5、愿意继续读 3/3），M1-06 放行。
+- [`M1-07 M1 Real Story Eval 聚合与最终 Gate（FAIL）`](evals/runs/m1-07-final-2026-08-14.md)：`npm run eval:m1` 聚合六大块指标与全部门禁；Story Map gate 三篇 FAIL（Ending Candidate recall A/B 66.7%、C 50%，聚合 identity F1 83.3%）、correction cost A 超限（16 revisions）且 B/C 未观察、Ripple strict B/C 通过 A 无法评测（anchor 缺口实证）、Continuation PASS、用户观察未开始；**v0.2.0 不可发布，停止不进入 M1-08**。
 
 后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。同一运行在人工复核后结论翻转（如 FAIL → PASS）时，应在原报告追加"人工语义复核记录"章节并同步更新本索引条目，两处结论必须一致；跨运行的新结果始终写入新文件。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
 
