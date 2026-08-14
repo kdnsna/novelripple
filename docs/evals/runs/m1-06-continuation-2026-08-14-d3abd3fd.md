@@ -22,7 +22,7 @@ confirmed Story Map
 
 三篇所有自动化硬不变量均通过：scene prose 长度全部落在 1200–2000 汉字目标区间、statePatch 六项一致性检查全部通过（hardGate=true）、Source/Story Map/canonical 与兄弟 Worldline 隔离五项全部不变、每个阶段一次成功（无 repair、无空响应重试）。
 
-**状态：awaiting_human_review**——M1 gate 的人工量表（Worldline consistency / Character continuity / Narrative continuity / Scene interest 1–5 + Would continue reading）待人工完成，三篇场景全文在本地私有存档（`novelripple-m1-review-kit/m1-06-scenes/`，不进 Git）。
+**M1-06 PASS**（2026-08-14 人工量表完成，见文末"人工量表记录"）。
 
 ## 实际产品合同
 
@@ -50,16 +50,21 @@ confirmed Story Map
 
 模型：`deepseek-v4-flash`；模式：`json_object`（DeepSeek 兼容，本地 Zod 校验）；无任何阶段触发 repair 或空响应重试。
 
-## 人工量表（占位，待评分）
+## 人工量表记录（2026-08-14 完成）
 
-每篇在本地私有存档中提供：selected direction、scene 全文、statePatch 摘要（`m1-06-scenes/m1-06-story-<class>.md`）。请对每篇给出：
+评分人：大爷（真实读者）。每篇依据本地私有场景存档（`m1-06-scenes/m1-06-story-<class>.md`）全文阅读后评分。
 
-- Worldline consistency 1–5
-- Character continuity 1–5
-- Narrative continuity 1–5
-- Scene interest 1–5
-- Would continue reading yes/no
+| 维度 | Story A | Story B | Story C |
+| --- | --- | --- | --- |
+| Worldline consistency 1–5 | 5 | 5 | 5 |
+| Character continuity 1–5 | 5 | 5 | 5 |
+| Narrative continuity 1–5 | 5 | 5 | 5 |
+| Scene interest 1–5 | 5 | 5 | 5 |
+| Would continue reading | yes | yes | yes |
 
-M1 gate：worldline ≥ 4、narrative ≥ 3.5、至少 2/3 benchmark 愿意继续阅读。
+M1 gate 判定：
+- worldline ≥ 4：三篇均 5 ✅
+- narrative ≥ 3.5：三篇均 5 ✅
+- ≥2/3 愿意继续阅读：3/3 ✅
 
-> 评分完成后在文末追加“人工量表记录”并更新本报告结论与 `docs/evals.md` 索引（两处结论必须一致）。
+**结论：M1-06 PASS。** 三篇真实作品均产出符合 Canon、Delta 与 Anchor 约束、风格一致且值得继续阅读的首个 Continuation 场景；场景长度全部落在 1200–2000 汉字目标区间。实现 commit `868249c`，评测 run `20260814054950374-868249c-d3abd3fd`。

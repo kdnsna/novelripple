@@ -14,7 +14,7 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`M1-03 Section-first 真实作品回归（FAIL）`](evals/runs/m1-03-section-first-2026-08-13.md)：统一 section-first 候选在同一 `deepseek-chat / json_object` 上三篇均因局部逐字 Evidence claim 在一次 repair 后仍无效而未创建 Artifact；按预设 retention gate 已撤销生产实现，不能把不完整运行的 token 降低解释为质量改善。
 - [`M1-04 Guided Review 真实候选回归（FAIL）`](evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)：三篇冻结私人候选均可派生优先队列与 readiness，公开 fixture 的全部不可变修正和 E2E 通过；Story A 已取得一次真人计时观察（7 分钟、16 次修正），但 B/C 未测且 A 的 material revisions 超过门槛，不能放行 correction-cost gate。
 - [`M1-05 Ripple Suggestions 与反馈重推真实回归（PASS）`](evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)：同一 `deepseek-chat / json_object` 下三篇均生成 3 个推荐、初始 candidate 与反馈后不可变 revision，自动硬不变量全部通过；2026-08-13 人工语义复核完成（每篇推荐价值 ≥2/3、反馈问题解决），M1-05 放行。
-- [`M1-06 单场景 Continuation 质量（awaiting_human_review）`](evals/runs/m1-06-continuation-2026-08-14-d3abd3fd.md)：`deepseek-v4-flash / json_object` 下三篇均一次完成 directions→scene 全链路，场景长度 1274–1396 汉字全在目标区间、六项一致性 hard gate 与五项隔离全部通过；M1 gate 人工量表待评分。
+- [`M1-06 单场景 Continuation 质量（PASS）`](evals/runs/m1-06-continuation-2026-08-14-d3abd3fd.md)：`deepseek-v4-flash / json_object` 下三篇均一次完成 directions→scene 全链路，场景长度 1274–1396 汉字全在目标区间、六项一致性 hard gate 与五项隔离全部通过；2026-08-14 人工量表完成（三篇 worldline/character/narrative/interest 全 5、愿意继续读 3/3），M1-06 放行。
 
 后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。同一运行在人工复核后结论翻转（如 FAIL → PASS）时，应在原报告追加"人工语义复核记录"章节并同步更新本索引条目，两处结论必须一致；跨运行的新结果始终写入新文件。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
 
