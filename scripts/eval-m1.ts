@@ -442,7 +442,15 @@ async function main() {
     const gateLabel = (
       passed: boolean,
       failures: string[],
-    ): string => (passed ? "PASS" : failures.length === 0 || failures.every((f) => f.includes("missing")) ? "MISSING" : "FAIL");
+    ): string =>
+      passed
+        ? "PASS"
+        : failures.length === 0 ||
+            failures.every(
+              (f) => f.includes("missing") || f.includes("not_evaluated"),
+            )
+          ? "MISSING"
+          : "FAIL";
     console.log(
       `Story ${story.storyClass}: storyMap=${gateLabel(story.storyMapGate.passed, story.storyMapGate.failures)} correction=${story.correctionCostGate.passed === null ? "MISSING" : story.correctionCostGate.passed ? "PASS" : "FAIL"} ripple=${gateLabel(story.rippleGate.passed, story.rippleGate.failures)} continuation=${gateLabel(story.continuationGate.passed, story.continuationGate.failures)}`,
     );
