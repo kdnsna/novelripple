@@ -439,8 +439,12 @@ async function main() {
   console.log(`Run: ${runId}`);
   console.log(`Verdict: ${verdict}`);
   for (const story of stories) {
+    const gateLabel = (
+      passed: boolean,
+      failures: string[],
+    ): string => (passed ? "PASS" : failures.length === 0 || failures.every((f) => f.includes("missing")) ? "MISSING" : "FAIL");
     console.log(
-      `Story ${story.storyClass}: storyMap=${story.storyMapGate.passed ? "PASS" : "MISSING/FAIL"} correction=${story.correctionCostGate.passed === null ? "MISSING" : story.correctionCostGate.passed ? "PASS" : "FAIL"} ripple=${story.rippleGate.passed ? "PASS" : "MISSING/FAIL"} continuation=${story.continuationGate.passed ? "PASS" : "MISSING/FAIL"}`,
+      `Story ${story.storyClass}: storyMap=${gateLabel(story.storyMapGate.passed, story.storyMapGate.failures)} correction=${story.correctionCostGate.passed === null ? "MISSING" : story.correctionCostGate.passed ? "PASS" : "FAIL"} ripple=${gateLabel(story.rippleGate.passed, story.rippleGate.failures)} continuation=${gateLabel(story.continuationGate.passed, story.continuationGate.failures)}`,
     );
   }
   console.log(`Missing data: ${missingData.join(", ") || "none"}`);
