@@ -23,6 +23,7 @@
     "eval:live": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-live.ts",
     "eval:m1:baseline": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-m1-baseline.ts",
     "eval:m1:ripple-guidance": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-m1-ripple-guidance.ts",
+    "eval:m1:ripple-strict": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-m1-ripple-strict.ts",
     "eval:m1": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-m1.ts",
     "eval:m1:continuation": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-m1-continuation.ts",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build",
