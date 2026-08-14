@@ -13,6 +13,7 @@ const RuntimeConfigSchema = z
       "json_object",
       "prompt_json",
     ]),
+    maxTokens: z.number().int().positive().max(1_000_000).optional(),
   })
   .strict();
 
@@ -22,16 +23,23 @@ export type ConfiguredAI = {
 };
 
 export function readConfiguredAI(): ConfiguredAI {
+  const maxTokens = process.env.OPENAI_MAX_TOKENS
+    ? Number(process.env.OPENAI_MAX_TOKENS)
+    : undefined;
   const config = RuntimeConfigSchema.parse({
     providerName: process.env.AI_PROVIDER_NAME,
     model: process.env.OPENAI_MODEL,
     structuredOutputMode: process.env.OPENAI_STRUCTURED_OUTPUT_MODE,
+    ...(Number.isFinite(maxTokens) && maxTokens! > 0
+      ? { maxTokens }
+      : {}),
   });
   return {
     providerName: config.providerName,
     modelConfig: {
       model: config.model,
       structuredOutputMode: config.structuredOutputMode,
+      ...(config.maxTokens ? { maxTokens: config.maxTokens } : {}),
     },
   };
 }

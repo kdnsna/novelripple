@@ -100,6 +100,7 @@ export class OpenAICompatibleProvider implements AIProvider {
           "json_object",
           "prompt_json",
         ]),
+        maxTokens: z.number().int().positive().optional(),
       })
       .strict()
       .parse(request.modelConfig);
@@ -131,6 +132,9 @@ export class OpenAICompatibleProvider implements AIProvider {
         model: modelConfig.model,
         messages,
         ...(responseFormat ? { response_format: responseFormat } : {}),
+        ...(modelConfig.maxTokens
+          ? { max_tokens: modelConfig.maxTokens }
+          : {}),
       },
       { timeout: requestTimeoutMs },
     );

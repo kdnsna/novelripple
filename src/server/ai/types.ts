@@ -8,6 +8,9 @@ export type StructuredOutputMode =
 export type ModelConfig = {
   model: string;
   structuredOutputMode: StructuredOutputMode;
+  /** 输出 token 上限（可选）。推理模型思考 token 计入输出预算，不设置时
+   *  按服务商默认（DeepSeek 4096），长文生成（如 1200+ 字场景）可能被截断成空响应。 */
+  maxTokens?: number;
 };
 
 export type GenerationUsage = {

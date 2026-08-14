@@ -35,6 +35,7 @@ const InputMetadataSchema = z
           "json_object",
           "prompt_json",
         ]),
+        maxTokens: z.number().int().positive().optional(),
       })
       .strict(),
   })
