@@ -108,12 +108,32 @@ export async function generateStructured<T>(
       modelConfig: metadata.modelConfig,
     });
   } catch (error) {
-    failGenerationRun({
-      id: run.id,
-      rawOutput: null,
-      error: errorMessage(error),
-    });
-    throw error;
+    // 空响应（模型瞬时故障，如 DeepSeek 偶发返回无文本内容）重试一次；
+    // 其他错误直接失败。重试成功后仍按 initial 处理，不占 repair 名额。
+    if (isEmptyResponseError(error)) {
+      try {
+        initialResponse = await provider.generate({
+          prompt: metadata.prompt,
+          schemaName: metadata.schemaName,
+          jsonSchema,
+          modelConfig: metadata.modelConfig,
+        });
+      } catch (retryError) {
+        failGenerationRun({
+          id: run.id,
+          rawOutput: null,
+          error: errorMessage(retryError),
+        });
+        throw retryError;
+      }
+    } else {
+      failGenerationRun({
+        id: run.id,
+        rawOutput: null,
+        error: errorMessage(error),
+      });
+      throw error;
+    }
   }
 
   attempts.push({ kind: "initial", rawOutput: initialResponse.rawOutput });
@@ -245,6 +265,14 @@ function serializeAttempts(attempts: Attempt[]): string {
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown provider error";
   return message.slice(0, 2_000);
+}
+
+/** 空响应错误：provider 返回了无文本内容的完成（模型瞬时故障，可安全重试一次）。 */
+function isEmptyResponseError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("no text content")
+  );
 }
 
 function buildResult<T>(

@@ -246,4 +246,37 @@ describe("structured generation", () => {
       error: "validator crashed",
     });
   });
+
+  it("retries once when the provider returns an empty-text response", async () => {
+    const project = createProject({ title: "空响应重试" });
+    const provider = new MockAIProvider([
+      new Error("OpenAI-compatible response contained no text content"),
+      '{"answer":"ok"}',
+    ]);
+
+    const result = await generateStructured(createInput(project.id), provider);
+
+    expect(provider.requests).toHaveLength(2);
+    expect(result.value).toEqual({ answer: "ok" });
+    expect(getGenerationRun(result.generation.runId)).toMatchObject({
+      status: "succeeded",
+    });
+  });
+
+  it("fails the run when both attempts return empty-text responses", async () => {
+    const project = createProject({ title: "空响应两次" });
+    const provider = new MockAIProvider([
+      new Error("OpenAI-compatible response contained no text content"),
+      new Error("OpenAI-compatible response contained no text content"),
+    ]);
+
+    await expect(
+      generateStructured(createInput(project.id), provider),
+    ).rejects.toThrow("no text content");
+
+    expect(provider.requests).toHaveLength(2);
+    expect(listProjectGenerationRuns(project.id)[0]).toMatchObject({
+      status: "failed",
+    });
+  });
 });
