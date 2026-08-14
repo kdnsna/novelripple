@@ -109,17 +109,25 @@ export async function generateStructured<T>(
       modelConfig: metadata.modelConfig,
     });
   } catch (error) {
-    // 空响应（模型瞬时故障，如 DeepSeek 偶发返回无文本内容）重试一次；
+    // 空响应（模型瞬时故障，如 DeepSeek 偶发返回无文本内容）重试最多两次；
     // 其他错误直接失败。重试成功后仍按 initial 处理，不占 repair 名额。
     if (isEmptyResponseError(error)) {
-      try {
-        initialResponse = await provider.generate({
-          prompt: metadata.prompt,
-          schemaName: metadata.schemaName,
-          jsonSchema,
-          modelConfig: metadata.modelConfig,
-        });
-      } catch (retryError) {
+      let retryError: unknown = error;
+      for (let retry = 0; retry < 2; retry++) {
+        try {
+          initialResponse = await provider.generate({
+            prompt: metadata.prompt,
+            schemaName: metadata.schemaName,
+            jsonSchema,
+            modelConfig: metadata.modelConfig,
+          });
+          retryError = null;
+          break;
+        } catch (nextError) {
+          retryError = nextError;
+        }
+      }
+      if (retryError !== null) {
         failGenerationRun({
           id: run.id,
           rawOutput: null,
@@ -127,6 +135,8 @@ export async function generateStructured<T>(
         });
         throw retryError;
       }
+      // retryError === null 时循环内必然已赋值
+      initialResponse = initialResponse!;
     } else {
       failGenerationRun({
         id: run.id,

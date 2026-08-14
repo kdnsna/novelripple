@@ -263,9 +263,10 @@ describe("structured generation", () => {
     });
   });
 
-  it("fails the run when both attempts return empty-text responses", async () => {
-    const project = createProject({ title: "空响应两次" });
+  it("fails the run when all three attempts return empty-text responses", async () => {
+    const project = createProject({ title: "空响应三次" });
     const provider = new MockAIProvider([
+      new Error("OpenAI-compatible response contained no text content"),
       new Error("OpenAI-compatible response contained no text content"),
       new Error("OpenAI-compatible response contained no text content"),
     ]);
@@ -274,7 +275,7 @@ describe("structured generation", () => {
       generateStructured(createInput(project.id), provider),
     ).rejects.toThrow("no text content");
 
-    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests).toHaveLength(3);
     expect(listProjectGenerationRuns(project.id)[0]).toMatchObject({
       status: "failed",
     });
