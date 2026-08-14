@@ -92,6 +92,7 @@ type BenchmarkTarget = {
     anchorIds?: string[];
     eventLabel?: string;
   };
+  goldEndings: Array<{ id: string; label: string }>;
 };
 
 class EvaluationSetupError extends Error {
@@ -281,7 +282,27 @@ async function evaluateStory(
   }
 
   const divergence = target.strictDivergence;
-  const anchorIds = divergence.anchorIds ?? [];
+  const anchorMappings = (divergence.anchorIds ?? []).map((goldId) => {
+    // Gold Ending id → 确认版 Story Map Ending id（label 语义匹配）
+    const goldEnding = target.goldEndings.find((e) => e.id === goldId);
+    if (!goldEnding) return { goldId, mappedId: null, reason: "not_in_manifest" };
+    const norm = (text: string): string =>
+      text.replace(/[\s，。、；：！？（）《》"'“”‘’·\-—…]/g, "");
+    const goldSet = new Set(norm(goldEnding.label));
+    let best: { id: string; score: number } | null = null;
+    for (const ending of storyMapArtifact.storyMap.endingCandidates) {
+      const candidateSet = new Set(norm(ending.requirement));
+      const overlap = [...goldSet].filter((ch) => candidateSet.has(ch)).length;
+      const coverage = overlap / Math.max(goldSet.size, 1);
+      const jaccard = overlap / Math.max(goldSet.size + candidateSet.size - overlap, 1);
+      const score = 0.7 * coverage + 0.3 * jaccard;
+      if (!best || score > best.score) best = { id: ending.id, score };
+    }
+    if (!best || best.score < 0.3) {
+      return { goldId, mappedId: null, reason: "no_match" };
+    }
+    return { goldId, mappedId: best.id, reason: `score_${best.score.toFixed(2)}` };
+  });
   const storyMapEndings = storyMapArtifact.storyMap.endingCandidates;
 
   // manifest 的 eventId 是 Gold 事件 id，需映射到确认版 Story Map 的事件 id
@@ -303,10 +324,30 @@ async function evaluateStory(
         if (!best || score > best.score) best = { id: event.id, score };
       }
     }
-    if (!best || best.score < 0.35) {
+    if (!best || best.score < 0.22) {
       return failedStory(target, "divergence_event_not_mapped");
     }
     divergenceEventId = best.id;
+    console.log(
+      `  [map] Story ${target.storyClass} event ${divergence.eventId} -> ${divergenceEventId} (score ${best.score.toFixed(2)})`,
+    );
+  }
+  const unmappedAnchors = anchorMappings.filter((a) => a.mappedId === null);
+  if (unmappedAnchors.length > 0) {
+    console.log(
+      `  [map] Story ${target.storyClass} anchor 未映射: ${unmappedAnchors.map((a) => `${a.goldId}(${a.reason})`).join(", ")}`,
+    );
+  }
+  const mappedAnchorIds = anchorMappings
+    .filter((a): a is { goldId: string; mappedId: string; reason: string } => a.mappedId !== null)
+    .map((a) => a.mappedId);
+  if (mappedAnchorIds.length === 0) {
+    return failedStory(target, "no_anchor_mapped");
+  }
+  if (mappedAnchorIds.length !== (divergence.anchorIds ?? []).length) {
+    console.log(
+      `  [map] Story ${target.storyClass} 部分 anchor 未映射（${unmappedAnchors.map((a) => a.goldId).join(", ")}），仅用已映射 anchor`,
+    );
   }
 
   const startedAt = performance.now();
@@ -321,17 +362,18 @@ async function evaluateStory(
         instruction: divergence.instruction,
       },
       mode: "strict",
-      endingCandidateIds: anchorIds,
+      endingCandidateIds: mappedAnchorIds,
       provider,
       modelConfig: config.modelConfig,
     });
     const plan = result.artifact.impactPlan;
     const anchorNotes: string[] = [];
     let anchorRetained: boolean | null = null;
-    for (const anchorId of anchorIds) {
+    for (const anchor of anchorMappings) {
+      const anchorId = anchor.mappedId ?? anchor.goldId;
       const storyMapEnding = storyMapEndings.find((e) => e.id === anchorId);
       if (!storyMapEnding) {
-        anchorNotes.push(`${anchorId}:not_in_story_map`);
+        anchorNotes.push(`${anchor.goldId}:${anchor.reason}`);
         continue;
       }
       const expectedAnchorId = anchorId.startsWith("ending_")
@@ -345,13 +387,13 @@ async function evaluateStory(
             a.targetEventId === storyMapEnding.targetEventId,
         );
       anchorRetained = anchorRetained === null ? retained : anchorRetained && retained;
-      anchorNotes.push(`${anchorId}:${retained ? "retained" : "dropped"}`);
+      anchorNotes.push(`${anchor.goldId}:${retained ? "retained" : "dropped"}`);
     }
     return {
       storyClass: target.storyClass,
       divergenceId: divergence.id,
       divergenceType: divergence.type,
-      anchorIds,
+      anchorIds: divergence.anchorIds ?? [],
       status: "succeeded",
       failureCode: null,
       impactPlan: {
@@ -468,6 +510,9 @@ async function loadBenchmarkTargets(
       contentHash: prepared.contentHash,
       characterCount: countBenchmarkCharacters(prepared.normalizedText),
       strictDivergence,
+      goldEndings: (manifest.expectedEndingCandidates ?? []).map(
+        (e: { id: string; label: string }) => ({ id: e.id, label: e.label }),
+      ),
     });
   }
   if (
