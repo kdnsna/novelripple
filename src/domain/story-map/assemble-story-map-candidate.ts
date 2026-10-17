@@ -287,37 +287,19 @@ export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
   );
 }
 
-const AUTHORIAL_NARRATOR_MARKERS = [
-  "旁白",
-  "叙述",
-  "叙事",
-  "作者",
-  "笔者",
-  "说书",
-  "画外音",
-];
-
 /**
- * 人名轮允许拒绝的候选：漏网的群体/家族/机构，以及只评论、不参与情节的
- * 作者叙事者。参与事件的具体个体即使无名、只短暂出现或处于边缘，也必须
- * 合并为 `role: "minor"`，不能通过 `rejectedCandidateIds` 丢掉。
+ * 人名轮允许拒绝的候选：漏网的群体/家族/机构，以及没有参与任何事件、
+ * 只被提到或评论的候选（作者叙事者、路人传闻等）。参与事件的具体个体即使
+ * 无名、只短暂出现或处于边缘，也必须合并为 `role: "minor"`，不能通过
+ * `rejectedCandidateIds` 丢掉；拒绝列表只删除真正可拒绝的候选，不降级。
  */
 export function canRejectRosterCandidate(
   candidate: Pick<PooledCharacter, "id" | "name" | "kind">,
   eventParticipants: ReadonlySet<string>,
 ): boolean {
   if (isGroupCharacter(candidate)) return true;
-  if (eventParticipants.has(candidate.id)) return false;
-  return isAuthorialNarratorName(candidate.name);
+  return !eventParticipants.has(candidate.id);
 }
-
-function isAuthorialNarratorName(value: string): boolean {
-  const name = value.normalize("NFKC").trim().toLowerCase();
-  if (name === "narrator") return true;
-  return AUTHORIAL_NARRATOR_MARKERS.some((marker) => name.includes(marker));
-}
-
-// ── 人名轮次 ──
 
 export function validateRoster(
   roster: StoryMapRosterCandidate,
@@ -438,7 +420,7 @@ export function applyRoster(
 }
 
 /** 最终人物的别名上限；人名轮给出的别名优先保留。 */
-const MAX_CHARACTER_ALIASES = 12;
+export const MAX_CHARACTER_ALIASES = 12;
 
 /**
  * 合并后人物的别名 = 人名轮别名 ∪ 每个 mergedFrom 候选的 name 与 aliases。

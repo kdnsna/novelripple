@@ -157,8 +157,9 @@ export const StoryMapGleaningCandidateSchema = z
 
 /**
  * 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物，
- * 或明确列入 `rejectedCandidateIds`（只允许漏网的群体/家族/机构，以及只评论的
- * 作者叙事者；短暂、无名、边缘或不确定的具体人物应合并为 `role: "minor"`）。
+ * 或明确列入 `rejectedCandidateIds`（允许漏网的群体/家族/机构，以及没有参与
+ * 任何事件、只被提到的候选；参与事件的具体人物，即使短暂、无名、边缘或
+ * 不确定，也应合并为 `role: "minor"`）。
  */
 export const StoryMapRosterCandidateSchema = z
   .object({

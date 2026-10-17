@@ -448,27 +448,56 @@ function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
     const tieredSummary = tieredIdentity
       ? `; tieredIdentityR=${formatRateValue(tieredIdentity.recall)}; tieredIdentityP=${formatRateValue(tieredIdentity.precision)}; tieredIdentityF1=${formatRateValue(tieredIdentity.f1)}; minorCandidates=${tieredIdentity.minorCandidateTotal}`
       : "";
+    const aliasStats = story.storyMap?.identity.aliasStats;
+    const aliasSummary = aliasStats
+      ? `; aliases(mean/max/atCap)=${aliasStats.meanAliases.toFixed(1)}/${aliasStats.maxAliases}/${aliasStats.charactersAtCap}`
+      : "";
     console.log(
-      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}${goldSummary}${tieredSummary}`,
+      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}${goldSummary}${tieredSummary}${aliasSummary}`,
     );
   }
   console.log(`Sanitized JSON: ${reportPath}`);
   console.log("下一步：使用 eval.db 完成人工 revision/确认与 strict/open Ripple；不得把正文复制到报告。 ");
 }
 
+type ChancePair = { loose: number; strict: number };
+type ChanceMapScore = NonNullable<
+  M1GoldMatch["chanceBaseline"]["goldAlignedCopy"]
+>;
+
 function formatGoldMatch(goldMatch: M1GoldMatch): string {
   const chance = goldMatch.chanceBaseline;
-  const pair = (loose: number, strict: number) => ({ loose, strict });
+  const pair = (loose: number, strict: number): ChancePair => ({
+    loose,
+    strict,
+  });
+  const truncatedPair = (
+    value: ChanceMapScore | undefined,
+    metric: "events" | "edges" | "endings",
+  ): ChancePair | undefined =>
+    value
+      ? pair(value.loose[metric].f1, value.strict[metric].f1)
+      : undefined;
   const section = (
     name: string,
     loose: number,
     strict: number,
-    matchedChance: { loose: number; strict: number },
-    denseChance: { loose: number; strict: number },
+    matchedChance: ChancePair,
+    denseChance: ChancePair,
+    stuffingChance: ChancePair,
+    sourceCopyChance: ChancePair,
+    goldAlignedCopyChance: ChancePair,
+    truncated2xChance: ChancePair | undefined,
+    truncated4xChance: ChancePair | undefined,
   ) =>
     `gold${name} loose=${formatRateValue(loose)} strict=${formatRateValue(strict)} ` +
     `chance(loose/strict)=${formatRateValue(matchedChance.loose)}/${formatRateValue(matchedChance.strict)} ` +
-    `dense(loose/strict)=${formatRateValue(denseChance.loose)}/${formatRateValue(denseChance.strict)}`;
+    `dense(loose/strict)=${formatRateValue(denseChance.loose)}/${formatRateValue(denseChance.strict)} ` +
+    `stuffing(loose/strict)=${formatRateValue(stuffingChance.loose)}/${formatRateValue(stuffingChance.strict)} ` +
+    `sourceCopy(loose/strict)=${formatRateValue(sourceCopyChance.loose)}/${formatRateValue(sourceCopyChance.strict)} ` +
+    `goldAlignedCopy(loose/strict)=${formatRateValue(goldAlignedCopyChance.loose)}/${formatRateValue(goldAlignedCopyChance.strict)} ` +
+    `gaTrunc2x(loose/strict)=${formatOptionalChancePair(truncated2xChance)} ` +
+    `gaTrunc4x(loose/strict)=${formatOptionalChancePair(truncated4xChance)}`;
   return [
     section(
       "Events",
@@ -476,6 +505,14 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
       goldMatch.strict.events.f1,
       pair(chance.matched.loose.events.f1, chance.matched.strict.events.f1),
       pair(chance.dense.loose.events.f1, chance.dense.strict.events.f1),
+      pair(chance.stuffing.loose.events.f1, chance.stuffing.strict.events.f1),
+      pair(chance.sourceCopy.loose.events.f1, chance.sourceCopy.strict.events.f1),
+      pair(
+        chance.goldAlignedCopy.loose.events.f1,
+        chance.goldAlignedCopy.strict.events.f1,
+      ),
+      truncatedPair(chance.goldAlignedTruncatedCopy2x, "events"),
+      truncatedPair(chance.goldAlignedTruncatedCopy4x, "events"),
     ),
     section(
       "Edges",
@@ -483,6 +520,14 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
       goldMatch.strict.edges.f1,
       pair(chance.matched.loose.edges.f1, chance.matched.strict.edges.f1),
       pair(chance.dense.loose.edges.f1, chance.dense.strict.edges.f1),
+      pair(chance.stuffing.loose.edges.f1, chance.stuffing.strict.edges.f1),
+      pair(chance.sourceCopy.loose.edges.f1, chance.sourceCopy.strict.edges.f1),
+      pair(
+        chance.goldAlignedCopy.loose.edges.f1,
+        chance.goldAlignedCopy.strict.edges.f1,
+      ),
+      truncatedPair(chance.goldAlignedTruncatedCopy2x, "edges"),
+      truncatedPair(chance.goldAlignedTruncatedCopy4x, "edges"),
     ),
     section(
       "Endings",
@@ -490,11 +535,25 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
       goldMatch.strict.endings.f1,
       pair(chance.matched.loose.endings.f1, chance.matched.strict.endings.f1),
       pair(chance.dense.loose.endings.f1, chance.dense.strict.endings.f1),
+      pair(chance.stuffing.loose.endings.f1, chance.stuffing.strict.endings.f1),
+      pair(chance.sourceCopy.loose.endings.f1, chance.sourceCopy.strict.endings.f1),
+      pair(
+        chance.goldAlignedCopy.loose.endings.f1,
+        chance.goldAlignedCopy.strict.endings.f1,
+      ),
+      truncatedPair(chance.goldAlignedTruncatedCopy2x, "endings"),
+      truncatedPair(chance.goldAlignedTruncatedCopy4x, "endings"),
     ),
     `goldHardRecall=${formatRate(goldMatch.edges.hardRecall)}`,
     `goldNonInterpretiveRecall=${formatRate(goldMatch.endings.nonInterpretiveRecall)}`,
     `lenientIdentityF1=${formatRateValue(goldMatch.lenientIdentity.f1)}`,
   ].join("; ");
+}
+
+function formatOptionalChancePair(value: ChancePair | undefined): string {
+  return value
+    ? `${formatRateValue(value.loose)}/${formatRateValue(value.strict)}`
+    : "not_available";
 }
 
 function formatRate(value: { matched: number; total: number; rate: number }) {

@@ -1,3 +1,8 @@
+import { lstatSync, realpathSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -146,5 +151,99 @@ describe("M1 report routing", () => {
         reportDirProvided: true,
       }).reportTarget,
     ).toBe("run-directory");
+  });
+
+  it("realpaths a symlink from an ignored directory into a tracked directory before checking", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "m1-report-routing-"));
+    try {
+      const repo = path.join(temp, "repo");
+      const tracked = path.join(repo, "docs");
+      const ignored = path.join(repo, ".data", "evals");
+      await mkdir(tracked, { recursive: true });
+      await mkdir(ignored, { recursive: true });
+      await symlink(tracked, path.join(ignored, "escape"), "dir");
+      const checked: string[] = [];
+
+      expect(() =>
+        resolveM1ReportRouting({
+          repositoryRoot: realpathSync(repo),
+          stories: [story({ visibility: "private" })],
+          reportDir: path.join(ignored, "escape", "run"),
+          reportDirProvided: true,
+          isGitIgnored: (candidate) => {
+            checked.push(candidate);
+            return candidate.startsWith(ignored);
+          },
+          realpath: (candidate) => realpathSync(candidate),
+        }),
+      ).toThrow(M1ReportRoutingError);
+      // 检查看到的是真实目标 docs/run，而不是被忽略目录里的链接路径。
+      expect(checked).toEqual([path.join(realpathSync(tracked), "run")]);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling symlink whose target inside a tracked directory does not exist yet", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "m1-report-routing-"));
+    try {
+      const repo = path.join(temp, "repo");
+      const tracked = path.join(repo, "docs");
+      const ignored = path.join(repo, ".data", "evals");
+      await mkdir(tracked, { recursive: true });
+      await mkdir(ignored, { recursive: true });
+      // 链接目标尚未创建：realpath 失败，但 lstat 仍能看出这是符号链接。
+      await symlink(
+        path.join(tracked, "not-created-yet"),
+        path.join(ignored, "escape"),
+        "dir",
+      );
+      let error: unknown;
+
+      try {
+        resolveM1ReportRouting({
+          repositoryRoot: realpathSync(repo),
+          stories: [story({ visibility: "private" })],
+          reportDir: path.join(ignored, "escape", "run"),
+          reportDirProvided: true,
+          isGitIgnored: () => true,
+          realpath: (candidate) => realpathSync(candidate),
+          lstat: (candidate) => lstatSync(candidate),
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(M1ReportRoutingError);
+      expect(error).toMatchObject({
+        code: "report_dir_dangling_symlink",
+      });
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("realpaths the repository root too, so a symlinked root cannot hide an in-repo report dir", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "m1-report-routing-"));
+    try {
+      const repo = path.join(temp, "repo");
+      const tracked = path.join(repo, "docs");
+      await mkdir(tracked, { recursive: true });
+      const repoLink = path.join(temp, "repo-link");
+      await symlink(repo, repoLink, "dir");
+
+      expect(() =>
+        resolveM1ReportRouting({
+          repositoryRoot: repoLink,
+          stories: [story({ visibility: "private" })],
+          reportDir: path.join(realpathSync(tracked), "run"),
+          reportDirProvided: true,
+          isGitIgnored: () => false,
+          realpath: (candidate) => realpathSync(candidate),
+        }),
+      ).toThrow(M1ReportRoutingError);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
   });
 });

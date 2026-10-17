@@ -1,3 +1,4 @@
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { isPathInside } from "@/evals/benchmark-root";
@@ -33,6 +34,16 @@ export type M1ReportRoutingInput = {
    * 未提供时，仓库内路径一律按未忽略处理（fail closed）。
    */
   isGitIgnored?: (path: string) => boolean;
+  /**
+   * 解析真实路径；默认 `fs.realpathSync`。测试可注入，脚本显式传入。
+   * 对不存在的报告目录，会先 realpath 最深的已存在祖先，再拼回剩余部分。
+   */
+  realpath?: (path: string) => string;
+  /**
+   * 判断路径是否为符号链接；默认 `fs.lstatSync`。用于识别目标尚不存在的
+   * 悬空符号链接，避免把链接位置当成真实落盘位置。
+   */
+  lstat?: (path: string) => { isSymbolicLink(): boolean };
 };
 
 export type M1ReportRouting = {
@@ -41,15 +52,53 @@ export type M1ReportRouting = {
   /** run-directory：与 metrics.json 同目录；docs-runs：仓库 `docs/evals/runs`。 */
   reportTarget: "run-directory" | "docs-runs";
   redactPrivateBenchmarkIds: boolean;
+  /** realpath 后的 --report-dir（若提供）；脚本应使用它落盘。 */
+  resolvedReportDir?: string;
 };
 
 export type M1ReportRoutingErrorCode =
-  | "report_dir_inside_repository_for_private_run";
+  | "report_dir_inside_repository_for_private_run"
+  | "report_dir_dangling_symlink";
 
 export class M1ReportRoutingError extends Error {
   constructor(readonly code: M1ReportRoutingErrorCode) {
     super(code);
     this.name = "M1ReportRoutingError";
+  }
+}
+
+/**
+ * realpath 一个可能尚不存在的路径：找到最深的已存在祖先做 realpath，
+ * 再把不存在的剩余片段拼回去。这样符号链接无法绕过后续的仓库内/忽略检查。
+ * 若向上遇到的路径片段本身是符号链接、但 realpath 失败（悬空链接），
+ * 则 fail closed，抛出 `report_dir_dangling_symlink`，不把链接位置当作目标。
+ */
+export function resolveRealpathWithMissingTail(
+  candidate: string,
+  realpath: (path: string) => string = realpathSync,
+  lstat: (path: string) => { isSymbolicLink(): boolean } = lstatSync,
+): string {
+  const absolute = path.resolve(candidate);
+  const missing: string[] = [];
+  let current = absolute;
+  for (;;) {
+    try {
+      return path.join(realpath(current), ...missing.reverse());
+    } catch {
+      let danglingSymlink = false;
+      try {
+        danglingSymlink = lstat(current).isSymbolicLink();
+      } catch {
+        // 该路径片段不存在，继续向上找已存在的祖先。
+      }
+      if (danglingSymlink) {
+        throw new M1ReportRoutingError("report_dir_dangling_symlink");
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return absolute;
+      missing.push(path.basename(current));
+      current = parent;
+    }
   }
 }
 
@@ -72,11 +121,26 @@ export function resolveM1ReportRouting(
   const privateRun = privateStoryClasses.length > 0;
   const reportDirProvided =
     input.reportDirProvided ?? input.reportDir !== undefined;
+  // 先 realpath，再做仓库内 / Git ignored 判断：忽略目录里的符号链接
+  // 不能指向受版本控制目录，仓库外链接也不能指回仓库内。
+  const resolvedReportDir = input.reportDir
+    ? resolveRealpathWithMissingTail(
+        input.reportDir,
+        input.realpath ?? realpathSync,
+        input.lstat ?? lstatSync,
+      )
+    : undefined;
 
-  if (privateRun && reportDirProvided && input.reportDir) {
-    const resolvedReportDir = path.resolve(input.reportDir);
+  if (privateRun && reportDirProvided && resolvedReportDir) {
+    // 仓库根同样 realpath，两侧口径一致；否则经符号链接传入的仓库根会让
+    // 仓库内的真实路径被误判为仓库外。
+    const repositoryRoot = resolveRealpathWithMissingTail(
+      input.repositoryRoot,
+      input.realpath ?? realpathSync,
+      input.lstat ?? lstatSync,
+    );
     if (
-      isPathInside(input.repositoryRoot, resolvedReportDir) &&
+      isPathInside(repositoryRoot, resolvedReportDir) &&
       input.isGitIgnored?.(resolvedReportDir) !== true
     ) {
       throw new M1ReportRoutingError(
@@ -91,6 +155,7 @@ export function resolveM1ReportRouting(
     reportTarget:
       privateRun || reportDirProvided ? "run-directory" : "docs-runs",
     redactPrivateBenchmarkIds: privateRun,
+    ...(resolvedReportDir ? { resolvedReportDir } : {}),
   };
 }
 

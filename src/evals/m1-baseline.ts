@@ -5,6 +5,7 @@ import type {
   SourceReference,
   StoryMap,
 } from "@/domain/schemas";
+import { MAX_CHARACTER_ALIASES } from "@/domain/story-map/assemble-story-map-candidate";
 import {
   normalizeSourceText,
   sha256,
@@ -95,6 +96,17 @@ const PendingManualScoreSchema = z
   })
   .strict();
 
+const AliasStatsSchema = z
+  .object({
+    aliasCap: z.number().int().positive(),
+    characters: z.number().int().nonnegative(),
+    totalAliases: z.number().int().nonnegative(),
+    meanAliases: z.number().nonnegative(),
+    maxAliases: z.number().int().nonnegative(),
+    charactersAtCap: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const ProviderObservationSchema = z
   .object({
     schemaName: z.string().min(1),
@@ -156,6 +168,8 @@ export const M1StoryMapBaselineScoreSchema = z
         missingExpectedIds: z.array(z.string().min(1)),
         candidateReviewIds: z.array(z.string().min(1)),
         potentialMergeCandidateIds: z.array(z.string().min(1)),
+        /** 别名统计；旧报告没有该块，保持 optional。 */
+        aliasStats: AliasStatsSchema.optional(),
       })
       .strict(),
     /**
@@ -649,6 +663,7 @@ export function scoreM1StoryMapCandidate(input: {
           );
         })
         .map((item) => item.id),
+      aliasStats: summarizeAliasStats(input.storyMap.characters),
     },
     tieredIdentity: {
       exactMatches,
@@ -764,6 +779,25 @@ function normalizedNames(value: { name: string; aliases: string[] }): string[] {
   return [value.name, ...value.aliases].map((name) =>
     name.normalize("NFC").replace(/\s+/gu, "").toLocaleLowerCase(),
   );
+}
+
+function summarizeAliasStats(
+  characters: Array<{ aliases: string[] }>,
+): z.infer<typeof AliasStatsSchema> {
+  const totalAliases = characters.reduce(
+    (total, character) => total + character.aliases.length,
+    0,
+  );
+  return {
+    aliasCap: MAX_CHARACTER_ALIASES,
+    characters: characters.length,
+    totalAliases,
+    meanAliases: divide(totalAliases, characters.length),
+    maxAliases: Math.max(0, ...characters.map((item) => item.aliases.length)),
+    charactersAtCap: characters.filter(
+      (item) => item.aliases.length >= MAX_CHARACTER_ALIASES,
+    ).length,
+  };
 }
 
 function collectEvidence(storyMap: StoryMap): SourceReference[] {
