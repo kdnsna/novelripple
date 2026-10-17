@@ -4,7 +4,11 @@ import type {
   StoryMapCandidateEvent,
   StoryMapExtractionCandidate,
 } from "@/domain/schemas";
-import { deriveEvidenceUnitChunks } from "@/domain/source/evidence-unit-chunks";
+import {
+  CHUNK_HARD_MAX_CHARS,
+  CHUNK_MAX_CHARS,
+  deriveEvidenceUnitChunks,
+} from "@/domain/source/evidence-unit-chunks";
 import { deriveEvidenceUnits, type EvidenceUnit } from "@/domain/source/evidence-units";
 import { deriveNameCandidates } from "@/domain/source/name-candidates";
 import {
@@ -53,6 +57,32 @@ describe("Evidence Unit chunking", () => {
     expect(chunks[0]!.contextUnitIds).toEqual([]);
     const previousCore = chunks[0]!.coreUnitIds;
     expect(chunks[1]!.contextUnitIds).toEqual(previousCore.slice(-2));
+  });
+
+  it("drops the oldest context units so core + context never exceeds the chunk max", () => {
+    const units = syntheticUnits([40, 40, 40]);
+    const chunks = deriveEvidenceUnitChunks(units, {
+      targetChars: 80,
+      minChars: 10,
+      maxChars: 100,
+    });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[1]!.contextUnitIds).toEqual(["evidence_unit:s:000002"]);
+    for (const chunk of chunks) {
+      const length = [...chunk.coreUnitIds, ...chunk.contextUnitIds]
+        .map((id) => units.find((unit) => unit.id === id)!.text.length)
+        .reduce((total, value) => total + value, 0);
+      expect(length).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("fails closed when one paragraph exceeds the hard cap instead of splitting it", () => {
+    expect(CHUNK_HARD_MAX_CHARS).toBe(2 * CHUNK_MAX_CHARS);
+    const units = syntheticUnits([CHUNK_HARD_MAX_CHARS + 1]);
+
+    expect(() => deriveEvidenceUnitChunks(units)).toThrow(/硬上限/);
+    expect(() => deriveEvidenceUnitChunks(units)).toThrow(units[0]!.id);
   });
 
   it("folds a short tail into the previous chunk when it fits", () => {
@@ -192,6 +222,81 @@ describe("chunk candidate assembly", () => {
     ]);
     expect(result.candidate.edges.map((e) => [e.id, e.from, e.to])).toEqual([["y", "e1", "e2"]]);
     expect(result.candidate.endingCandidates[0]!.targetEventId).toBe("e2");
+  });
+
+  it("merges duplicate edge and ending evidence after event merge resolution", () => {
+    const pool = {
+      characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s" }],
+      events: [
+        { ...event("e1", "u1"), chunkIndex: 0 },
+        { ...event("e2", "u2"), chunkIndex: 0 },
+        { ...event("e2_dup", "u3"), chunkIndex: 1 },
+      ],
+      edges: [
+        { id: "edge_a", from: "e1", to: "e2", type: "causes" as const, explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u1", "u2"] },
+        { id: "edge_b", from: "e1", to: "e2_dup", type: "causes" as const, explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u3", "u2"] },
+      ],
+    };
+    const result = applyMerge(
+      pool,
+      [
+        { id: "end_a", targetEventId: "e2_dup", requirement: "同一个结局", evidenceUnitIds: ["u1"] },
+        { id: "end_b", targetEventId: "e2", requirement: "同一个结局", evidenceUnitIds: ["u3", "u1"] },
+      ],
+      {
+        title: "T",
+        logline: "L",
+        duplicateEventGroups: [{ keepEventId: "e2", duplicateEventIds: ["e2_dup"] }],
+        edges: [
+          { id: "edge_c", from: "e1", to: "e2", type: "causes", explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u1"] },
+        ],
+      },
+    );
+    if (!result.success) throw new Error(JSON.stringify(result.issues));
+
+    expect(result.candidate.edges.map((edge) => [edge.id, edge.evidenceUnitIds])).toEqual([
+      ["edge_a", ["u1", "u2", "u3"]],
+    ]);
+    expect(result.candidate.endingCandidates.map((ending) => [ending.id, ending.evidenceUnitIds])).toEqual([
+      ["end_a", ["u1", "u3"]],
+    ]);
+  });
+
+  it("limits merge-pass edge evidence to the events, edges and endings shown to it", () => {
+    const pool = {
+      characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s" }],
+      events: [{ ...event("e1", "u1"), chunkIndex: 0 }, { ...event("e2", "u2"), chunkIndex: 0 }],
+      edges: [
+        { id: "edge_existing", from: "e1", to: "e2", type: "foreshadows" as const, explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u3"] },
+      ],
+    };
+    const endings = [{ id: "end", targetEventId: "e2" as const, requirement: "r", evidenceUnitIds: ["u5"] }];
+    const baseMerge = {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [],
+      edges: [
+        { id: "edge_ok", from: "e1", to: "e2", type: "causes" as const, explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u3", "u5"] },
+      ],
+    };
+
+    const allowed = applyMerge(pool, endings, baseMerge);
+    expect(allowed.success).toBe(true);
+
+    const rejected = applyMerge(pool, endings, {
+      ...baseMerge,
+      edges: [
+        { ...baseMerge.edges[0]!, evidenceUnitIds: ["u9"] },
+      ],
+    });
+    expect(rejected.success).toBe(false);
+    if (rejected.success) return;
+    expect(rejected.issues).toEqual([
+      {
+        path: "edges.0.evidenceUnitIds.0",
+        message: "Evidence 引用了本阶段未提供的 Unit：u9",
+      },
+    ]);
   });
 
   it("rejects merge groups that reference unknown events or reuse an event", () => {

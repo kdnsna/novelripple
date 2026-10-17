@@ -10,6 +10,7 @@ import {
 
 import type {
   AIProvider,
+  AIProviderRequest,
   AIProviderResponse,
   StructuredGenerationInput,
   StructuredGenerationResult,
@@ -99,10 +100,17 @@ export async function generateStructured<T>(
     inputHash,
   });
   const attempts: Attempt[] = [];
+  const callProvider = (request: AIProviderRequest): Promise<AIProviderResponse> => {
+    input.onAttempt?.();
+    return provider.generate({
+      ...request,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+  };
 
   let initialResponse: AIProviderResponse;
   try {
-    initialResponse = await provider.generate({
+    initialResponse = await callProvider({
       prompt: metadata.prompt,
       schemaName: metadata.schemaName,
       jsonSchema,
@@ -115,7 +123,7 @@ export async function generateStructured<T>(
       let retryError: unknown = error;
       for (let retry = 0; retry < 2; retry++) {
         try {
-          initialResponse = await provider.generate({
+          initialResponse = await callProvider({
             prompt: metadata.prompt,
             schemaName: metadata.schemaName,
             jsonSchema,
@@ -177,7 +185,7 @@ export async function generateStructured<T>(
 
   let repairResponse: AIProviderResponse;
   try {
-    repairResponse = await provider.generate({
+    repairResponse = await callProvider({
       prompt: metadata.prompt,
       schemaName: metadata.schemaName,
       jsonSchema,

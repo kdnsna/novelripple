@@ -2,7 +2,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { validateStoryMap } from "@/domain/invariants/validate-story-map";
 import { deriveEvidenceUnitChunks } from "@/domain/source/evidence-unit-chunks";
@@ -22,7 +22,13 @@ import { buildFixtureStoryMapResponses } from "@/server/story-map/fixture-story-
 import {
   STORY_MAP_PROMPT_VERSIONS,
   generateStoryMap,
+  mapWithConcurrency,
 } from "@/server/story-map/generate-story-map";
+import {
+  DEFAULT_STORY_MAP_MAX_CHUNKS,
+  DEFAULT_STORY_MAP_MAX_MODEL_CALLS,
+  resolveStoryMapLimits,
+} from "@/server/story-map/story-map-limits";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 
 let temporaryDirectory: string;
@@ -57,6 +63,18 @@ async function createContext() {
   const chunks = deriveEvidenceUnitChunks(units);
   const responses = buildFixtureStoryMapResponses(source, fixture.storyMap);
   return { fixture, project, source, units, chunks, responses };
+}
+
+async function createSyntheticContext(text: string) {
+  const project = createProject({ title: "Story Map synthetic" });
+  const imported = importProjectSource({
+    projectId: project.id,
+    fileName: "synthetic.md",
+    bytes: new TextEncoder().encode(text),
+  });
+  const source = imported.source;
+  const units = deriveEvidenceUnits(source);
+  return { project, source, units, chunks: deriveEvidenceUnitChunks(units) };
 }
 
 /** 响应在队列中的位置：每块 extract → 每块 glean → names → endings → merge。 */
@@ -333,6 +351,135 @@ describe("chunked Story Map recall pipeline", () => {
       generateStoryMap({ projectId: project.id, sourceId: source.id, provider: failingProvider, modelConfig }),
     ).rejects.toThrow("Structured generation failed schema validation");
     expect(listStoryMapArtifactsForSource(project.id, source.id)).toHaveLength(before);
+  });
+
+  it("stops scheduling new chunk tasks and aborts in-flight work after the first failure", async () => {
+    const started: number[] = [];
+    const signals: AbortSignal[] = [];
+    const failure = new Error("chunk failed");
+
+    await expect(
+      mapWithConcurrency(Array.from({ length: 10 }, (_, index) => index), 3, async (item, index, signal) => {
+        void index;
+        started.push(item);
+        signals.push(signal);
+        if (item === 0) throw failure;
+        return new Promise<string>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      }),
+    ).rejects.toBe(failure);
+
+    expect(started).toEqual([0, 1, 2]);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(started).toEqual([0, 1, 2]);
+  });
+
+  it("fails before any model call when the chunk or call budget is exceeded", async () => {
+    const { project, source, chunks } = await createContext();
+    const chunkProvider = new MockAIProvider([]);
+
+    await expect(
+      generateStoryMap({
+        projectId: project.id,
+        sourceId: source.id,
+        provider: chunkProvider,
+        modelConfig,
+        limits: { maxChunks: chunks.length - 1 },
+      }),
+    ).rejects.toThrow(/STORY_MAP_MAX_CHUNKS/);
+    expect(chunkProvider.requests).toHaveLength(0);
+
+    const callProvider = new MockAIProvider([]);
+    await expect(
+      generateStoryMap({
+        projectId: project.id,
+        sourceId: source.id,
+        provider: callProvider,
+        modelConfig,
+        limits: { maxModelCalls: 2 * chunks.length + 2 },
+      }),
+    ).rejects.toThrow(/STORY_MAP_MAX_MODEL_CALLS/);
+    expect(callProvider.requests).toHaveLength(0);
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([]);
+  });
+
+  it("counts repairs against the model-call budget and fails before exceeding it", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const stage = stageIndex(chunks.length);
+    const baseCalls = 2 * chunks.length + 3;
+    const invalidNames = edit(responses, stage.names, (roster) => {
+      roster.characters[0].mergedFrom = ["char_unknown"];
+    })[stage.names]!;
+    const queue = [...responses];
+    queue.splice(stage.names, 0, invalidNames);
+    const provider = new MockAIProvider(queue);
+
+    await expect(
+      generateStoryMap({
+        projectId: project.id,
+        sourceId: source.id,
+        provider,
+        modelConfig,
+        limits: { maxModelCalls: baseCalls },
+      }),
+    ).rejects.toThrow(/模型调用次数超过上限/);
+
+    expect(provider.requests).toHaveLength(baseCalls);
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([]);
+  });
+
+  it("warns once before model calls when the chunk count reaches 20", async () => {
+    const paragraph = "林舟走进港城，看见远处的灯塔。".repeat(400);
+    const text = Array.from({ length: 20 }, (_, index) => `第${index + 1}段。${paragraph}`).join("\n\n");
+    const { project, source, chunks } = await createSyntheticContext(text);
+    expect(chunks).toHaveLength(20);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const provider = new MockAIProvider(
+        Array.from({ length: 4 }, () => new Error("stop after warning")),
+      );
+      await expect(
+        generateStoryMap({ projectId: project.id, sourceId: source.id, provider, modelConfig }),
+      ).rejects.toThrow("stop after warning");
+
+      expect(warning).toHaveBeenCalledTimes(1);
+      const line = String(warning.mock.calls[0]![0]);
+      expect(line).toContain("分块数 20");
+      expect(line).toContain("最坏");
+      expect(line).toContain("tokens");
+      expect(line).toContain("粗略");
+      expect(line).not.toContain("远处的灯塔");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it("reads positive-integer call limits from the environment", () => {
+    const previousCalls = process.env.STORY_MAP_MAX_MODEL_CALLS;
+    const previousChunks = process.env.STORY_MAP_MAX_CHUNKS;
+    try {
+      delete process.env.STORY_MAP_MAX_MODEL_CALLS;
+      delete process.env.STORY_MAP_MAX_CHUNKS;
+      expect(resolveStoryMapLimits()).toEqual({
+        maxChunks: DEFAULT_STORY_MAP_MAX_CHUNKS,
+        maxModelCalls: DEFAULT_STORY_MAP_MAX_MODEL_CALLS,
+      });
+
+      process.env.STORY_MAP_MAX_MODEL_CALLS = "77";
+      process.env.STORY_MAP_MAX_CHUNKS = "9";
+      expect(resolveStoryMapLimits()).toEqual({ maxChunks: 9, maxModelCalls: 77 });
+
+      process.env.STORY_MAP_MAX_MODEL_CALLS = "0";
+      expect(() => resolveStoryMapLimits()).toThrow(
+        "STORY_MAP_MAX_MODEL_CALLS 必须是正整数",
+      );
+    } finally {
+      restoreEnvironment("STORY_MAP_MAX_MODEL_CALLS", previousCalls);
+      restoreEnvironment("STORY_MAP_MAX_CHUNKS", previousChunks);
+    }
   });
 
   it("creates a new versioned Artifact when the same Source is rerun", async () => {

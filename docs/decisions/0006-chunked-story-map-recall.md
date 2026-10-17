@@ -36,6 +36,18 @@
 - `docs/evals.md` 的硬不变量与质量目标阈值不变；本次没有真实模型数据，不调整任何门槛。
 - M1-03 的撤销结论不变：sectionId + exactQuote 不作为生产证据路径。
 
+## 后续加固
+
+Phase 1 落地后的召回安全加固，不改变调用结构、Schema 或最终 Evidence 合同：
+
+1. **错并防护**：`validateRoster` 要求每个 `mergedFrom` 候选的 `name` 等于合并后人物的 `name` 或出现在其 `aliases` 中（去空白比较）；不满足时要求一次 repair，仍失败即 fail closed。
+2. **快速失败与调用预算**：分块并发在第一处失败后不再调度新任务，并通过可选 `AbortSignal` 中止在途 provider 请求。预计基础调用为 `2 × 块数 + 3`，最坏（每个调用 repair 一次）翻倍；新增 `STORY_MAP_MAX_MODEL_CALLS`（默认 120，正整数）与 `STORY_MAP_MAX_CHUNKS`（默认 50，正整数）。超限在任何模型调用前直接失败；运行中按真实尝试（含 repair）计数，超过预算立即失败。
+3. **去重保留证据**：同一 `from|to|type` 的因果边、同一 `targetEventId|requirement` 的结局去重时，把重复项的 `evidenceUnitIds` 按顺序合并进保留项，包括经 `duplicateEventGroups` 归并的边。
+4. **超长自然段**：分块时先丢弃最旧的上下文 Unit，避免 core+context 超过块上限；单个 Unit 超过导出的 `CHUNK_HARD_MAX_CHARS`（默认 `2 × CHUNK_MAX_CHARS`）时，在任何模型调用前失败，不切分自然段，保持 Unit ID 稳定。
+5. **合并轮证据范围**：合并返回的边证据必须来自该轮看到的事件、已有边和结局的证据 Unit 并集，而不是“全书某处存在”；校验在 `applyMerge` 内以带路径的 issue 返回。
+
+规模预警：分块数达到 20 时，在模型调用前用 `console.warn` 打印一次块数、预计基础/最坏调用次数和按 prompt 字符粗略估算的输入量，不打印原文。
+
 ## Open-source preflight
 
 检索日期：2026-10-17。本次只记录已落地的仓库内管线，不新增依赖、不复制第三方代码。

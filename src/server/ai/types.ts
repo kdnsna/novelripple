@@ -24,6 +24,8 @@ export type AIProviderRequest = {
   schemaName: string;
   jsonSchema: Record<string, unknown>;
   modelConfig: ModelConfig;
+  /** 可选：调用方中止在途请求（例如分块并发第一处失败后停止其余块）。 */
+  signal?: AbortSignal;
   repair?: {
     previousRawOutput: string;
     validationIssues: string[];
@@ -56,6 +58,10 @@ export type StructuredGenerationInput<T> = {
   schema: z.ZodType<T>;
   modelConfig: ModelConfig;
   validate?: (value: T) => StructuredValidationIssue[];
+  /** 可选中止信号，透传给 provider。 */
+  signal?: AbortSignal;
+  /** 每次真正发起 provider 调用前触发（含 repair），用于调用预算计数。 */
+  onAttempt?: () => void;
 };
 
 export type StructuredGenerationResult<T> = {

@@ -88,4 +88,18 @@ npm run eval:m1:baseline -- \
 
 公开作品可以改用 `benchmarks/m1/public/<story-id>/manifest.json`。runner 会先校验 JSON Schema、字符数、A/B/C 分类、stable ID 交叉引用、权利/visibility 路径和 unseen 声明，然后才创建隔离的本地数据库并调用当前生产 Story Map Extractor → Reconciler。Gold 字段不会传给模型，只在完整 candidate 生成后用于评分和人工队列。
 
+### 外部 private 根（`NOVELRIPPLE_BENCH_ROOT`）
+
+私人作品可以不放在仓库内。设置 `NOVELRIPPLE_BENCH_ROOT` 后，runner 会把该路径的 realpath 当作额外的 private 根：
+
+```bash
+NOVELRIPPLE_BENCH_ROOT=/path/to/private-benchmarks \
+  npm run eval:m1:baseline -- \
+  --manifest /path/to/private-benchmarks/<story-a>/manifest.json \
+  --manifest /path/to/private-benchmarks/<story-b>/manifest.json \
+  --manifest /path/to/private-benchmarks/<story-c>/manifest.json
+```
+
+该根内的 manifest 必须声明 `visibility: "private"`，`sourcePath` 必须解析到同一 Story 目录（因而也留在该根内）。变量未设置或为空时只接受 `benchmarks/m1/public` 与 `benchmarks/private`；设置但目录不存在或不是目录时，runner 在调用模型前以 `benchmark_root_not_found` 或 `benchmark_root_not_directory` 失败。路径不会写入报告，正文仍不得进入日志、截图或 Git。
+
 每次运行新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`，不覆盖历史运行。JSON 不含 Source 正文、标题、人物名、完整 Prompt、provider raw output 或错误消息；`eval.db` 含生产管线所需的本地 Source 与 Artifact，只能留在 Git ignored 的 `.data/`。初次自动结果为 `awaiting_human_review`，复核者应使用 `eval.db` 和 [`M1 人工评测模板`](../../docs/evals/m1-review-template.md) 完成 revision、确认、strict/open Ripple、Continuation 与修正成本记录。

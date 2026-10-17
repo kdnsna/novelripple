@@ -96,6 +96,34 @@ describe("structured generation", () => {
     });
   });
 
+  it("forwards an optional abort signal to every provider request", async () => {
+    const project = createProject({ title: "中止信号" });
+    const controller = new AbortController();
+    const provider = new MockAIProvider(['{"answer":123}', '{"answer":"ok"}']);
+
+    await generateStructured(
+      { ...createInput(project.id), signal: controller.signal },
+      provider,
+    );
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[0]?.signal).toBe(controller.signal);
+    expect(provider.requests[1]?.signal).toBe(controller.signal);
+  });
+
+  it("invokes the attempt hook before every real attempt including repair", async () => {
+    const project = createProject({ title: "调用计数" });
+    const attempts: number[] = [];
+    const provider = new MockAIProvider(['{"answer":123}', '{"answer":"ok"}']);
+
+    await generateStructured(
+      { ...createInput(project.id), onAttempt: () => attempts.push(attempts.length + 1) },
+      provider,
+    );
+
+    expect(attempts).toEqual([1, 2]);
+  });
+
   it("repairs one invalid schema response exactly once", async () => {
     const project = createProject({ title: "一次修复" });
     const provider = new MockAIProvider([
