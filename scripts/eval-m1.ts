@@ -1,23 +1,28 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
 import {
+  HARD_RULE_IDS,
+  buildM1DashboardMarkdown,
   M1ContinuationHumanSchema,
   M1CorrectionCostHumanSchema,
   M1EvalReportSchema,
   M1RippleHumanSchema,
   M1StoryMapHumanSchema,
   M1UserObservationSchema,
-  evaluateAggregateStoryMapGate,
-  evaluateContinuationGate,
-  evaluateCorrectionCostGate,
-  evaluateRippleGate,
-  evaluateStoryMapGate,
-  evaluateUserObservationGate,
+  combineHardRules,
+  combineTargets,
+  evaluateAggregateStoryMapTargets,
+  evaluateContinuationTargets,
+  evaluateCorrectionCostTargets,
+  evaluateHardRules,
+  evaluateRippleTargets,
+  evaluateStoryMapTargets,
+  evaluateUserObservationTargets,
+  hardRulesPassed,
   type M1ContinuationHuman,
   type M1CorrectionCostHuman,
-  type M1EvalReport,
   type M1RippleHuman,
   type M1StoryMapHuman,
   type M1UserObservation,
@@ -116,17 +121,8 @@ async function readHumanFile<T>(
 async function findLatestRun(
   directory: string,
 ): Promise<string | undefined> {
-  try {
-    const entries = await readFile(
-      path.join(directory, "..", "..", "..", "PROBE"),
-      "utf8",
-    ).catch(() => null);
-    void entries;
-  } catch {
-    // ignore
-  }
-  const { readdir } = await import("node:fs/promises");
-  const dirs = (await readdir(directory, { withFileTypes: true }))
+  // 没有 continuation 运行记录时，性能数据记为 n/a，而不是让仪表盘整体无法生成。
+  const dirs = (await readdir(directory, { withFileTypes: true }).catch(() => []))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
@@ -268,16 +264,9 @@ async function main() {
     latestContinuationRun,
   );
 
-  // 4. gate 计算
+  // 4. 硬规则 + 质量目标
   const stories = storyClasses.map((cls) => {
     const manifest = manifests[storyClasses.indexOf(cls)];
-    const storyMapGate = evaluateStoryMapGate(storyMaps[cls]);
-    const correctionCostGate = evaluateCorrectionCostGate(
-      corrections[cls],
-      manifest.characterCount,
-    );
-    const rippleGate = evaluateRippleGate(ripples[cls]);
-    const continuationGate = evaluateContinuationGate(continuations[cls]);
     return {
       storyClass: cls,
       identity: {
@@ -288,128 +277,72 @@ async function main() {
         promptVersions: [],
       },
       storyMap: storyMaps[cls],
-      storyMapGate,
       correctionCost: corrections[cls],
-      correctionCostGate,
       ripple: ripples[cls],
-      rippleGate,
       continuation: continuations[cls],
-      continuationGate,
+      hardRules: evaluateHardRules({
+        storyMap: storyMaps[cls],
+        ripple: ripples[cls],
+        continuation: continuations[cls],
+      }),
+      targets: {
+        storyMap: evaluateStoryMapTargets(storyMaps[cls]),
+        correctionCost: evaluateCorrectionCostTargets(
+          corrections[cls],
+          manifest.characterCount,
+        ),
+        ripple: evaluateRippleTargets(ripples[cls]),
+        continuation: evaluateContinuationTargets(continuations[cls]),
+      },
       performance: performance[cls],
     };
   });
 
-  const aggregate = evaluateAggregateStoryMapGate([
+  const aggregate = evaluateAggregateStoryMapTargets([
     storyMaps.A,
     storyMaps.B,
     storyMaps.C,
   ]);
-  const userObservationGate = evaluateUserObservationGate(userObservation);
+  const hardRules = combineHardRules(stories.map((s) => s.hardRules));
+  const passed = hardRulesPassed(hardRules);
 
-  // 5. 最终判定
-  const missingData: string[] = [];
+  // 缺失数据只是"未测"，不影响结论；真人观察是可选项。
+  const notMeasured: string[] = [];
   for (const cls of storyClasses) {
-    if (!storyMaps[cls]) missingData.push(`story_map_human_${cls}`);
-    if (!corrections[cls]) missingData.push(`correction_cost_${cls}`);
-    if (!ripples[cls]) missingData.push(`ripple_${cls}`);
-    if (!continuations[cls]) missingData.push(`continuation_${cls}`);
+    if (!storyMaps[cls]) notMeasured.push(`story_map_${cls}`);
+    if (!corrections[cls]) notMeasured.push(`correction_cost_${cls}`);
+    if (!ripples[cls]) notMeasured.push(`ripple_${cls}`);
+    if (!continuations[cls]) notMeasured.push(`continuation_${cls}`);
   }
-  if (!userObservation) missingData.push("user_observation");
-
-  const missingOnly = (failures: string[]): boolean =>
-    failures.length > 0 &&
-    failures.every(
-      (failure) =>
-        failure.includes("missing") ||
-        failure.includes("not_evaluated") ||
-        failure.includes("not_created"),
-    );
-
-  const allGatesComplete =
-    stories.every(
-      (s) =>
-        s.storyMapGate.passed &&
-        s.rippleGate.passed &&
-        s.continuationGate.passed &&
-        s.correctionCostGate.passed !== null &&
-        s.correctionCostGate.passed &&
-        !missingOnly(s.storyMapGate.failures) &&
-        !missingOnly(s.rippleGate.failures) &&
-        !missingOnly(s.correctionCostGate.failures),
-    ) &&
-    aggregate.passed === true &&
-    userObservationGate.passed === true;
-  const anyGateFailed = stories.some(
-    (s) =>
-      (s.storyMapGate.passed === false &&
-        !missingOnly(s.storyMapGate.failures)) ||
-      (s.rippleGate.passed === false && !missingOnly(s.rippleGate.failures)) ||
-      (s.continuationGate.passed === false &&
-        !missingOnly(s.continuationGate.failures)) ||
-      (s.correctionCostGate.passed === false &&
-        !missingOnly(s.correctionCostGate.failures)),
-  );
-
-  let verdict: M1EvalReport["finalGate"]["verdict"];
-  if (allGatesComplete && !anyGateFailed) verdict = "M1 EVAL PASS";
-  else if (anyGateFailed) verdict = "M1 EVAL FAIL";
-  else verdict = "M1 EVAL INCOMPLETE";
+  if (!userObservation) notMeasured.push("user_observation (optional)");
 
   const report = M1EvalReportSchema.parse({
-    schemaVersion: 1,
-    kind: "m1_eval",
+    schemaVersion: 2,
+    kind: "m1_dashboard",
     runId,
     commitSha,
     evaluatedAt,
-    status:
-      verdict === "M1 EVAL PASS"
-        ? "passed"
-        : verdict === "M1 EVAL FAIL"
-          ? "failed"
-          : "awaiting_human_input",
+    status: passed ? "reported" : "hard_rule_violation",
     stories,
-    aggregate: {
-      identityF1: aggregate.identityF1,
-      keyEventRecall: aggregate.keyEventRecall,
-      storyMapAggregateGate: {
-        passed: aggregate.passed,
-        failures: aggregate.failures,
+    dashboard: {
+      hardRules,
+      hardRulesPassed: passed,
+      targets: {
+        storyMap: combineTargets(stories.map((s) => s.targets.storyMap)),
+        aggregateStoryMap: { status: aggregate.status, misses: aggregate.misses },
+        correctionCost: combineTargets(
+          stories.map((s) => s.targets.correctionCost),
+        ),
+        ripple: combineTargets(stories.map((s) => s.targets.ripple)),
+        continuation: combineTargets(stories.map((s) => s.targets.continuation)),
+        userObservation: evaluateUserObservationTargets(userObservation),
       },
-      hardInvariantFailures: 0,
+      aggregate: {
+        identityF1: aggregate.identityF1,
+        keyEventRecall: aggregate.keyEventRecall,
+      },
       userObservation,
-      userObservationGate: {
-        passed: userObservationGate.passed,
-        failures: userObservationGate.failures,
-      },
-    },
-    finalGate: {
-      storyMapGate:
-        stories.every((s) => s.storyMapGate.passed) && aggregate.passed === true
-          ? true
-          : aggregate.passed === false || stories.some((s) => s.storyMapGate.passed === false)
-            ? false
-            : null,
-      correctionCostGate: stories.every(
-        (s) => s.correctionCostGate.passed === true,
-      )
-        ? true
-        : stories.some((s) => s.correctionCostGate.passed === false)
-          ? false
-          : null,
-      rippleGate: stories.every((s) => s.rippleGate.passed)
-        ? true
-        : stories.some((s) => s.rippleGate.passed === false)
-          ? false
-          : null,
-      continuationGate: stories.every((s) => s.continuationGate.passed)
-        ? true
-        : stories.some((s) => s.continuationGate.passed === false)
-          ? false
-          : null,
-      userObservationGate: userObservationGate.passed,
-      hardInvariantsZeroFailures: true,
-      verdict,
-      missingData,
+      notMeasured,
     },
     privacy: {
       containsSourceBody: false,
@@ -424,95 +357,34 @@ async function main() {
   const metricsPath = path.join(runDirectory, "metrics.json");
   await writeFile(metricsPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
-  // 6. 脱敏报告
-  const reportMarkdown = buildMarkdown(report);
+  // 5. 脱敏仪表盘报告
   const reportPath = path.join(
     repositoryRoot,
     "docs",
     "evals",
     "runs",
-    `m1-eval-${new Date().toISOString().slice(0, 10)}-${commitSha.slice(0, 7)}.md`,
+    `m1-dashboard-${new Date().toISOString().slice(0, 10)}-${commitSha.slice(0, 7)}.md`,
   );
-  await writeFile(reportPath, reportMarkdown, "utf8");
+  await writeFile(reportPath, buildM1DashboardMarkdown(report), "utf8");
 
-  console.log("NovelRipple M1 Eval");
+  console.log("NovelRipple M1 质量仪表盘");
   console.log(`Run: ${runId}`);
-  console.log(`Verdict: ${verdict}`);
-  for (const story of stories) {
-    const gateLabel = (
-      passed: boolean,
-      failures: string[],
-    ): string =>
-      passed
-        ? "PASS"
-        : failures.length === 0 ||
-            failures.every(
-              (f) => f.includes("missing") || f.includes("not_evaluated"),
-            )
-          ? "MISSING"
-          : "FAIL";
+  console.log(
+    `Hard rules: ${passed ? "PASS" : "VIOLATED"} (${HARD_RULE_IDS.map((id) => `${id}=${hardRules[id].status}`).join(" ")})`,
+  );
+  for (const [name, result] of Object.entries(report.dashboard.targets)) {
     console.log(
-      `Story ${story.storyClass}: storyMap=${gateLabel(story.storyMapGate.passed, story.storyMapGate.failures)} correction=${story.correctionCostGate.passed === null ? "MISSING" : story.correctionCostGate.passed ? "PASS" : "FAIL"} ripple=${gateLabel(story.rippleGate.passed, story.rippleGate.failures)} continuation=${gateLabel(story.continuationGate.passed, story.continuationGate.failures)}`,
+      `Target ${name}: ${result.status}${result.misses.length > 0 ? ` (${result.misses.join(", ")})` : ""}`,
     );
   }
-  console.log(`Missing data: ${missingData.join(", ") || "none"}`);
+  console.log(`Not measured: ${notMeasured.join(", ") || "none"}`);
   console.log(`Sanitized JSON: ${metricsPath}`);
   console.log(`Report: ${reportPath}`);
-}
-
-function buildMarkdown(report: M1EvalReport): string {
-  const lines: string[] = [];
-  lines.push(`# M1 最终 Eval（${report.finalGate.verdict}，${report.evaluatedAt.slice(0, 10)}）`);
-  lines.push("");
-  lines.push(`- run-id：${report.runId}`);
-  lines.push(`- commit：${report.commitSha.slice(0, 7)}`);
-  lines.push("");
-  lines.push("> 隐私边界：报告只使用 Story A/B/C 代号、结构计数、比例与门禁状态；不包含私人作品标题、人物名、Event 内容、原文、完整 Prompt、raw model output 或密钥。");
-  lines.push("");
-  lines.push("## 最终判定");
-  lines.push("");
-  lines.push(`**${report.finalGate.verdict}**`);
-  lines.push("");
-  lines.push(`- Story Map gate：${gateText(report.finalGate.storyMapGate)}`);
-  lines.push(`- Correction cost gate：${gateText(report.finalGate.correctionCostGate)}`);
-  lines.push(`- Ripple gate：${gateText(report.finalGate.rippleGate)}`);
-  lines.push(`- Continuation gate：${gateText(report.finalGate.continuationGate)}`);
-  lines.push(`- User observation gate：${gateText(report.finalGate.userObservationGate)}`);
-  lines.push(`- Hard invariants：${report.finalGate.hardInvariantsZeroFailures ? "0 failures" : "FAILED"}`);
-  if (report.finalGate.missingData.length > 0) {
-    lines.push("");
-    lines.push("### 缺失数据（导致 INCOMPLETE）");
-    lines.push("");
-    for (const missing of report.finalGate.missingData) {
-      lines.push(`- ${missing}`);
-    }
-  }
-  lines.push("");
-  lines.push("## 逐篇结果");
-  lines.push("");
-  for (const story of report.stories) {
-    lines.push(`### Story ${story.storyClass}`);
-    lines.push("");
-    lines.push(`- benchmark：${story.identity.benchmarkId}（${story.identity.rightsMode}，${story.identity.characterCount} 字符，unseen=${story.identity.unseenByPromptAuthors}）`);
-    lines.push(`- Story Map：${story.storyMapGate.passed ? "PASS" : story.storyMap ? "FAIL" : "待人工标注"}${story.storyMapGate.failures.length > 0 ? `（${story.storyMapGate.failures.join("、")}）` : ""}`);
-    if (story.storyMap) {
-      lines.push(`  - 核心人物召回 ${story.storyMap.coreCharacterRecall} / 关键事件召回 ${story.storyMap.keyEventRecall} / Ending 召回 ${story.storyMap.endingCandidateRecall} / 因果边认可 ${story.storyMap.causalEdgeApprovalRate} / 错误 merge ${story.storyMap.criticalMergeMistakes}`);
-    }
-    lines.push(`- Correction cost：${story.correctionCostGate.passed === null ? "待观察" : story.correctionCostGate.passed ? "PASS" : "FAIL"}${story.correctionCost ? `（${story.correctionCost.reviewDurationMin} 分钟 / ${story.correctionCost.materialRevisions} revisions / 新增 ${story.correctionCost.manualEventAdditions} 事件）` : ""}`);
-    lines.push(`- Ripple：${story.rippleGate.passed ? "PASS" : story.ripple ? "FAIL" : "待人工"}${story.rippleGate.failures.length > 0 ? `（${story.rippleGate.failures.join("、")}）` : ""}`);
-    lines.push(`- Continuation：${story.continuationGate.passed ? "PASS" : story.continuation ? "FAIL" : "待人工"}${story.continuation ? `（worldline ${story.continuation.worldlineConsistency} / narrative ${story.continuation.narrativeContinuity} / 继续读 ${story.continuation.wouldContinueReading ? "yes" : "no"}）` : ""}`);
-    lines.push(`- Performance：calls ${story.performance.modelCalls ?? "n/a"} / repairs ${story.performance.repairCount ?? "n/a"} / tokens ${story.performance.totalTokens ?? "n/a"} / ${story.performance.wallClockDurationMs != null ? `${Math.round(story.performance.wallClockDurationMs / 1000)}s` : "n/a"}`);
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-
-function gateText(value: boolean | null): string {
-  if (value === null) return "数据不完整";
-  return value ? "PASS" : "FAIL";
+  // 只有硬规则被违反才以非零退出；质量目标未达标只记录。
+  if (!passed) process.exitCode = 1;
 }
 
 main().catch((error) => {
-  console.error(`M1 Eval 未运行：${(error as Error).message}`);
+  console.error(`M1 仪表盘未运行：${(error as Error).message}`);
   process.exitCode = 1;
 });

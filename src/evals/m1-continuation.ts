@@ -151,8 +151,13 @@ const M1ContinuationStorySchema = z
 
 export type M1ContinuationStory = z.infer<typeof M1ContinuationStorySchema>;
 
+/**
+ * `failed` 只表示技术失败或硬规则（一致性 hard gate、世界线隔离）被违反；
+ * 人工评分低于质量目标记为 `below_target`，只进仪表盘，不阻塞。
+ */
 export type M1ContinuationStatus =
   | "passed"
+  | "below_target"
   | "awaiting_human_review"
   | "failed";
 
@@ -186,7 +191,7 @@ export function determineM1ContinuationStatus(
       (story) => story.humanReview.status === "completed",
     )
   ) {
-    const gatesPassed =
+    const targetsMet =
       stories.every(
         (story) =>
           (story.humanReview.worldlineConsistency ?? 0) >= 4 &&
@@ -194,7 +199,7 @@ export function determineM1ContinuationStatus(
       ) &&
       stories.filter((story) => story.humanReview.wouldContinueReading === true)
         .length >= 2;
-    return gatesPassed ? "passed" : "failed";
+    return targetsMet ? "passed" : "below_target";
   }
 
   return "awaiting_human_review";
@@ -214,7 +219,7 @@ export const M1ContinuationReportSchema = z
       "json_object",
       "prompt_json",
     ]),
-    status: z.enum(["passed", "awaiting_human_review", "failed"]),
+    status: z.enum(["passed", "below_target", "awaiting_human_review", "failed"]),
     databaseFile: z.literal("eval.db"),
     baselineDatabase: z.string().min(1),
     stories: z.array(M1ContinuationStorySchema).length(3),

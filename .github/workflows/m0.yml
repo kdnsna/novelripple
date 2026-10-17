@@ -24,6 +24,14 @@ jobs:
           node-version: 22
           cache: npm
 
+      # better-sqlite3 在 npm ci 时由 node-gyp 从源码编译，需要 python3 / make / g++。
+      # ubuntu-latest 已自带；这一步让缺工具链的镜像尽早、清楚地失败。见 CONTRIBUTING.md。
+      - name: Check native build toolchain (better-sqlite3)
+        run: |
+          python3 --version
+          make --version | head -n 1
+          g++ --version | head -n 1
+
       - name: Install dependencies
         run: npm ci
 
@@ -34,6 +42,8 @@ jobs:
         run: npm run typecheck
 
       # npm test 已包含全部单元与契约测试，不重复执行 test:unit / test:contract。
+      # 硬规则（原文不覆盖、可溯源、世界线隔离、坏输出 fail closed）由单元 / 合约 / E2E 测试阻塞。
+      # 真实模型质量评测是不阻塞的仪表盘，不进默认 CI（docs/decisions/0005-eval-dashboard-not-gate.md）。
       - name: Full Vitest suite
         run: npm test
 
