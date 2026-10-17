@@ -2,6 +2,7 @@ import { z } from "zod";
 
 /**
  * Private M1 gold 格式。只用于评测，不进入 Story Map 生产管线。
+ * 条目内额外的标注字段（note、firstMention、descriptive 等）会被忽略。
  * `unit` 是 `deriveEvidenceUnits(source)` 的 1-based 下标；`unitId` 是可读的稳定 Unit 标识。
  */
 const GoldEvidenceSchema = z
@@ -13,7 +14,7 @@ const GoldEvidenceSchema = z
     start: z.number().int().nonnegative(),
     end: z.number().int().positive(),
   })
-  .strict()
+  .strip()
   .refine((evidence) => evidence.start < evidence.end, {
     message: "gold evidence 必须是非空范围",
     path: ["end"],
@@ -35,14 +36,14 @@ const GoldCharacterSchema = z
     tier: z.enum(["core", "supporting"]),
     evidence: z.array(GoldEvidenceSchema).min(1),
   })
-  .strict();
+  .strip();
 
 const GoldMentionedOnlySchema = z
   .object({
     name: z.string().min(1),
     evidence: z.array(GoldEvidenceSchema).min(1),
   })
-  .strict();
+  .strip();
 
 const GoldEventSchema = z
   .object({
@@ -54,7 +55,7 @@ const GoldEventSchema = z
     narrativeFirstUnit: z.number().int().positive(),
     evidence: z.array(GoldEvidenceSchema).min(1),
   })
-  .strict();
+  .strip();
 
 const GoldCausalLinkSchema = z
   .object({
@@ -65,7 +66,7 @@ const GoldCausalLinkSchema = z
     label: z.string().min(1),
     evidence: z.array(GoldEvidenceSchema).min(1),
   })
-  .strict();
+  .strip();
 
 const GoldEndingSchema = z
   .object({
@@ -75,7 +76,7 @@ const GoldEndingSchema = z
     characterIds: z.array(z.string().min(1)),
     evidence: z.array(GoldEvidenceSchema).min(1),
   })
-  .strict();
+  .strip();
 
 export const M1GoldSchema = z
   .object({
