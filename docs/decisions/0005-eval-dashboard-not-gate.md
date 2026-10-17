@@ -32,6 +32,7 @@ M1-07（`83921d1`，2026-08-14）聚合评测判定 `M1 EVAL FAIL`，按执行�
 4. **作者自评是有效人工评分**：人工评分文件可选填 `reviewer: "author" | "external"`，缺省视为 `author`。
 5. `eval:m1:continuation` 的人工评分低于目标时状态为 `below_target`（退出码 0）；`failed` 只保留给技术失败、一致性 hard gate 失败和隔离失败。
 6. 默认 CI（lint、typecheck、Vitest 单元/合约、build、Chromium E2E）保持不变，仍是每个 PR 的阻塞检查。真实模型评测仍不进默认 CI。
+7. **关键人物错误 merge 是质量目标，不是硬失败**：critical character merge mistakes were downgraded from a hard failure to a quality target (reported, non-blocking)。仪表盘会单独列出，即使总体 F1 达标也应优先修复。
 
 ## 不变的部分
 

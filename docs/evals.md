@@ -212,7 +212,10 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 `npm run eval:m1 -- --manifest <A> --manifest <B> --manifest <C> [--human-dir <dir>]` 读取人工评分（`story-map.json`、`correction-cost.json`、`ripple.json`、`continuation.json`，可选 `users.json`），生成：
 
 - `.data/evals/m1-eval/<run-id>/metrics.json`（`kind: "m1_dashboard"`，被 Git 忽略）；
-- `docs/evals/runs/m1-dashboard-<date>-<sha>.md`（脱敏，可提交）。
+- `docs/evals/runs/m1-dashboard-<timestamp>-<random>-<sha>.md`（脱敏，可提交）；
+- 指定 `--report-dir <dir>` 时，Markdown 改写到 `<dir>/<run-id>/report.md`，与 `metrics.json` 同目录。
+
+`<run-id>` 精确到毫秒并带随机后缀，重复运行不会互相覆盖。人工评分文件缺失记为 `not_measured`；文件存在但 JSON 非法或对应 Story 未通过 Schema 校验时命令报错并以非零退出。manifest 必须提供正整数 `characterCount`（或 `characterCountByClass` / `scale.characters`），否则同样报错，避免静默套用错误的修正成本档位。
 
 只有硬规则被违反时命令以非零退出。质量目标未达标、数据缺失都不影响退出码。
 
