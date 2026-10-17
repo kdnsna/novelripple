@@ -20,7 +20,14 @@ export const ContextManifestSectionSchema = z
     included: z.boolean(),
     chars: z.number().int().min(0),
     trimmed: z.boolean(),
+    /** 被整体丢弃的条目 id（证据、旧场景、路径摘要行）。 */
     droppedItemIds: z.array(z.string()),
+    /** 用自身摘要替换正文的条目 id（当前只会是最新场景）。 */
+    summarizedItemIds: z.array(z.string()).optional(),
+    /** 因没有可用摘要而被句末截断的条目 id（v1 场景）。 */
+    truncatedItemIds: z.array(z.string()).optional(),
+    /** worldline_setup 启用紧凑形式时实际移除的字段名，不含正文。 */
+    compactedFields: z.array(z.string()).optional(),
     /** 只记录条目 id，供路径摘要说明实际覆盖了哪些场景。 */
     coveredItemIds: z.array(z.string()).optional(),
     watermarkId: z.string().nullable().optional(),

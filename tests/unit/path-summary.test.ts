@@ -115,13 +115,43 @@ describe("buildPathSummary", () => {
     expect(summary.truncated).toBe(true);
   });
 
-  it("truncates compressed titles by whole titles only", () => {
+  it("keeps the most recent compressed titles when not all of them fit", () => {
     const summary = buildPathSummary({ pathNodes: path, maxChars: 22 });
 
-    expect(summary.text).toBe("更早剧情（第 1–2 幕）：钟楼初见");
-    // 第二条标题没有被切成半截。
-    expect(summary.text).not.toContain("雨夜");
-    expect(summary.coveredSceneIds).toEqual(["scene_1", "scene_2"]);
+    // 只保留最靠近剩余全文行的最近一条压缩标题，范围必须连续。
+    expect(summary.text).toBe("更早剧情（第 2–2 幕）：雨夜相约");
+    // 最早一条标题没有被切成半截，也没有被错误地显示。
+    expect(summary.text).not.toContain("钟楼");
+    expect(summary.coveredSceneIds).toEqual(["scene_2"]);
+    expect(summary.watermarkSceneId).toBe("scene_2");
+    expect(summary.truncated).toBe(true);
+  });
+
+  it("reports only the compressed scenes actually shown and keeps the range contiguous", () => {
+    const nodes: PathSummaryNode[] = [
+      { id: "s1", title: "钟楼里的旧信", summary: "一" },
+      { id: "s2", title: "雨夜里的约定", summary: "二" },
+      { id: "s3", title: "账簿转移之后", summary: "三" },
+      { id: "s4", title: "门外脚步响起", summary: "四" },
+      { id: "s5", title: "灯塔下的夜谈", summary: "五" },
+      { id: "s6", title: "清晨的渡口", summary: "六" },
+    ];
+
+    const summary = buildPathSummary({
+      pathNodes: nodes,
+      recentSceneCount: 1,
+      maxChars: 45,
+    });
+
+    expect(summary.text).toBe(
+      [
+        "更早剧情（第 3–4 幕）：账簿转移之后；门外脚步响起",
+        "第 5 幕：灯塔下的夜谈——五",
+      ].join("\n"),
+    );
+    expect(summary.coveredSceneIds).toEqual(["s3", "s4", "s5"]);
+    expect(summary.watermarkSceneId).toBe("s5");
+    expect(summary.truncated).toBe(true);
   });
 
   it("fails closed when even the compressed marker cannot fit", () => {

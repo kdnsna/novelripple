@@ -71,24 +71,32 @@ export function buildPathSummary(input: {
   for (let compressed = 1; compressed <= summarized.length; compressed += 1) {
     const remaining = lines.slice(compressed);
     const remainingText = remaining.join("\n");
-    const prefix = `更早剧情（第 1–${compressed} 幕）：`;
     const available =
       maxChars - (remaining.length > 0 ? remainingText.length + 1 : 0);
-    if (available < prefix.length) continue;
+    if (available <= 0) continue;
 
-    const marker = buildCompressedLine(
-      prefix,
-      summarized.slice(0, compressed),
-      available,
-    );
+    const compressedNodes = summarized.slice(0, compressed);
+    const marker = buildCompressedLine(compressedNodes, compressed, available);
+    if (marker === null) continue;
     const text =
-      remaining.length === 0 ? marker : `${marker}\n${remainingText}`;
+      remaining.length === 0 ? marker.text : `${marker.text}\n${remainingText}`;
     if (text.length > maxChars) continue;
+
+    // 只覆盖实际显示的场景：压缩行保留的是最靠近全文行的最近若干标题，
+    // 更早的标题被丢弃，因此 watermark 不会越过实际显示范围。
+    const shownCompressed = compressedNodes
+      .slice(marker.startIndex)
+      .map((node) => node.id);
+    const shownFull = summarized
+      .slice(compressed)
+      .map((node) => node.id);
+    const coveredSceneIds = [...shownCompressed, ...shownFull];
 
     return {
       text,
-      coveredSceneIds: summarized.map((node) => node.id),
-      watermarkSceneId: summarized[summarized.length - 1]!.id,
+      coveredSceneIds,
+      watermarkSceneId:
+        coveredSceneIds[coveredSceneIds.length - 1] ?? null,
       truncated: true,
     };
   }
@@ -99,22 +107,28 @@ export function buildPathSummary(input: {
   );
 }
 
-/** 把最早的若干场景标题拼成一行；只接受完整标题，不做字符截断。 */
+/**
+ * 把压缩场景标题拼成一行。
+ *
+ * 放不下全部标题时保留最靠近剩余全文行的最近若干条，丢弃更早的标题，
+ * 因此显示范围始终是连续的 `第 a–b 幕`。只接受完整标题，不做字符截断。
+ */
 function buildCompressedLine(
-  prefix: string,
   nodes: readonly PathSummaryNode[],
+  lastPosition: number,
   available: number,
-): string {
-  let line = prefix;
-  for (const node of nodes) {
-    const title = node.title.trim();
-    if (title.length === 0) continue;
-    const separator = line === prefix ? "" : "；";
-    const candidate = `${line}${separator}${title}`;
-    if (candidate.length > available) break;
-    line = candidate;
+): { text: string; startIndex: number } | null {
+  for (let startIndex = 0; startIndex < nodes.length; startIndex += 1) {
+    const firstPosition = startIndex + 1;
+    const prefix = `更早剧情（第 ${firstPosition}–${lastPosition} 幕）：`;
+    const titles = nodes
+      .slice(startIndex)
+      .map((node) => node.title.trim())
+      .filter((title) => title.length > 0);
+    const line = `${prefix}${titles.join("；")}`;
+    if (line.length <= available) return { text: line, startIndex };
   }
-  return line;
+  return null;
 }
 
 function formatLine(node: PathSummaryNode, position: number): string {

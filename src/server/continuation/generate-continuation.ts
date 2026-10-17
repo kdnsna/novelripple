@@ -479,6 +479,7 @@ function buildContextMaterial(input: {
     sections: {
       worldlineSetup,
       worldlineSetupCompact,
+      worldlineSetupCompactRemoved: WORLDLINE_SETUP_COMPACT_REMOVED,
       canonEvents,
       pathSummary: pathSummary.text,
       pathSummaryCoveredSceneIds: pathSummary.coveredSceneIds,
@@ -490,6 +491,15 @@ function buildContextMaterial(input: {
     },
   });
 }
+
+/**
+ * 紧凑 currentState 实际移除的字段：只保留 key/计数，不保留正文。
+ * 线索文本仍以 key 形式保留，因此不在移除列表中。
+ */
+const WORLDLINE_SETUP_COMPACT_REMOVED = [
+  "currentState.factsAdded[].statement",
+  "currentState.characterChanges[].summary",
+] as const;
 
 function buildWorldlineSetup(
   context: ContinuationContext,

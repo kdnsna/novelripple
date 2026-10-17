@@ -203,15 +203,24 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 方向生成没有 `selected_direction`，其余段相同。
 
-`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不裁剪。`canon_evidence` 每条带优先级：相关事件证据优先级最高，代表窗口和人物证据较低；裁剪时先丢低优先级，同优先级从末尾整条丢弃，因此相关事件证据最后才被裁掉。`recent_scenes` 从最旧开始整条丢弃但始终保留最新一个场景；`path_summary` 按整行从开头裁剪，先把首行省略/压缩提示保留到最后一刻，绝不把一行切成半句。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
+`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试，返回第一个渲染长度不超过预算的状态；每一级都只删除或严格缩短内容，因此更大的预算不会得到更靠后的降级状态：
 
-深层路径的 `worldline_setup` 会随 `currentState` 增长。超预算时先把它整体替换成紧凑形式（只保留事实/人物/线索的计数与 key，不包含任何 fact 正文），再按上述顺序裁剪；如果最新场景仍放不下，则用该场景自己的 `summary` 替换正文，并在 manifest 的 `droppedItemIds` 记录该场景 id。只有这样仍超过预算时才 fail closed。
+1. 完整内容；
+2. `canon_evidence` 按优先级从低到高、同优先级从末尾一次丢一条，因此相关事件证据最后才被裁掉；
+3. `recent_scenes` 从最旧开始整条丢弃，始终保留最新一个场景；
+4. `path_summary` 按整行从开头裁剪，首行省略/压缩提示保留到最后一刻，绝不把一行切成半句；
+5. 若调用方提供了严格更短的紧凑 `worldline_setup`，整体替换为紧凑形式（只保留计数与 key，不包含任何 fact 正文）；
+6. 最新场景有非空且严格短于正文的 `summary` 时，用该摘要替换正文；
+7. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；若连句末前缀都放不下或正文没有句末边界，则进入第 8 步；
+8. 仍超过预算则 fail closed，错误消息包含所需长度与 `maxChars`，不返回半成品。
 
-每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+不会因为“完整形式的必需段放不下”提前启用紧凑形式：紧凑 `worldline_setup` 只出现在阶梯第 5 步，且只有它严格更短时才使用。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
+
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
 
 ### 路径滚动摘要
 
-场景生成输出 `summary`（≤200 字），与场景一起不可变保存。组装上下文时，沿根→当前节点路径确定性构建滚动摘要：最近 2 个场景留给 `recent_scenes` 原文，更早的场景按从旧到新写成摘要行。超过 1200 字符时不再只丢弃旧行，而是保留最新若干行原文，把更早的场景压缩成一行 `更早剧情（第 a–b 幕）：` 加场景标题（以 `；` 连接）；标题按整条截断，不做字符截断。压缩只读取给定路径的不可变字段，同一输入逐字节相同，不额外调用模型，也不查询兄弟分支；切换路径时按新路径重建，祖先内容保持一致。`coveredSceneIds` / `watermarkSceneId` 指向实际被摘要覆盖的节点。
+场景生成输出 `summary`（≤200 字），与场景一起不可变保存。组装上下文时，沿根→当前节点路径确定性构建滚动摘要：最近 2 个场景留给 `recent_scenes` 原文，更早的场景按从旧到新写成摘要行。超过 1200 字符时不再只丢弃旧行，而是保留最新若干行原文，把更早的场景压缩成一行 `更早剧情（第 a–b 幕）：` 加场景标题（以 `；` 连接）；标题按整条截断，不做字符截断。压缩行放不下全部压缩标题时，保留最靠近剩余全文行的最近若干条标题、丢弃更早的标题，因此显示范围始终连续；标记写实际显示范围 `第 a–b 幕`（a 为第一个实际显示的场景）。`coveredSceneIds` / `watermarkSceneId` 只覆盖实际显示的压缩场景与保留的全文行，不包含被丢弃的最早标题。压缩只读取给定路径的不可变字段，同一输入逐字节相同，不额外调用模型，也不查询兄弟分支；切换路径时按新路径重建，祖先内容保持一致。
 
 模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan、当前路径状态、路径摘要与最近场景，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
 

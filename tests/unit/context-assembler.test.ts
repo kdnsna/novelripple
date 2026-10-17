@@ -45,6 +45,17 @@ function sectionOf(
   return found;
 }
 
+function tryAssemble(
+  maxChars: number,
+  input: ContextAssemblerInput["sections"],
+): ContextAssemblerResult | null {
+  try {
+    return assembleContext({ maxChars, sections: input });
+  } catch {
+    return null;
+  }
+}
+
 describe("assembleContext", () => {
   it("renders the fixed section order with stable tags", () => {
     const result = assemble(10_000);
@@ -199,6 +210,25 @@ describe("assembleContext", () => {
     }
   });
 
+  it("aligns a compressed path line with only the scenes it actually shows", () => {
+    const result = assembleContext({
+      maxChars: 10_000,
+      sections: {
+        ...sections,
+        canonEvidence: [],
+        pathSummary:
+          "更早剧情（第 2–3 幕）：乙；丙\n第 4 幕：丁——丁的摘要。",
+        pathSummaryCoveredSceneIds: ["p2", "p3", "p4"],
+        recentScenes: [{ id: "scene_latest", text: "最新场景正文。" }],
+      },
+    });
+
+    const path = sectionOf(result, "path_summary");
+    // 压缩行第 2–3 幕覆盖两个场景，第二行是第 4 幕；被丢弃的更早场景不在覆盖中。
+    expect(path.coveredItemIds).toEqual(["p2", "p3", "p4"]);
+    expect(path.watermarkId).toBe("p4");
+  });
+
   it("omits the path summary when no whole line fits and clears coverage", () => {
     const result = assembleContext({
       maxChars: 380,
@@ -255,7 +285,7 @@ describe("assembleContext", () => {
     expect(result.prompt).not.toContain("事实正文");
   });
 
-  it("replaces the newest scene with its summary before failing closed", () => {
+  it("uses compact worldline_setup before replacing the newest prose", () => {
     const fullSetup = `完整状态：${"事实正文".repeat(60)}`;
     const compactSetup =
       '{"currentState":{"factsAddedCount":1,"factsAddedKeys":["generated:x"]}}';
@@ -264,10 +294,73 @@ describe("assembleContext", () => {
       text: "最新场景正文。".repeat(15),
       summary: "最新场景摘要。",
     };
-    const baseSections: ContextAssemblerInput["sections"] = {
+    const probeSections: ContextAssemblerInput["sections"] = {
       ...sections,
       worldlineSetup: fullSetup,
-      worldlineSetupCompact: compactSetup,
+      canonEvents: '{"events":[]}',
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [newest],
+      selectedDirection: "方向。",
+      anchorReminder: "提醒。",
+    };
+
+    const fullState = assembleContext({
+      maxChars: 100_000,
+      sections: probeSections,
+    });
+    const compactState = assembleContext({
+      maxChars: 100_000,
+      sections: { ...probeSections, worldlineSetup: compactSetup },
+    });
+    // 取一个介于“完整状态”和“紧凑状态”之间的预算：
+    // 完整 worldline_setup 放不下，但紧凑形式能保住最新场景正文。
+    const budget = Math.floor(
+      (fullState.prompt.length + compactState.prompt.length) / 2,
+    );
+    expect(fullState.prompt.length).toBeGreaterThan(budget);
+    expect(compactState.prompt.length).toBeLessThanOrEqual(budget);
+
+    const result = assembleContext({
+      maxChars: budget,
+      sections: {
+        ...probeSections,
+        worldlineSetupCompact: compactSetup,
+        worldlineSetupCompactRemoved: [
+          "currentState.factsAdded[].statement",
+        ],
+      },
+    });
+
+    const setup = sectionOf(result, "worldline_setup");
+    expect(setup).toMatchObject({ included: true, trimmed: true });
+    expect(setup.compactedFields).toEqual([
+      "currentState.factsAdded[].statement",
+    ]);
+    expect(result.prompt).toContain(compactSetup);
+    expect(result.prompt).not.toContain("事实正文");
+
+    const scenes = sectionOf(result, "recent_scenes");
+    expect(scenes).toMatchObject({
+      included: true,
+      trimmed: false,
+      droppedItemIds: [],
+    });
+    expect(scenes.summarizedItemIds ?? []).toEqual([]);
+    expect(scenes.truncatedItemIds ?? []).toEqual([]);
+    expect(result.prompt).toContain(newest.text);
+    expect(result.prompt).not.toContain(newest.summary);
+  });
+
+  it("replaces the newest scene with its summary before failing closed", () => {
+    const newest = {
+      id: "s1",
+      text: "最新场景正文。".repeat(15),
+      summary: "最新场景摘要。",
+    };
+    const baseSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: `完整状态：${"事实正文".repeat(60)}`,
       canonEvents: '{"events":[]}',
       pathSummary: "",
       canonEvidence: [],
@@ -280,7 +373,8 @@ describe("assembleContext", () => {
     expect(sectionOf(result, "recent_scenes")).toMatchObject({
       included: true,
       trimmed: true,
-      droppedItemIds: ["s1"],
+      droppedItemIds: [],
+      summarizedItemIds: ["s1"],
     });
     expect(result.prompt).toContain(newest.summary);
     expect(result.prompt).not.toContain(newest.text);
@@ -294,6 +388,62 @@ describe("assembleContext", () => {
         },
       }),
     ).toThrow("必需上下文段与最新场景超过预算");
+  });
+
+  it("truncates legacy prose without a summary at a sentence boundary", () => {
+    const prose = "第一句。第二句。第三句。第四句。";
+    const baseSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [{ id: "legacy_scene", text: prose }],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    const full = assembleContext({ maxChars: 100_000, sections: baseSections });
+    // 只比完整长度小 3 个字符：必须截断，但第一句加标记仍然放得下。
+    const result = assembleContext({
+      maxChars: full.prompt.length - 3,
+      sections: baseSections,
+    });
+
+    expect(result.prompt).toContain("第一句。（后文已截断）");
+    expect(result.prompt).not.toContain("第二句");
+    const scenes = sectionOf(result, "recent_scenes");
+    expect(scenes).toMatchObject({
+      included: true,
+      trimmed: true,
+      droppedItemIds: [],
+      truncatedItemIds: ["legacy_scene"],
+    });
+    expect(scenes.summarizedItemIds ?? []).toEqual([]);
+    expect(result.prompt.length).toBeLessThanOrEqual(full.prompt.length - 3);
+  });
+
+  it("fails closed when legacy prose has no sentence boundary to truncate", () => {
+    const prose = "没有句号的遗言";
+    const baseSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [{ id: "legacy_scene", text: prose }],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    const full = assembleContext({ maxChars: 100_000, sections: baseSections });
+
+    expect(() =>
+      assembleContext({
+        maxChars: full.prompt.length - 1,
+        sections: baseSections,
+      }),
+    ).toThrow(
+      /必需上下文段与最新场景超过预算：需要 \d+ 字符，maxChars=\d+/,
+    );
   });
 
   it("fails closed when the mandatory sections alone exceed the budget", () => {
@@ -390,5 +540,136 @@ describe("assembleContext", () => {
         true,
       );
     }
+  });
+
+  it("degrades monotonically as the budget grows", () => {
+    const monotonicSections: ContextAssemblerInput["sections"] = {
+      worldlineSetup: `完整世界线设定：${"事实正文".repeat(40)}`,
+      worldlineSetupCompact:
+        '{"currentState":{"factsAddedCount":2,"factsAddedKeys":["generated:a","generated:b"]}}',
+      worldlineSetupCompactRemoved: [
+        "currentState.factsAdded[].statement",
+        "currentState.characterChanges[].summary",
+      ],
+      canonEvents:
+        '{"events":[{"id":"event_01"},{"id":"event_02"}],"edges":[],"endingCandidates":[]}',
+      pathSummary: [
+        "更早剧情（第 1–3 幕）：甲；乙；丙",
+        "第 4 幕：丁——丁的摘要。",
+        "第 5 幕：戊——戊的摘要。",
+      ].join("\n"),
+      pathSummaryCoveredSceneIds: ["p1", "p2", "p3", "p4", "p5"],
+      canonEvidence: [
+        { id: "related_1", text: "相关证据一。", priority: 2 },
+        { id: "related_2", text: "相关证据二。", priority: 2 },
+        { id: "style_1", text: "代表片段。", priority: 1 },
+        { id: "style_2", text: "人物证据。", priority: 1 },
+        { id: "default_1", text: "默认证据。", priority: 0 },
+      ],
+      recentScenes: [
+        {
+          id: "scene_1",
+          text: "第一幕正文。".repeat(6),
+          summary: "第一幕摘要。",
+        },
+        {
+          id: "scene_2",
+          text: "第二幕正文。".repeat(6),
+          summary: "第二幕摘要。",
+        },
+      ],
+      selectedDirection: "让沈砚在雨夜说出真相。",
+      anchorReminder: "请保留顾闻舟在钟楼出现的结局。",
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: monotonicSections,
+    });
+
+    // 一次成功之后，所有更大的预算都必须成功。
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length + 50; budget += 1) {
+      const result = tryAssemble(budget, monotonicSections);
+      if (result) {
+        firstSuccess ??= budget;
+      } else {
+        expect(firstSuccess).toBeNull();
+      }
+    }
+    expect(firstSuccess).not.toBeNull();
+    expect(() =>
+      assembleContext({
+        maxChars: firstSuccess! - 1,
+        sections: monotonicSections,
+      }),
+    ).toThrow();
+
+    const droppedIds = (result: ContextAssemblerResult, kind: "canon_evidence" | "recent_scenes") =>
+      new Set(sectionOf(result, kind).droppedItemIds);
+    const keptEvidence = (result: ContextAssemblerResult) => {
+      const dropped = droppedIds(result, "canon_evidence");
+      return monotonicSections.canonEvidence
+        .map((item) => item.id)
+        .filter((id) => !dropped.has(id));
+    };
+    const keptScenes = (result: ContextAssemblerResult) => {
+      const dropped = droppedIds(result, "recent_scenes");
+      return monotonicSections.recentScenes
+        .map((item) => item.id)
+        .filter((id) => !dropped.has(id));
+    };
+    const pathLineCount = (result: ContextAssemblerResult) => {
+      const match = /<path_summary>\n([\s\S]*?)\n<\/path_summary>/.exec(
+        result.prompt,
+      );
+      return match
+        ? match[1]!.split("\n").filter((line) => line.length > 0).length
+        : 0;
+    };
+    const compactUsed = (result: ContextAssemblerResult) =>
+      sectionOf(result, "worldline_setup").trimmed;
+    const summaryUsed = (result: ContextAssemblerResult) =>
+      (sectionOf(result, "recent_scenes").summarizedItemIds ?? []).length > 0;
+    const truncationUsed = (result: ContextAssemblerResult) =>
+      (sectionOf(result, "recent_scenes").truncatedItemIds ?? []).length > 0;
+
+    let previous: ContextAssemblerResult | null = null;
+    let sawCompact = false;
+    let sawSummary = false;
+    for (
+      let budget = firstSuccess!;
+      budget <= full.prompt.length + 100;
+      budget += 1
+    ) {
+      const result = tryAssemble(budget, monotonicSections);
+      expect(result).not.toBeNull();
+      if (!result) continue;
+      sawCompact ||= compactUsed(result);
+      sawSummary ||= summaryUsed(result);
+
+      if (previous) {
+        for (const id of keptEvidence(previous)) {
+          expect(keptEvidence(result)).toContain(id);
+        }
+        for (const id of keptScenes(previous)) {
+          expect(keptScenes(result)).toContain(id);
+        }
+        expect(pathLineCount(result)).toBeGreaterThanOrEqual(
+          pathLineCount(previous),
+        );
+        if (!compactUsed(previous)) expect(compactUsed(result)).toBe(false);
+        if (!summaryUsed(previous)) expect(summaryUsed(result)).toBe(false);
+        if (!truncationUsed(previous)) {
+          expect(truncationUsed(result)).toBe(false);
+        }
+        expect(result.prompt.length).toBeGreaterThanOrEqual(
+          previous.prompt.length,
+        );
+      }
+      previous = result;
+    }
+    // 扫描区间至少实际覆盖了紧凑设定与摘要替换两种降级。
+    expect(sawCompact).toBe(true);
+    expect(sawSummary).toBe(true);
   });
 });
