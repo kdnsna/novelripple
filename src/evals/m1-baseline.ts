@@ -15,6 +15,9 @@ import type {
   AIProviderResponse,
 } from "@/server/ai/types";
 
+import { M1GoldMatchSchema, matchM1Gold } from "./m1-gold-matcher";
+import type { M1Gold } from "./m1-gold";
+
 type BenchmarkCharacter = {
   id: string;
   name: string;
@@ -165,6 +168,7 @@ export const M1StoryMapBaselineScoreSchema = z
       })
       .strict(),
     endingCandidates: PendingManualScoreSchema,
+    goldMatch: M1GoldMatchSchema.optional(),
   })
   .strict();
 
@@ -246,7 +250,7 @@ export const M1BaselineStoryReportSchema = z
 export const M1BaselineSuiteReportSchema = z
   .object({
     schemaVersion: z.literal(1),
-    kind: z.literal("m1_unoptimized_baseline"),
+    kind: z.enum(["m1_unoptimized_baseline", "m1_tuning"]),
     commitSha: z.string().regex(/^[a-f0-9]{40}$/),
     evaluatedAt: z.iso.datetime(),
     status: z.enum(["awaiting_human_review", "failed"]),
@@ -549,6 +553,7 @@ export function scoreM1StoryMapCandidate(input: {
   manifest: M1BenchmarkManifest;
   source: Source;
   storyMap: StoryMap;
+  gold?: M1Gold;
 }): M1StoryMapBaselineScore {
   const expectedCharacters = [
     ...input.manifest.expectedCoreCharacters,
@@ -589,7 +594,7 @@ export function scoreM1StoryMapCandidate(input: {
     )
     .map((event) => event.id);
 
-  return M1StoryMapBaselineScoreSchema.parse({
+  const score = {
     coreCharacterRecall: rateScore(
       matchedCoreCount,
       input.manifest.expectedCoreCharacters.length,
@@ -634,6 +639,20 @@ export function scoreM1StoryMapCandidate(input: {
       input.manifest.expectedEndingCandidates.map((item) => item.id),
       input.storyMap.endingCandidates.map((item) => item.id),
     ),
+  };
+
+  if (!input.gold) {
+    return M1StoryMapBaselineScoreSchema.parse(score);
+  }
+
+  return M1StoryMapBaselineScoreSchema.parse({
+    ...score,
+    goldMatch: matchM1Gold({
+      gold: input.gold,
+      source: input.source,
+      storyMap: input.storyMap,
+      expectedCharacters,
+    }),
   });
 }
 

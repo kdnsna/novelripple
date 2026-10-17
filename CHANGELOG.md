@@ -14,6 +14,8 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 - 证据继续只使用稳定 Unit ID；M1-03（`ca705d3`）的 sectionId + exactQuote 路径保持撤销。Evidence stays on stable Unit IDs; the M1-03 (ca705d3) sectionId + exactQuote path remains reverted.
 - 真实模型 A/B/C 的 Phase 1 仪表盘数字尚未重测，私有基准正文不在仓库。Real-model Phase 1 dashboard numbers for A/B/C are not yet re-measured; private benchmark texts are not in the repo.
 - M1 baseline runner 支持可选的 `NOVELRIPPLE_BENCH_ROOT`：该目录的 realpath 作为额外 private 根，manifest 必须为 `visibility: private` 且 Source 留在该根内；未设置或为空时行为不变。Optional `NOVELRIPPLE_BENCH_ROOT` adds an extra private benchmark root; manifests must be private and sources must stay inside it.
+- M1 baseline 新增可选私有 `gold.json` 自动匹配 Event / Causal Edge / Ending / lenient identity，Unit 窗口为 2；只报告 ID、计数与比例，且仅作近似调参指标、绝不作为门禁。Optional private `gold.json` adds approximate automatic matching for events, causal edges, endings and lenient identity with a 2-unit window; IDs/counts/rates only and never a gate.
+- `eval:m1:baseline` 新增 `--tuning`：允许 1—2 篇，跳过正式 baseline 的 A/B/C、unseen 断言，报告 `kind: "m1_tuning"`。New `--tuning` mode allows 1–2 manifests, skips the formal A/B/C/unseen suite assertion, and reports `kind: "m1_tuning"`.
 
 ### Changed / 变更
 

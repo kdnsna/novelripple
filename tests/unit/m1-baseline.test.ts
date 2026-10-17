@@ -15,6 +15,7 @@ import {
   validateM1BenchmarkManifest,
   type ProviderObservation,
 } from "@/evals/m1-baseline";
+import { parseM1Gold } from "@/evals/m1-gold";
 import type { AIProvider } from "@/server/ai/types";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 
@@ -222,6 +223,29 @@ describe("M1 baseline contract", () => {
       },
     });
     expect(JSON.stringify(score)).not.toContain(storyMap.events[0]!.summary);
+
+    const gold = parseM1Gold({
+      schemaVersion: 1,
+      storyId: manifest.id,
+      characters: [],
+      mentionedOnly: [],
+      events: [],
+      causalLinks: [],
+      endings: [],
+    });
+    const withGold = scoreM1StoryMapCandidate({
+      manifest,
+      source,
+      storyMap,
+      gold,
+    });
+
+    expect(score.goldMatch).toBeUndefined();
+    expect(withGold.identity).toEqual(score.identity);
+    expect(withGold.goldMatch?.events.matched).toBe(0);
+    expect(withGold.goldMatch?.lenientIdentity.exactMatches).toBe(
+      score.identity.exactMatches,
+    );
   });
 
   it("observes usage, duration and repair without retaining prompts or output", async () => {
