@@ -416,7 +416,8 @@ export function summarizeStoryMapValidation(input: {
       runKind: "story_map_extract",
     }),
     reconciler: summarizeValidationStage(input.calls, input.runs, {
-      schemaName: "story_map_content",
+      // 分块管线中，Artifact 绑定的是最终合并阶段（schema story_map_merge）。
+      schemaName: "story_map_merge",
       runKind: "story_map_reconcile",
     }),
     evidenceValidity: input.evidenceValidity,

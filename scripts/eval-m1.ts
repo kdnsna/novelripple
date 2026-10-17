@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -38,6 +39,7 @@ function parseArguments(): {
   baselineRun: string | undefined;
   continuationRun: string | undefined;
   reportDir: string;
+  reportDirProvided: boolean;
 } {
   const { values } = parseArgs({
     options: {
@@ -63,6 +65,7 @@ function parseArguments(): {
     reportDir: values["report-dir"]
       ? path.resolve(values["report-dir"])
       : path.join(repositoryRoot, ".data", "evals", "m1-eval"),
+    reportDirProvided: Boolean(values["report-dir"]),
   };
 }
 
@@ -75,19 +78,30 @@ type ManifestMeta = {
 
 async function readManifestMeta(manifestPath: string): Promise<ManifestMeta> {
   const raw = JSON.parse(await readFile(manifestPath, "utf8"));
+  const fileName = path.basename(manifestPath);
   const id = raw.id ?? path.basename(path.dirname(manifestPath));
   const rights = raw.rights ?? "unknown";
-  const characterCount =
-    raw.characterCount ??
-    raw.characterCountByClass ??
-    (raw.scale?.characters ?? null);
+  const candidates = [
+    raw.characterCount,
+    raw.characterCountByClass,
+    raw.scale?.characters,
+  ];
+  const characterCount = candidates.find(
+    (value): value is number =>
+      typeof value === "number" && Number.isInteger(value) && value > 0,
+  );
+  if (characterCount === undefined) {
+    throw new Error(
+      `${fileName} 缺少正整数 characterCount（characterCount / characterCountByClass / scale.characters）`,
+    );
+  }
   return {
     id,
     rightsMode:
       typeof rights === "string"
         ? rights
         : rights.mode ?? JSON.stringify(rights),
-    characterCount: Number(characterCount ?? 0),
+    characterCount,
     unseenByPromptAuthors: Boolean(raw.unseenByPromptAuthors),
   };
 }
@@ -99,23 +113,31 @@ async function readHumanFile<T>(
   key: string,
 ): Promise<T | null> {
   const filePath = path.join(humanDir, fileName);
+  let text: string;
   try {
-    const raw = JSON.parse(await readFile(filePath, "utf8"));
-    const entries = Array.isArray(raw) ? raw : [raw];
-    const target = entries.find(
-      (entry: { storyClass?: string }) =>
-        entry?.storyClass?.toUpperCase() === key,
-    );
-    if (!target) return null;
-    const parsed = schema.safeParse(target);
-    if (!parsed.success) {
-      console.error(`[warn] ${fileName} 中 Story ${key} 解析失败：忽略`);
-      return null;
-    }
-    return parsed.data as T;
-  } catch {
-    return null;
+    text = await readFile(filePath, "utf8");
+  } catch (error) {
+    // 文件缺失 = 未测；其它读取错误必须暴露。
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw new Error(`${fileName} 不是合法 JSON（Story ${key}）`);
+  }
+  const entries = Array.isArray(raw) ? raw : [raw];
+  const target = entries.find(
+    (entry: { storyClass?: string }) =>
+      entry?.storyClass?.toUpperCase() === key,
+  );
+  if (!target) return null;
+  const parsed = schema.safeParse(target);
+  if (!parsed.success) {
+    throw new Error(`${fileName} 中 Story ${key} 未通过 Schema 校验`);
+  }
+  return parsed.data as T;
 }
 
 async function findLatestRun(
@@ -190,8 +212,10 @@ async function readContinuationPerformance(
 
 async function main() {
   const args = parseArguments();
-  const runId = `m1-eval-${new Date().toISOString().replace(/[:.]/g, "").slice(0, 14)}`;
   const evaluatedAt = new Date().toISOString();
+  const timestamp = evaluatedAt.replace(/\D/g, "");
+  const randomSuffix = randomBytes(3).toString("hex");
+  const runId = `m1-eval-${timestamp}-${randomSuffix}`;
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const execFileAsync = promisify(execFile);
@@ -244,14 +268,24 @@ async function main() {
     );
   }
   let userObservation: M1UserObservation | null = null;
+  let usersText: string | null = null;
   try {
-    const raw = JSON.parse(
-      await readFile(path.join(args.humanDir, "users.json"), "utf8"),
-    );
-    const parsed = M1UserObservationSchema.safeParse(raw);
-    if (parsed.success) userObservation = parsed.data;
-  } catch {
-    // 缺失保持 null
+    usersText = await readFile(path.join(args.humanDir, "users.json"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (usersText !== null) {
+    let usersRaw: unknown;
+    try {
+      usersRaw = JSON.parse(usersText);
+    } catch {
+      throw new Error("users.json 不是合法 JSON");
+    }
+    const parsed = M1UserObservationSchema.safeParse(usersRaw);
+    if (!parsed.success) {
+      throw new Error("users.json 未通过 Schema 校验");
+    }
+    userObservation = parsed.data;
   }
 
   // 3. performance（continuation run）
@@ -329,7 +363,11 @@ async function main() {
       hardRulesPassed: passed,
       targets: {
         storyMap: combineTargets(stories.map((s) => s.targets.storyMap)),
-        aggregateStoryMap: { status: aggregate.status, misses: aggregate.misses },
+        aggregateStoryMap: {
+          status: aggregate.status,
+          misses: aggregate.misses,
+          unmeasured: aggregate.unmeasured,
+        },
         correctionCost: combineTargets(
           stories.map((s) => s.targets.correctionCost),
         ),
@@ -357,14 +395,17 @@ async function main() {
   const metricsPath = path.join(runDirectory, "metrics.json");
   await writeFile(metricsPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
-  // 5. 脱敏仪表盘报告
-  const reportPath = path.join(
-    repositoryRoot,
-    "docs",
-    "evals",
-    "runs",
-    `m1-dashboard-${new Date().toISOString().slice(0, 10)}-${commitSha.slice(0, 7)}.md`,
-  );
+  // 5. 脱敏仪表盘报告：--report-dir 时与 metrics.json 同目录，否则写入 docs/evals/runs。
+  const reportPath = args.reportDirProvided
+    ? path.join(runDirectory, "report.md")
+    : path.join(
+        repositoryRoot,
+        "docs",
+        "evals",
+        "runs",
+        `m1-dashboard-${timestamp}-${randomSuffix}-${commitSha.slice(0, 7)}.md`,
+      );
+  await mkdir(path.dirname(reportPath), { recursive: true });
   await writeFile(reportPath, buildM1DashboardMarkdown(report), "utf8");
 
   console.log("NovelRipple M1 质量仪表盘");

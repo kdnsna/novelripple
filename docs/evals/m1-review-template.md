@@ -18,8 +18,11 @@
 - Commit SHA：
 - Provider / model：
 - Structured Output mode：
-- Story Map Extractor Prompt version：
-- Story Map Reconciler Prompt version：
+- Story Map Chunk Prompt version：
+- Story Map Glean Prompt version：
+- Story Map Names Prompt version：
+- Story Map Endings Prompt version：
+- Story Map Merge Prompt version：
 - Impact Plan Prompt version：
 - Continuation Directions Prompt version：
 - Continuation Scene Prompt version：

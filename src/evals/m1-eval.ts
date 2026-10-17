@@ -121,7 +121,12 @@ const HardRuleResultSchema = z
   .object({ status: HardRuleStatusSchema, violations: z.array(z.string()) })
   .strict();
 const TargetResultSchema = z
-  .object({ status: TargetStatusSchema, misses: z.array(z.string()) })
+  .object({
+    status: TargetStatusSchema,
+    misses: z.array(z.string()),
+    /** 同一指标块内缺失、因而无法判断的子项。 */
+    unmeasured: z.array(z.string()),
+  })
   .strict();
 
 export type HardRuleResult = z.infer<typeof HardRuleResultSchema>;
@@ -163,7 +168,7 @@ export const M1EvalReportSchema = z
               .object({
                 benchmarkId: z.string().min(1),
                 rightsMode: z.string().min(1),
-                characterCount: z.number().int().nonnegative(),
+                characterCount: z.number().int().positive(),
                 unseenByPromptAuthors: z.boolean(),
                 promptVersions: z.array(z.string()),
               })
@@ -362,11 +367,18 @@ const CONTINUATION_TARGETS = {
   narrativeContinuity: 3.5,
 } as const;
 
-function target(measured: boolean, misses: string[]): TargetResult {
-  return {
-    status: !measured ? "not_measured" : misses.length > 0 ? "below_target" : "met",
-    misses,
-  };
+function target(
+  measured: boolean,
+  misses: string[],
+  unmeasured: string[] = [],
+): TargetResult {
+  const status =
+    misses.length > 0
+      ? "below_target"
+      : !measured || unmeasured.length > 0
+        ? "not_measured"
+        : "met";
+  return { status, misses, unmeasured };
 }
 
 export function evaluateStoryMapTargets(
@@ -401,11 +413,14 @@ export function evaluateAggregateStoryMapTargets(
   const totalEvents = available.reduce((sum, s) => sum + s.keyEventTotal, 0);
   const keyEventRecall = totalEvents > 0 ? matchedEvents / totalEvents : null;
   const misses: string[] = [];
-  if (identityF1 !== null && identityF1 < AGGREGATE_TARGETS.identityF1)
+  const unmeasured: string[] = [];
+  if (identityF1 === null) unmeasured.push("aggregate_identity_f1");
+  else if (identityF1 < AGGREGATE_TARGETS.identityF1)
     misses.push(`aggregate_identity_f1_${identityF1.toFixed(3)}`);
-  if (keyEventRecall !== null && keyEventRecall < AGGREGATE_TARGETS.keyEventRecall)
+  if (keyEventRecall === null) unmeasured.push("aggregate_key_event_recall");
+  else if (keyEventRecall < AGGREGATE_TARGETS.keyEventRecall)
     misses.push(`aggregate_key_event_recall_${keyEventRecall.toFixed(3)}`);
-  return { ...target(true, misses), identityF1, keyEventRecall };
+  return { ...target(true, misses, unmeasured), identityF1, keyEventRecall };
 }
 
 export function evaluateCorrectionCostTargets(
@@ -433,24 +448,29 @@ export function evaluateRippleTargets(
 ): TargetResult {
   if (!human) return target(false, []);
   const misses: string[] = [];
+  const unmeasured: string[] = [];
   if (!human.strictDivergenceEvaluated)
     misses.push("strict_divergence_not_evaluated");
   if (!human.openDivergenceEvaluated)
     misses.push("open_divergence_not_evaluated");
-  if (
-    human.directImpactApprovalRate !== null &&
+  if (human.directImpactApprovalRate === null) {
+    unmeasured.push("direct_impact_approval_rate");
+  } else if (
     human.directImpactApprovalRate < RIPPLE_TARGETS.directImpactApprovalRate
-  )
+  ) {
     misses.push(`direct_impact_approval_${human.directImpactApprovalRate}`);
-  if (
-    human.anchorConsistencyRate !== null &&
+  }
+  if (human.anchorConsistencyRate === null) {
+    unmeasured.push("anchor_consistency_rate");
+  } else if (
     human.anchorConsistencyRate < RIPPLE_TARGETS.anchorConsistencyRate
-  )
+  ) {
     misses.push(`anchor_consistency_${human.anchorConsistencyRate}`);
+  }
   if (human.approvedSuggestionCount < RIPPLE_TARGETS.approvedSuggestionCount)
     misses.push(`approved_suggestions_${human.approvedSuggestionCount}/3`);
   if (!human.feedbackResolved) misses.push("feedback_not_resolved");
-  return target(true, misses);
+  return target(true, misses, unmeasured);
 }
 
 export function evaluateContinuationTargets(
@@ -490,7 +510,18 @@ export function combineTargets(results: TargetResult[]): TargetResult {
     result.misses.map((miss) => `${["A", "B", "C"][index] ?? index}:${miss}`),
   );
   const measured = results.some((r) => r.status !== "not_measured");
-  return target(measured, misses);
+  const unmeasured = results.flatMap((result, index) => {
+    const label = ["A", "B", "C"][index] ?? index;
+    if (result.unmeasured.length > 0) {
+      return result.unmeasured.map((item) => `${label}:${item}`);
+    }
+    // 整块未测（如缺少某篇人工文件）不能被静默丢弃；仅在确有其它篇被测时标记。
+    if (measured && result.status === "not_measured") {
+      return [`${label}:not_measured`];
+    }
+    return [];
+  });
+  return target(measured, misses, unmeasured);
 }
 
 // ── 脱敏 Markdown 仪表盘 ──
@@ -515,7 +546,11 @@ const TARGET_TEXT = {
 } as const;
 
 function formatTarget(result: TargetResult): string {
-  return `${TARGET_TEXT[result.status]}${result.misses.length > 0 ? `（${result.misses.join("、")}）` : ""}`;
+  const details = [
+    ...result.misses,
+    ...result.unmeasured.map((item) => `${item}=未测`),
+  ];
+  return `${TARGET_TEXT[result.status]}${details.length > 0 ? `（${details.join("、")}）` : ""}`;
 }
 
 export function buildM1DashboardMarkdown(report: M1EvalReport): string {

@@ -7,6 +7,7 @@ import {
   evaluateContinuationTargets,
   evaluateCorrectionCostTargets,
   evaluateHardRules,
+  evaluateRippleTargets,
   evaluateStoryMapTargets,
   evaluateUserObservationTargets,
   hardRulesPassed,
@@ -97,6 +98,7 @@ describe("M1 dashboard: quality targets do not block", () => {
     expect(correction).toEqual({
       status: "below_target",
       misses: ["material_revisions_16"],
+      unmeasured: [],
     });
 
     const rules = combineHardRules(
@@ -133,6 +135,54 @@ describe("M1 dashboard: quality targets do not block", () => {
     const parsed = M1StoryMapHumanSchema.parse(storyMap({ reviewer: "author" }));
     expect(parsed.reviewer).toBe("author");
     expect(evaluateStoryMapTargets(parsed).status).toBe("met");
+  });
+
+  it("null ripple rates are not_measured with unmeasured entries", () => {
+    const result = evaluateRippleTargets(
+      ripple({ directImpactApprovalRate: null, anchorConsistencyRate: null }),
+    );
+    expect(result.status).toBe("not_measured");
+    expect(result.misses).toEqual([]);
+    expect(result.unmeasured).toEqual([
+      "direct_impact_approval_rate",
+      "anchor_consistency_rate",
+    ]);
+  });
+
+  it("combineTargets propagates unmeasured instead of reporting met", () => {
+    const met = evaluateRippleTargets(ripple({ storyClass: "A" }));
+    const partiallyUnmeasured = evaluateRippleTargets(
+      ripple({
+        storyClass: "B",
+        directImpactApprovalRate: null,
+        anchorConsistencyRate: null,
+      }),
+    );
+    const combined = combineTargets([met, partiallyUnmeasured]);
+    expect(combined.status).toBe("not_measured");
+    expect(combined.misses).toEqual([]);
+    expect(combined.unmeasured).toEqual([
+      "B:direct_impact_approval_rate",
+      "B:anchor_consistency_rate",
+    ]);
+  });
+
+  it("combineTargets marks an entirely unmeasured story when others are measured", () => {
+    const metA = evaluateStoryMapTargets(storyMap({ storyClass: "A" }));
+    const missingB = evaluateStoryMapTargets(null);
+    const metC = evaluateStoryMapTargets(storyMap({ storyClass: "C" }));
+    const combined = combineTargets([metA, missingB, metC]);
+    expect(combined.status).toBe("not_measured");
+    expect(combined.misses).toEqual([]);
+    expect(combined.unmeasured).toEqual(["B:not_measured"]);
+
+    // 全部未测时保持普通的 not_measured，不额外生成占位条目。
+    const allMissing = combineTargets([
+      evaluateStoryMapTargets(null),
+      evaluateStoryMapTargets(null),
+    ]);
+    expect(allMissing.status).toBe("not_measured");
+    expect(allMissing.unmeasured).toEqual([]);
   });
 });
 

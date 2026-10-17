@@ -53,6 +53,19 @@ rename / aliases / role、人物 merge、Event 更新/删除/有 Evidence 新增
 
 Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending Candidate 已核对、无非法引用、无悬空 Edge，以及 inference / 低置信度 Event 与低置信度 Edge 的重要 Evidence 已核对。服务端基于最新 revision 重新计算；未 ready 或 stale 的确认请求 fail closed。历史 confirmed Artifact 不迁移或覆盖，新的 draft 必须通过该门才能创建 confirmed revision。
 
+### Story Map 生成管线（Phase 1 分块召回）
+
+Story Map 由一条确定性的分块召回管线生成，取代此前“全书 Extractor → 全书 Reconciler”的两步式生成：
+
+1. **分块**：服务端从不可变 Source 派生自然段 Evidence Unit，并只按 Unit 边界切块。目标 6,000 字符，最小 3,000、最大 9,000，短尾回并；每块携带前 2 个只读上下文 Unit（第一块除外）。上下文可以引用为证据，但不负责抽取。
+2. **逐块抽取**（`story-map-chunk.v1`）：抽取与补抽都最多 4 块并发；模型只处理 `core` Unit，按叙事顺序返回人物、事件和块内因果边。
+3. **逐块补抽**（`story-map-glean.v1`）：每块恰好一轮，只返回新增人物、事件和边，并收到尚未覆盖的确定性人名候选。
+4. **人名归并**（`story-map-names.v1`）：程序先统计全书人名候选——常见姓氏 + 1–2 字、`老/小/阿` + 姓氏、姓氏 + 称谓，以及对白说话人（姓名后接言语动词或 `：“`）；说话人命中会提升排序。模型只判断哪些候选是同一人物，且每个候选必须恰好归入一个人物。
+5. **结局轮次**（`story-map-endings.v1`）：读取全书末尾约 20% 的 Unit（至少 3 个），加上已汇总事件和人物，输出故事结局、补充收尾事件和人物结局。人物结局以 `【人物结局】<人物>：<命运>` 写入 `endingCandidates`，不新增 Schema 字段。
+6. **全书合并**（`story-map-merge.v1`）：跨块去重同一事件（合并证据、参与者和状态变化）、补充跨块 `causes` / `enables` / `foreshadows` 边并统一事件序列。
+
+每个证据阶段都在本阶段做引用校验：块抽取与补抽只接受该块 `core` + `context` Unit，结局轮次只接受末尾 Unit 及已汇总事件的证据；最终合并对完整候选执行 Evidence 解析（Unit ID → `SourceReference[]`）和 Story Map 领域校验。Schema 或引用不合法时只 repair 一次，仍失败即 fail closed，不写入 Artifact；通过后才创建版本化 Artifact，Story Map Schema 保持不变。模型侧证据句柄始终是稳定 Unit ID，不返回 `exactQuote`、Section ID、偏移或 Hash。M1-03（`ca705d3`）曾把证据改为 sectionId + exactQuote，真实回归因逐字摘录无法稳定匹配而在一次 repair 后仍失败；本管线保留 Unit ID。
+
 ## Character
 
 Story Map 中可被事件引用的人物实体。Character 在所属 Story Map 版本内有唯一 ID。当前不在 Character 上复制独立 Evidence：可作为剧情事实使用的人物状态必须写入带 Evidence 的 Event；`role` 与 `initialState` 只用于地图浏览和提取定向，不能脱离相关 Event 充当 Canon 事实。别名可以归到同一 Character，但不确定的合并不得静默发生。Character split 只有真实 benchmark 记录明确需求后才实现；M1-04 没有取得该证据。
