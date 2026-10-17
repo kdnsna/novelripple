@@ -503,21 +503,31 @@ describe("deterministic edge and ending dedupe", () => {
     expect(dedupeEdges(edges, resolve)).toEqual([]);
   });
 
-  it("collapses story endings by target and character endings by character name", () => {
+  it("collapses story endings only when target and normalized requirement match", () => {
     const endings = [
-      ending("end_story_a", "e1", "主线结局", ["u1"]),
-      ending("end_story_b", "e1", "换一种说法描述同一结果", ["u2"]),
-      ending("end_story_c", "e2", "支线结局", ["u3"]),
+      ending("end_story_a", "e1", "潮水  退去", ["u1"]),
+      ending("end_story_b", "e1", " 潮水 退去。 ", ["u2"]),
+      ending("end_story_c", "e1", "账簿归档", ["u3"]),
+      ending("end_story_d", "e2", "潮水  退去", ["u4"]),
+    ];
+
+    expect(dedupeEndings(endings)).toEqual([
+      { ...endings[0]!, evidenceUnitIds: ["u1", "u2"] },
+      endings[2],
+      endings[3],
+    ]);
+  });
+
+  it("collapses character endings by character name, regardless of target or wording", () => {
+    const endings = [
       ending("end_fate_a1", "e1", `${CHARACTER_ENDING_PREFIX}甲：留在港城`, ["u1"]),
       ending("end_fate_a2", "e2", `${CHARACTER_ENDING_PREFIX}甲：再次留在港城`, ["u4"]),
       ending("end_fate_b", "e2", `${CHARACTER_ENDING_PREFIX}乙：离开港城`, ["u3"]),
     ];
 
     expect(dedupeEndings(endings)).toEqual([
-      { ...endings[0]!, evidenceUnitIds: ["u1", "u2"] },
+      { ...endings[0]!, evidenceUnitIds: ["u1", "u4"] },
       endings[2],
-      { ...endings[3]!, evidenceUnitIds: ["u1", "u4"] },
-      endings[5],
     ]);
   });
 

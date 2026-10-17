@@ -165,10 +165,12 @@ describe("chunked Story Map recall pipeline", () => {
       fixture.storyMap.characters.map((character) => character.id).sort(),
     );
     expect(storyMap.edges).toHaveLength(fixture.storyMap.edges.length);
-    // 夹具的 3 条故事级结局都指向 event_12，确定性去重只保留第一条。
+    // 故事级结局只在目标事件与规范化要求都相同时去重；夹具的 3 条 event_12 结局结果不同，全部保留。
     expect(storyMap.endingCandidates.map((ending) => ending.id)).toEqual([
       "ending_truth_public",
       "ending_ledger_archived",
+      "ending_clock_moves",
+      "ending_xucheng_leaves",
     ]);
     expect(validateStoryMap(storyMap, source)).toEqual([]);
     expect(getProjectSource(project.id, source.id)).toEqual(sourceBefore);

@@ -549,7 +549,7 @@ export function applyMerge(
   // 同一 (from, to) 的边折叠为一条：保留最早出现的类型/说明，证据取并集。
   const edges = dedupeEdges([...pool.edges, ...merge.edges], resolve);
 
-  // 显式结局合并组先按“保留项文字 + 全组证据”归并，再做同目标/同人物结局去重。
+  // 显式结局合并组先按“保留项文字 + 全组证据”归并，再做同目标同要求/同人物结局去重。
   const endingById = new Map(endings.map((ending) => [ending.id, ending]));
   const endingGroupEvidence = new Map<string, string[]>();
   for (const group of merge.duplicateEndingGroups) {
@@ -614,7 +614,8 @@ export function dedupeEdges(
 
 /**
  * 结局去重：
- * - 同一 `targetEventId` 的故事级结局只保留第一条，证据取并集；
+ * - 故事级结局只在 `targetEventId` 相同且规范化后的 `requirement` 文本相同时折叠，
+ *   证据取并集；同一目标事件下的不同结局（例如不同人物的去向）各自保留；
  * - 人物结局按 `【人物结局】<name>：` 中的人物名折叠，每个名字只保留第一条。
  */
 export function dedupeEndings(
@@ -628,7 +629,10 @@ export function dedupeEndings(
     const resolved = { ...ending, targetEventId: resolveEventId(ending.targetEventId) };
     const characterName = characterEndingName(ending.requirement);
     const bucket = characterName === null ? storyEndings : characterEndings;
-    const key = characterName === null ? resolved.targetEventId : characterName;
+    const key =
+      characterName === null
+        ? `${resolved.targetEventId}\u0000${normalizeEndingRequirement(resolved.requirement)}`
+        : characterName;
     const existing = bucket.get(key);
     if (existing) {
       existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...resolved.evidenceUnitIds]);
@@ -638,6 +642,14 @@ export function dedupeEndings(
     result.push(resolved);
   }
   return result;
+}
+
+/** 结局要求文本的确定性比较键：去首尾空白、折叠空白、去掉句末标点。 */
+function normalizeEndingRequirement(requirement: string): string {
+  return requirement
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[\s。．.！!？?；;，,、…~～]+$/u, "");
 }
 
 function characterEndingName(requirement: string): string | null {
