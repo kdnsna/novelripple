@@ -98,6 +98,12 @@ export const ImpactPlanSchema = z
      * 这些 Impact 在 UI 中只能作为“可能”展示。
      */
     uncertainImpactIds: z.array(z.string().min(1)).optional(),
+    /**
+     * 本次计划实际用到的（作为某项 Impact reasonPath 相邻两步出现的）
+     * 不确定 Edge ID，按首次使用顺序去重。旧 Artifact 没有该字段；
+     * 预览摘要按该字段计数，缺失时回退到 `uncertainEdgeIds`。
+     */
+    usedUncertainEdgeIds: z.array(z.string().min(1)).optional(),
     status: z.enum(["candidate", "accepted", "rejected"]),
   })
   .strict()

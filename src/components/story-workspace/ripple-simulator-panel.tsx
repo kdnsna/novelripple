@@ -8,6 +8,10 @@ import {
   regenerateRipplePreviewAction,
 } from "@/app/projects/actions";
 import { deriveImpactPlanComparison } from "@/domain/ripple/derive-impact-plan-comparison";
+import {
+  isUncertainImpact,
+  listUsedUncertainEdgeIds,
+} from "@/domain/ripple/derive-uncertain-impact-ids";
 import type {
   Event,
   ImpactPlan,
@@ -16,6 +20,9 @@ import type {
   StoryMapArtifact,
   Worldline,
 } from "@/domain/schemas";
+
+// 保持面板原有导出，纯函数实现只在领域层维护一份。
+export { isUncertainImpact };
 
 type RippleSimulatorPanelProps = {
   projectId: string;
@@ -68,16 +75,12 @@ const impactScopeLabels = {
 
 type ImpactScope = keyof typeof impactScopeLabels;
 
-/** 旧 Artifact 没有 `uncertainEdgeIds`，数量按 0 处理，界面不显示提示。 */
+/**
+ * 旧 Artifact 没有 `usedUncertainEdgeIds`，回退到旧的 `uncertainEdgeIds`；
+ * 两者都没有时按 0 处理，界面不显示提示。
+ */
 export function countUncertainRelations(plan: ImpactPlan): number {
-  return plan.uncertainEdgeIds?.length ?? 0;
-}
-
-export function isUncertainImpact(
-  plan: ImpactPlan,
-  impactId: string,
-): boolean {
-  return plan.uncertainImpactIds?.includes(impactId) ?? false;
+  return listUsedUncertainEdgeIds(plan).length;
 }
 
 export function summarizeImpactScope(
@@ -168,7 +171,9 @@ export function RippleSimulatorPanel({
   const plan = preview?.impactPlan ?? null;
   const comparison = plan ? deriveImpactPlanComparison(storyMap, plan) : null;
   const uncertainRelationCount = plan ? countUncertainRelations(plan) : 0;
-  const uncertainEdgeIds = new Set(plan?.uncertainEdgeIds ?? []);
+  const uncertainEdgeIds = new Set(
+    plan ? listUsedUncertainEdgeIds(plan) : [],
+  );
   const uncertainRelations = storyMap.edges.filter((edge) =>
     uncertainEdgeIds.has(edge.id),
   );

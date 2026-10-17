@@ -63,7 +63,7 @@ Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `
 
 ### Edge 的“不确定”标记
 
-Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。Ripple Suggestions、Worldline 与 Continuation 忽略该标记；Impact Plan 读取它来区分确定与不确定的因果关系，但仍只把它当作可能性，不写入 Canon 或分支状态。
+Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。Ripple Suggestions 与 Worldline Delta 不读取该标记；Impact Plan 读取它来区分确定与不确定的因果关系，但仍只把它当作可能性，不写入 Canon 或分支状态。Continuation 不直接读取 Story Map review，只读取 accepted Impact Plan 上服务端派生的 `uncertainImpactIds` 来提示“可能”。
 
 `mark_edge_uncertain` / `clear_edge_uncertain` 走既有 `createRevisionFromLatest` 路径：实际改变状态时创建新的不可变 draft revision 并记录 operation；重复标记或重复清除幂等返回当前 Artifact，不新增 revision。删除 Edge（或通过删除 Event 级联删除 Edge）时同步清理对应标记。`uncertainEdgeIds` 必须唯一且引用当前版本存在的 Edge，否则 fail closed。
 
@@ -157,7 +157,9 @@ ImpactPlan 是提案，不是 Worldline 中已经成立的事实。模型只输�
 
 生成 Impact Plan 时，服务端用纯函数把 confirmed Story Map 的 Edge 分成 `established` 与 `uncertain`：`uncertain` 是 `review.uncertainEdgeIds` 中的 Edge，或低于 `LOW_CONFIDENCE_THRESHOLD` 且 Evidence 尚未人工确认的 Edge（复用 `derive-story-map-review` 的常量与确认 helper），原因分别为 `marked_uncertain` / `unreviewed_low_confidence`。Prompt 只把 `established` Edge 放进 `confirmedStoryMap.edges`，把 `uncertain` 关系单独放进 `<uncertain_relations>` 并带原因；模型只能把后者写成可能性，不得作为 `direct` Impact 的唯一依据，并应将这些关系写入 `uncertainties`。`impact-plan.v4` / `impact-plan-feedback.v3` 承担该契约，旧 Prompt 版本保留。
 
-服务端不信任模型：新 Impact Plan 用可选字段 `uncertainEdgeIds` 记录本次上下文中的不确定 Edge，用 `uncertainImpactIds` 记录 `reasonPath` 全程只由不确定 Edge 支撑的 Impact；旧 Artifact 没有这两个字段仍可解析。预览摘要显示「含 N 条未精修/不确定关系」，完整详情给这些 Impact 加「可能」标记并单列不确定关系。该处理只影响本次推演的呈现，不改变 Edge 存储、readiness、Worldline 创建或 Continuation。
+服务端不信任模型：新 Impact Plan 用可选字段 `uncertainEdgeIds` 记录本次上下文中的全部不确定 Edge，用 `uncertainImpactIds` 记录 `reasonPath` 全程只由不确定 Edge 支撑的 Impact，再用 `usedUncertainEdgeIds` 记录本次计划实际用到的（作为某项 Impact `reasonPath` 相邻两步 from/to 出现）不确定 Edge，按首次使用顺序去重。旧 Artifact 没有这些字段仍可解析。预览摘要「含 N 条未精修/不确定关系」只按 `usedUncertainEdgeIds` 计数，完整详情给这些 Impact 加「可能」标记并单列实际用到的不确定关系；旧 Artifact 缺少 `usedUncertainEdgeIds` 时回退到旧的 `uncertainEdgeIds` 计数与列表（历史行为，可能多于实际使用）。该处理只影响本次推演的呈现，不改变 Edge 存储、readiness 或 Worldline Delta。
+
+“混合路径”仍视为确定：`uncertainImpactIds` 只收录每一段相邻 Event 都由不确定 Edge 支撑的 Impact；只要 `reasonPath` 中有一段由已建立 Edge 支撑，就不降级为“可能”。理由是已建立的那一段提供了可核对的因果锚点，而模型已被要求在 `uncertainties` 中说明途经的不确定段；这样不会把混合路径整体当成已确认事实，也不会仅因途经一条不确定关系就否定整条路径。为避免“可能”的 Impact 看起来过于确定，服务端在生成计划时对 `uncertainImpactIds` 中的 Impact 执行 `confidence = min(model confidence, UNCERTAIN_IMPACT_MAX_CONFIDENCE)`（`UNCERTAIN_IMPACT_MAX_CONFIDENCE = 0.5`）；确定 Impact 的 confidence 不变。该封顶只作用于本次候选计划，不是新的 Edge 置信度，也不回写 Story Map。
 
 `reasonPath` 是当前 confirmed Story Map 中 Event ID 组成的有序因果路径，不是相关事件或替代前提的无序列表。每条路径必须满足：
 
@@ -269,7 +271,7 @@ v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 
 | `readonlyCanonical` | `canon_events` | 保留 `sourceId`、`storyMapArtifactId`、`storyMapId`、`characters`、相关事件完整字段、事件之间的边与 Anchor 目标 `endingCandidates`；未变 |
 | `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；裁剪时最后丢弃；未变 |
 | `styleContext.representativeExcerpts` / `styleContext.characterEvidence` | `canon_evidence` 的后半部分 | 仍由 `selectContinuationContext` 选择；排在相关事件证据之后，先被裁剪 |
-| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
+| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要（不确定项带 `uncertain: true`）/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
 | 无 | `path_summary` | 新增：当前路径较早场景的确定性滚动摘要 |
 | 无 | `recent_scenes` | 新增：当前路径最近 2 个场景正文 |
 | 无 | `anchor_reminder` | 新增：从 Prompt 模板移到上下文末尾的严格/开放 Anchor 与 statePatch 约束 |

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { classifyStoryMapEdges } from "@/domain/ripple/classify-causal-edges";
-import { deriveUncertainImpactIds } from "@/domain/ripple/derive-uncertain-impact-ids";
+import {
+  UNCERTAIN_IMPACT_MAX_CONFIDENCE,
+  capUncertainImpactConfidence,
+  deriveUncertainImpactIds,
+  deriveUsedUncertainEdgeIds,
+} from "@/domain/ripple/derive-uncertain-impact-ids";
 import {
   StoryMapArtifactSchema,
   type StoryEdge,
@@ -202,6 +207,38 @@ describe("deriveUncertainImpactIds", () => {
     ).toEqual([]);
   });
 
+  it("collects only uncertain edges actually used as consecutive path steps", () => {
+    const input = {
+      impacts: [
+        { id: "impact_1", reasonPath: ["event_a", "event_b"] },
+        { id: "impact_2", reasonPath: ["event_b", "event_c"] },
+        { id: "impact_3", reasonPath: ["event_a", "event_b"] },
+      ],
+      edges,
+      // edge_c_d 没有被任何路径使用，不应计入。
+      uncertainEdgeIds: ["edge_a_b", "edge_b_c", "edge_c_d"],
+    };
+
+    expect(deriveUsedUncertainEdgeIds(input)).toEqual([
+      "edge_a_b",
+      "edge_b_c",
+    ]);
+    expect(deriveUsedUncertainEdgeIds(input)).toEqual([
+      "edge_a_b",
+      "edge_b_c",
+    ]);
+  });
+
+  it("does not count an established edge as a used uncertain relation", () => {
+    expect(
+      deriveUsedUncertainEdgeIds({
+        impacts: [{ id: "impact_1", reasonPath: ["event_a", "event_b"] }],
+        edges,
+        uncertainEdgeIds: ["edge_b_c"],
+      }),
+    ).toEqual([]);
+  });
+
   it("is deterministic and keeps impact order", () => {
     const input = {
       impacts: [
@@ -213,5 +250,32 @@ describe("deriveUncertainImpactIds", () => {
     };
     expect(deriveUncertainImpactIds(input)).toEqual(["impact_1", "impact_2"]);
     expect(deriveUncertainImpactIds(input)).toEqual(["impact_1", "impact_2"]);
+  });
+});
+
+describe("capUncertainImpactConfidence", () => {
+  it("caps only uncertain impacts at the exported maximum", () => {
+    const impacts = [
+      { id: "impact_uncertain", confidence: 0.95 },
+      { id: "impact_certain", confidence: 0.95 },
+      { id: "impact_already_low", confidence: 0.3 },
+    ];
+
+    const capped = capUncertainImpactConfidence(impacts, [
+      "impact_uncertain",
+      "impact_already_low",
+    ]);
+
+    expect(UNCERTAIN_IMPACT_MAX_CONFIDENCE).toBe(0.5);
+    expect(capped.map((impact) => impact.confidence)).toEqual([
+      UNCERTAIN_IMPACT_MAX_CONFIDENCE,
+      0.95,
+      0.3,
+    ]);
+    // 确定性：同输入同输出，且不修改原数组。
+    expect(capUncertainImpactConfidence(impacts, ["impact_uncertain"])).toEqual(
+      capUncertainImpactConfidence(impacts, ["impact_uncertain"]),
+    );
+    expect(impacts[0]!.confidence).toBe(0.95);
   });
 });

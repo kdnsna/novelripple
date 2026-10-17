@@ -4,7 +4,11 @@ import path from "node:path";
 
 import { validateImpactPlan } from "@/domain/invariants/validate-story-map";
 import { classifyStoryMapEdges } from "@/domain/ripple/classify-causal-edges";
-import { deriveUncertainImpactIds } from "@/domain/ripple/derive-uncertain-impact-ids";
+import {
+  capUncertainImpactConfidence,
+  deriveUncertainImpactIds,
+  deriveUsedUncertainEdgeIds,
+} from "@/domain/ripple/derive-uncertain-impact-ids";
 import {
   DivergenceSchema,
   ImpactPlanModelOutputSchema,
@@ -330,10 +334,23 @@ function annotateUncertainty(input: {
   modelOutput: ImpactPlanModelOutput;
   storyMapArtifact: StoryMapArtifact;
   uncertainEdgeIds: string[];
-}): Pick<ImpactPlan, "uncertainEdgeIds" | "uncertainImpactIds"> {
-  return {
+}): Pick<
+  ImpactPlan,
+  "impacts" | "uncertainEdgeIds" | "uncertainImpactIds" | "usedUncertainEdgeIds"
+> {
+  const uncertainImpactIds = deriveUncertainImpactIds({
+    impacts: input.modelOutput.impacts,
+    edges: input.storyMapArtifact.storyMap.edges,
     uncertainEdgeIds: input.uncertainEdgeIds,
-    uncertainImpactIds: deriveUncertainImpactIds({
+  });
+  return {
+    impacts: capUncertainImpactConfidence(
+      input.modelOutput.impacts,
+      uncertainImpactIds,
+    ),
+    uncertainEdgeIds: input.uncertainEdgeIds,
+    uncertainImpactIds,
+    usedUncertainEdgeIds: deriveUsedUncertainEdgeIds({
       impacts: input.modelOutput.impacts,
       edges: input.storyMapArtifact.storyMap.edges,
       uncertainEdgeIds: input.uncertainEdgeIds,

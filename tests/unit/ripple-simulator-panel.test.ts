@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   countUncertainRelations,
-  isUncertainImpact,
   mapAnchorEvaluationRows,
   summarizeImpactScope,
   summarizePlainAnchorStatus,
 } from "@/components/story-workspace/ripple-simulator-panel";
+import { isUncertainImpact } from "@/domain/ripple/derive-uncertain-impact-ids";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 
 describe("Ripple Preview Anchor presentation", () => {
@@ -65,11 +65,18 @@ describe("Ripple Preview Anchor presentation", () => {
 
     const annotated = {
       ...plan,
-      uncertainEdgeIds: ["edge_07_08"],
+      uncertainEdgeIds: ["edge_07_08", "edge_11_12"],
       uncertainImpactIds: [plan.impacts[0]!.id],
+      usedUncertainEdgeIds: ["edge_07_08"],
     };
     expect(countUncertainRelations(annotated)).toBe(1);
     expect(isUncertainImpact(annotated, plan.impacts[0]!.id)).toBe(true);
     expect(summarizeImpactScope(annotated, "direct")).toContain("可能：");
+    // 旧 Artifact 没有 usedUncertainEdgeIds 时回退到旧字段。
+    const legacy = {
+      ...plan,
+      uncertainEdgeIds: ["edge_07_08"],
+    };
+    expect(countUncertainRelations(legacy)).toBe(1);
   });
 });

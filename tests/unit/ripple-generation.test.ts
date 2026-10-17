@@ -187,13 +187,26 @@ describe("Ripple Simulator generation", () => {
       artifactId: artifact.id,
       change: { type: "mark_edge_uncertain", edgeId: "edge_07_08" },
     });
-    const confirmed = confirmStoryMapArtifact({
+    // edge_11_12 也是不确定关系，但没有被任何 impact 的 reasonPath 使用。
+    const markedUnused = createStoryMapRevision({
       projectId: project.id,
       artifactId: marked.id,
+      change: { type: "mark_edge_uncertain", edgeId: "edge_11_12" },
     });
-    const provider = new MockAIProvider([
-      JSON.stringify(toModelOutput(fixture.impactPlans[0])),
-    ]);
+    const confirmed = confirmStoryMapArtifact({
+      projectId: project.id,
+      artifactId: markedUnused.id,
+    });
+    const modelOutput = toModelOutput(fixture.impactPlans[0]);
+    const uncertainImpact = modelOutput.impacts.find(
+      (impact) => impact.id === "impact_02",
+    )!;
+    uncertainImpact.confidence = 0.95;
+    const certainImpact = modelOutput.impacts.find(
+      (impact) => impact.id === "impact_01",
+    )!;
+    certainImpact.confidence = 0.95;
+    const provider = new MockAIProvider([JSON.stringify(modelOutput)]);
 
     const result = await generateImpactPlan({
       projectId: project.id,
@@ -214,10 +227,24 @@ describe("Ripple Simulator generation", () => {
       prompt.indexOf("</ripple_context>"),
     );
     expect(rippleContext).not.toContain('"id":"edge_07_08"');
-    expect(result.artifact.impactPlan.uncertainEdgeIds).toEqual(["edge_07_08"]);
+    expect(result.artifact.impactPlan.uncertainEdgeIds).toHaveLength(2);
+    expect(result.artifact.impactPlan.uncertainEdgeIds).toEqual(
+      expect.arrayContaining(["edge_07_08", "edge_11_12"]),
+    );
     expect(result.artifact.impactPlan.uncertainImpactIds).toEqual([
       "impact_02",
     ]);
+    expect(result.artifact.impactPlan.usedUncertainEdgeIds).toEqual([
+      "edge_07_08",
+    ]);
+    // 不确定 Impact 的置信度封顶，确定 Impact 原样保留。
+    const storedImpacts = result.artifact.impactPlan.impacts;
+    expect(
+      storedImpacts.find((impact) => impact.id === "impact_02")?.confidence,
+    ).toBe(0.5);
+    expect(
+      storedImpacts.find((impact) => impact.id === "impact_01")?.confidence,
+    ).toBe(0.95);
     expect(
       listProjectGenerationRuns(project.id).find(
         (run) => run.id === result.generation.runId,
