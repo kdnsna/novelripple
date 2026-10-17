@@ -266,7 +266,7 @@ describe("chunked Story Map recall pipeline", () => {
         id: "char_harbor_clerk",
         name: "港务书记员",
         aliases: [],
-        role: "supporting",
+        role: "minor",
         initialState: "在港务处值班",
         kind: "individual",
       });
@@ -299,7 +299,7 @@ describe("chunked Story Map recall pipeline", () => {
         id: "char_clerk",
         name: "港务书记员",
         aliases: ["书记员"],
-        role: "supporting",
+        role: "minor",
         initialState: "在港务处值班",
         mergedFrom: ["char_harbor_clerk"],
       });
@@ -328,6 +328,9 @@ describe("chunked Story Map recall pipeline", () => {
     const storyMap = result.artifact.storyMap;
 
     expect(storyMap.characters.map((c) => c.id)).toContain("char_clerk");
+    expect(
+      storyMap.characters.find((c) => c.id === "char_clerk")?.role,
+    ).toBe("minor");
     expect(storyMap.characters.find((c) => c.id === "char_shenyan")?.aliases).toContain("沈老");
     const clerkEvent = storyMap.events.find((event) => event.id === "event_clerk_note");
     expect(clerkEvent?.participants).toEqual(["char_clerk", "char_shenyan"]);

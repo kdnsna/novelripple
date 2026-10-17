@@ -234,11 +234,11 @@ describe("roster pass", () => {
     const rejectionPool: StoryMapPool = {
       characters: [
         character("char_lin", "林舟"),
-        character("char_ghost", "传说中的剑客"),
         character("char_crowd", "围观的人群"),
+        character("char_narrator", "旁白者"),
       ],
       events: [
-        { ...event("event_meet", "u1", ["char_lin", "char_ghost"]), chunkIndex: 0 },
+        { ...event("event_meet", "u1", ["char_lin"]), chunkIndex: 0 },
       ],
       edges: [],
     };
@@ -253,41 +253,41 @@ describe("roster pass", () => {
           mergedFrom: ["char_lin"],
         },
       ],
-      rejectedCandidateIds: ["char_ghost", "char_crowd"],
+      rejectedCandidateIds: ["char_crowd", "char_narrator"],
     };
 
     expect(validateRoster(roster, rejectionPool)).toEqual([]);
 
     expect(
-      validateRoster({ ...roster, rejectedCandidateIds: ["char_ghost"] }, rejectionPool),
+      validateRoster({ ...roster, rejectedCandidateIds: ["char_narrator"] }, rejectionPool),
     ).toEqual([{ path: "characters", message: "人物候选没有归入任何人物：char_crowd" }]);
     expect(
       validateRoster(
-        { ...roster, rejectedCandidateIds: ["char_ghost", "char_crowd", "char_ghost"] },
+        { ...roster, rejectedCandidateIds: ["char_crowd", "char_narrator", "char_crowd"] },
         rejectionPool,
       ),
-    ).toEqual([{ path: "characters", message: "人物候选被归入多个人物：char_ghost" }]);
+    ).toEqual([{ path: "characters", message: "人物候选被归入多个人物：char_crowd" }]);
     expect(
       validateRoster(
         {
           characters: [
             roster.characters[0]!,
             {
-              id: "char_ghost",
-              name: "传说中的剑客",
+              id: "char_crowd",
+              name: "围观的人群",
               aliases: [],
-              role: "supporting",
-              initialState: "只在传闻中",
-              mergedFrom: ["char_ghost"],
+              role: "minor",
+              initialState: "在码头围观",
+              mergedFrom: ["char_crowd"],
             },
           ],
-          rejectedCandidateIds: ["char_ghost", "char_crowd"],
+          rejectedCandidateIds: ["char_crowd", "char_narrator"],
         },
         rejectionPool,
       ),
-    ).toEqual([{ path: "characters", message: "人物候选被归入多个人物：char_ghost" }]);
+    ).toEqual([{ path: "characters", message: "人物候选被归入多个人物：char_crowd" }]);
     expect(
-      validateRoster({ ...roster, rejectedCandidateIds: ["char_ghost", "char_crowd", "char_unknown"] }, rejectionPool),
+      validateRoster({ ...roster, rejectedCandidateIds: ["char_crowd", "char_narrator", "char_unknown"] }, rejectionPool),
     ).toEqual([
       {
         path: "rejectedCandidateIds.2",
@@ -296,16 +296,62 @@ describe("roster pass", () => {
     ]);
   });
 
-  it("removes rejected candidates from characters and participants, keeping one only when an event would be empty", () => {
-    const rejectionPool: StoryMapPool = {
+  it("merges brief, nameless or peripheral individuals as minor instead of rejecting them", () => {
+    const minorPool: StoryMapPool = {
       characters: [
-        character("char_lin", "林舟"),
-        character("char_ghost", "传说中的剑客"),
+        { ...character("char_lin", "林舟"), kind: "individual" },
+        { ...character("char_porter", "码头脚夫"), kind: "individual" },
+        { ...character("char_crowd", "围观的人群"), kind: "group" },
+      ],
+      events: [
+        {
+          ...event("event_meet", "u1", ["char_lin", "char_porter", "char_crowd"]),
+          chunkIndex: 0,
+        },
+      ],
+      edges: [],
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_lin",
+          name: "林舟",
+          aliases: [],
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_lin"],
+        },
+        {
+          id: "char_porter",
+          name: "码头脚夫",
+          aliases: [],
+          role: "minor",
+          initialState: "在码头搬货",
+          mergedFrom: ["char_porter"],
+        },
+      ],
+      rejectedCandidateIds: ["char_crowd"],
+    };
+
+    expect(validateRoster(roster, minorPool)).toEqual([]);
+    const applied = applyRoster(minorPool, roster);
+    expect(applied.characters).toEqual([
+      expect.objectContaining({ id: "char_lin", role: "protagonist" }),
+      expect.objectContaining({ id: "char_porter", role: "minor" }),
+    ]);
+    expect(applied.events[0]!.participants).toEqual(["char_lin", "char_porter"]);
+  });
+
+  it("only allows groups and comment-only narrators in rejectedCandidateIds", () => {
+    const pool: StoryMapPool = {
+      characters: [
+        { ...character("char_lin", "林舟"), kind: "individual" },
+        { ...character("char_porter", "码头脚夫"), kind: "individual" },
+        character("char_crowd", "围观的人群"),
         character("char_narrator", "旁白者"),
       ],
       events: [
-        { ...event("event_meet", "u1", ["char_lin", "char_ghost"]), chunkIndex: 0 },
-        { ...event("event_rumor", "u2", ["char_ghost", "char_narrator"]), chunkIndex: 1 },
+        { ...event("event_meet", "u1", ["char_lin", "char_porter"]), chunkIndex: 0 },
       ],
       edges: [],
     };
@@ -320,7 +366,44 @@ describe("roster pass", () => {
           mergedFrom: ["char_lin"],
         },
       ],
-      rejectedCandidateIds: ["char_ghost", "char_narrator"],
+      rejectedCandidateIds: ["char_porter", "char_crowd", "char_narrator"],
+    };
+
+    expect(validateRoster(roster, pool)).toEqual([
+      {
+        path: "rejectedCandidateIds.0",
+        message:
+          "只能拒绝漏网的群体/家族/机构或只评论的作者叙事者；" +
+          '具体人物请合并为 role: "minor"：char_porter',
+      },
+    ]);
+  });
+
+  it("removes rejected candidates from characters and participants, keeping one only when an event would be empty", () => {
+    const rejectionPool: StoryMapPool = {
+      characters: [
+        character("char_lin", "林舟"),
+        character("char_crowd", "围观的人群"),
+        character("char_narrator", "旁白者"),
+      ],
+      events: [
+        { ...event("event_meet", "u1", ["char_lin", "char_crowd"]), chunkIndex: 0 },
+        { ...event("event_rumor", "u2", ["char_crowd"]), chunkIndex: 1 },
+      ],
+      edges: [],
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_lin",
+          name: "林舟",
+          aliases: [],
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_lin"],
+        },
+      ],
+      rejectedCandidateIds: ["char_crowd", "char_narrator"],
     };
 
     expect(validateRoster(roster, rejectionPool)).toEqual([]);
@@ -335,8 +418,8 @@ describe("roster pass", () => {
         initialState: "刚回到港城",
       },
       {
-        id: "char_ghost",
-        name: "传说中的剑客",
+        id: "char_crowd",
+        name: "围观的人群",
         aliases: [],
         role: "protagonist",
         initialState: "刚回到港城",
@@ -344,7 +427,7 @@ describe("roster pass", () => {
     ]);
     expect(applied.events.map((item) => item.participants)).toEqual([
       ["char_lin"],
-      ["char_ghost"],
+      ["char_crowd"],
     ]);
   });
 });

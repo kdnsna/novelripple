@@ -136,6 +136,7 @@ M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三�
 - Causal Edge：两端 Event 经同一 Event 匹配映射到 gold，方向必须一致；任意 edge type 都算命中，并单独报告 hard link recall。
 - Ending：候选结局自身或目标事件的 Unit 距 gold 结局不超过 2，且人物有交集；一对一贪心，并单独报告 non-interpretive recall。
 - 严格人物 identity 数字保持不变；lenient identity 只把匹配 gold `mentionedOnly` 的候选从 precision 分母中排除。
+- 分层人物 identity（`tieredIdentity`）：minor 候选不计入 precision 分母，也不为 precision 分子贡献命中；recall 仍按任何候选（含 minor）匹配 expected；同时报告 `minorCandidateTotal`。该块在旧报告中可缺失，baseline 控制台摘要打印 `tieredIdentityF1`。
 
 `npm run eval:m1:baseline -- --tuning --manifest <A> [--manifest <B>]` 是调参入口：只允许 1—2 篇，跳过正式 baseline 的 A/B/C 与 unseen 断言，报告 `kind: "m1_tuning"`。未加 `--tuning` 时行为不变，仍要求三篇正式 baseline。
 

@@ -287,6 +287,36 @@ export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
   );
 }
 
+const AUTHORIAL_NARRATOR_MARKERS = [
+  "旁白",
+  "叙述",
+  "叙事",
+  "作者",
+  "笔者",
+  "说书",
+  "画外音",
+];
+
+/**
+ * 人名轮允许拒绝的候选：漏网的群体/家族/机构，以及只评论、不参与情节的
+ * 作者叙事者。参与事件的具体个体即使无名、只短暂出现或处于边缘，也必须
+ * 合并为 `role: "minor"`，不能通过 `rejectedCandidateIds` 丢掉。
+ */
+export function canRejectRosterCandidate(
+  candidate: Pick<PooledCharacter, "id" | "name" | "kind">,
+  eventParticipants: ReadonlySet<string>,
+): boolean {
+  if (isGroupCharacter(candidate)) return true;
+  if (eventParticipants.has(candidate.id)) return false;
+  return isAuthorialNarratorName(candidate.name);
+}
+
+function isAuthorialNarratorName(value: string): boolean {
+  const name = value.normalize("NFKC").trim().toLowerCase();
+  if (name === "narrator") return true;
+  return AUTHORIAL_NARRATOR_MARKERS.some((marker) => name.includes(marker));
+}
+
 // ── 人名轮次 ──
 
 export function validateRoster(
@@ -324,11 +354,22 @@ export function validateRoster(
       assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
     });
   });
+  const eventParticipants = new Set(
+    pool.events.flatMap((event) => event.participants),
+  );
   roster.rejectedCandidateIds.forEach((candidateId, index) => {
-    if (!poolById.has(candidateId)) {
+    const candidate = poolById.get(candidateId);
+    if (!candidate) {
       issues.push({
         path: `rejectedCandidateIds.${index}`,
         message: `rejectedCandidateIds 引用了未知人物候选：${candidateId}`,
+      });
+    } else if (!canRejectRosterCandidate(candidate, eventParticipants)) {
+      issues.push({
+        path: `rejectedCandidateIds.${index}`,
+        message:
+          `只能拒绝漏网的群体/家族/机构或只评论的作者叙事者；` +
+          `具体人物请合并为 role: "minor"：${candidateId}`,
       });
     }
     assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);

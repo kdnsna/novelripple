@@ -18,6 +18,7 @@ export const CharacterSchema = z
       "protagonist",
       "antagonist",
       "supporting",
+      "minor",
       "deceased",
     ]),
     initialState: z.string().min(1),
@@ -156,7 +157,8 @@ export const StoryMapGleaningCandidateSchema = z
 
 /**
  * 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物，
- * 或明确列入 `rejectedCandidateIds`（只被提及/回忆、群体、只评论的叙事者等）。
+ * 或明确列入 `rejectedCandidateIds`（只允许漏网的群体/家族/机构，以及只评论的
+ * 作者叙事者；短暂、无名、边缘或不确定的具体人物应合并为 `role: "minor"`）。
  */
 export const StoryMapRosterCandidateSchema = z
   .object({

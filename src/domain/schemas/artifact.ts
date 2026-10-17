@@ -67,7 +67,7 @@ const UpdateCharacterChangeSchema = z
     name: z.string().trim().min(1).max(200).optional(),
     aliases: z.array(z.string().trim().min(1).max(200)).optional(),
     role: z
-      .enum(["protagonist", "antagonist", "supporting", "deceased"])
+      .enum(["protagonist", "antagonist", "supporting", "minor", "deceased"])
       .optional(),
   })
   .strict()

@@ -443,8 +443,12 @@ function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
     const goldSummary = goldMatch
       ? `; goldEvents=${formatRates(goldMatch.events)}; goldEdges=${formatRates(goldMatch.edges)}; goldHardRecall=${formatRate(goldMatch.edges.hardRecall)}; goldEndings=${formatRates(goldMatch.endings)}; goldNonInterpretiveRecall=${formatRate(goldMatch.endings.nonInterpretiveRecall)}; lenientIdentityF1=${formatRateValue(goldMatch.lenientIdentity.f1)}`
       : "; goldMatch=not_available";
+    const tieredIdentity = story.storyMap?.tieredIdentity;
+    const tieredSummary = tieredIdentity
+      ? `; tieredIdentityR=${formatRateValue(tieredIdentity.recall)}; tieredIdentityP=${formatRateValue(tieredIdentity.precision)}; tieredIdentityF1=${formatRateValue(tieredIdentity.f1)}; minorCandidates=${tieredIdentity.minorCandidateTotal}`
+      : "";
     console.log(
-      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}${goldSummary}`,
+      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}${goldSummary}${tieredSummary}`,
     );
   }
   console.log(`Sanitized JSON: ${reportPath}`);

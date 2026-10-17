@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   InstrumentedAIProvider,
   M1BaselineStoryReportSchema,
+  M1StoryMapBaselineScoreSchema,
   assertM1BaselineSuite,
   countBenchmarkCharacters,
   scoreM1StoryMapCandidate,
@@ -248,6 +249,129 @@ describe("M1 baseline contract", () => {
     );
   });
 
+  it("adds tiered identity without changing strict identity metrics", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const withMinor = structuredClone(storyMap);
+    // 一个 expected 人物由 minor 候选匹配：仍计入 tiered recall。
+    withMinor.characters.at(-1)!.role = "minor";
+    // 一个不在 expected 里的边缘个体：strict precision 应被拉低，tiered 不计入。
+    const extraMinor = {
+      id: "character_extra_minor",
+      name: "临时脚夫",
+      aliases: [],
+      role: "minor" as const,
+      initialState: "只在码头短暂出现",
+    };
+    withMinor.characters.push(extraMinor);
+    withMinor.events[0]!.participants.push(extraMinor.id);
+
+    const manifest = validateM1BenchmarkManifest({
+      value: createManifest({
+        expectedCoreCharacters: storyMap.characters.map((item) => ({
+          id: `gold_${item.id}`,
+          name: item.name,
+          aliases: item.aliases,
+        })),
+        expectedKeyEvents: storyMap.events.slice(0, 2).map((item) => ({
+          id: `gold_${item.id}`,
+          label: item.title,
+        })),
+        expectedEndingCandidates: storyMap.endingCandidates.map((item) => ({
+          id: `gold_${item.id}`,
+          label: item.requirement,
+          interpretive: false,
+        })),
+        testDivergences: [
+          {
+            id: "divergence_strict",
+            eventId: `gold_${storyMap.events[0]!.id}`,
+            type: "prevent",
+            mode: "strict",
+            instruction: "测试严格分叉",
+            anchorIds: [`gold_${storyMap.endingCandidates[0]!.id}`],
+            expectedAnchorStatus: "rerouted",
+          },
+          {
+            id: "divergence_open",
+            eventId: `gold_${storyMap.events[1]!.id}`,
+            type: "choice",
+            mode: "open",
+            instruction: "测试开放分叉",
+            anchorIds: [],
+            expectedAnchorStatus: null,
+          },
+        ],
+      }),
+      jsonSchema: manifestSchema,
+      actualCharacterCount: 10_000,
+    });
+
+    const score = scoreM1StoryMapCandidate({
+      manifest,
+      source,
+      storyMap: withMinor,
+    });
+
+    expect(score.identity).toMatchObject({
+      exactMatches: 5,
+      expectedTotal: 5,
+      candidateTotal: 6,
+      precision: 5 / 6,
+      recall: 1,
+    });
+    expect(score.tieredIdentity).toEqual({
+      exactMatches: 5,
+      expectedTotal: 5,
+      candidateTotal: 4,
+      precision: 1,
+      recall: 1,
+      f1: 1,
+      minorCandidateTotal: 2,
+    });
+  });
+
+  it("parses legacy story map scores without a tieredIdentity block", () => {
+    const legacy = M1StoryMapBaselineScoreSchema.parse({
+      coreCharacterRecall: { matched: 0, total: 1, rate: 0 },
+      identity: {
+        exactMatches: 0,
+        expectedTotal: 1,
+        candidateTotal: 1,
+        precision: 0,
+        recall: 0,
+        f1: 0,
+        missingExpectedIds: ["gold_character"],
+        candidateReviewIds: ["character_1"],
+        potentialMergeCandidateIds: [],
+      },
+      evidenceValidity: { matched: 0, total: 0, rate: 0 },
+      eventsWithoutValidEvidence: [],
+      events: {
+        expectedTotal: 1,
+        candidateTotal: 0,
+        matched: null,
+        recall: null,
+        manualReviewQueue: {
+          expectedIds: ["key_event_a"],
+          candidateIds: [],
+        },
+      },
+      edges: { candidateTotal: 0, manualReviewQueue: [] },
+      endingCandidates: {
+        expectedTotal: 1,
+        candidateTotal: 0,
+        matched: null,
+        recall: null,
+        manualReviewQueue: {
+          expectedIds: ["ending_a"],
+          candidateIds: [],
+        },
+      },
+    });
+
+    expect(legacy.tieredIdentity).toBeUndefined();
+  });
+
   it("observes usage, duration and repair without retaining prompts or output", async () => {
     const provider: AIProvider = {
       providerName: "test-provider",
@@ -484,6 +608,16 @@ describe("M1 baseline contract", () => {
       "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx scripts/eval-m1-baseline.ts",
     );
     expect(workflow).not.toContain("eval:m1:baseline");
+  });
+
+  it("prints the tiered identity summary in the baseline console line", () => {
+    const script = readFileSync(
+      path.join(process.cwd(), "scripts", "eval-m1-baseline.ts"),
+      "utf8",
+    );
+
+    expect(script).toContain("tieredIdentityF1=");
+    expect(script).toContain("minorCandidates=");
   });
 
   it("keeps every required human correction counter and A-K diagnosis explicit", () => {

@@ -158,6 +158,22 @@ export const M1StoryMapBaselineScoreSchema = z
         potentialMergeCandidateIds: z.array(z.string().min(1)),
       })
       .strict(),
+    /**
+     * 分层 identity：minor 候选不计入 precision 分母，但用它们匹配到的 expected
+     * 仍计入 recall。旧报告没有这个块，保持 optional。
+     */
+    tieredIdentity: z
+      .object({
+        exactMatches: z.number().int().nonnegative(),
+        expectedTotal: z.number().int().positive(),
+        candidateTotal: z.number().int().nonnegative(),
+        precision: z.number().min(0).max(1),
+        recall: z.number().min(0).max(1),
+        f1: z.number().min(0).max(1),
+        minorCandidateTotal: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
     evidenceValidity: RateScoreSchema,
     eventsWithoutValidEvidence: z.array(z.string().min(1)),
     events: PendingManualScoreSchema,
@@ -559,20 +575,12 @@ export function scoreM1StoryMapCandidate(input: {
     ...input.manifest.expectedCoreCharacters,
     ...input.manifest.expectedSupportingCharacters,
   ];
-  const matchedExpectedIds = new Set<string>();
-  const matchedCandidateIds = new Set<string>();
-
-  for (const expected of expectedCharacters) {
-    const expectedNames = normalizedNames(expected);
-    const candidate = input.storyMap.characters.find(
-      (item) =>
-        !matchedCandidateIds.has(item.id) &&
-        normalizedNames(item).some((name) => expectedNames.includes(name)),
-    );
-    if (!candidate) continue;
-    matchedExpectedIds.add(expected.id);
-    matchedCandidateIds.add(candidate.id);
-  }
+  const strictMatching = matchExpectedCharacters(
+    expectedCharacters,
+    input.storyMap.characters,
+  );
+  const matchedExpectedIds = strictMatching.matchedExpectedIds;
+  const matchedCandidateIds = strictMatching.matchedCandidateIds;
 
   const matchedCoreCount = input.manifest.expectedCoreCharacters.filter((item) =>
     matchedExpectedIds.has(item.id),
@@ -581,6 +589,23 @@ export function scoreM1StoryMapCandidate(input: {
   const precision = divide(exactMatches, input.storyMap.characters.length);
   const recall = divide(exactMatches, expectedCharacters.length);
   const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+  // 分层指标：minor 候选不进入 precision 分母；recall 仍接受任何候选（含 minor）。
+  const nonMinorCandidates = input.storyMap.characters.filter(
+    (character) => character.role !== "minor",
+  );
+  const nonMinorMatching = matchExpectedCharacters(
+    expectedCharacters,
+    nonMinorCandidates,
+  );
+  const tieredPrecision = divide(
+    nonMinorMatching.matchedCandidateIds.size,
+    nonMinorCandidates.length,
+  );
+  const tieredRecall = recall;
+  const tieredF1 =
+    tieredPrecision + tieredRecall === 0
+      ? 0
+      : (2 * tieredPrecision * tieredRecall) / (tieredPrecision + tieredRecall);
   const references = collectEvidence(input.storyMap);
   const validReferenceCount = references.filter((reference) =>
     isValidEvidence(reference, input.source),
@@ -624,6 +649,15 @@ export function scoreM1StoryMapCandidate(input: {
           );
         })
         .map((item) => item.id),
+    },
+    tieredIdentity: {
+      exactMatches,
+      expectedTotal: expectedCharacters.length,
+      candidateTotal: nonMinorCandidates.length,
+      precision: tieredPrecision,
+      recall: tieredRecall,
+      f1: tieredF1,
+      minorCandidateTotal: input.storyMap.characters.length - nonMinorCandidates.length,
     },
     evidenceValidity: rateScore(validReferenceCount, references.length),
     eventsWithoutValidEvidence,
@@ -704,6 +738,26 @@ function assertNoSharedIds(
   const leftIds = new Set(left.map((item) => item.id));
   const shared = right.find((item) => leftIds.has(item.id));
   if (shared) throw new Error(`${label} ID 重复：${shared.id}`);
+}
+
+function matchExpectedCharacters(
+  expectedCharacters: BenchmarkCharacter[],
+  candidates: Array<{ id: string; name: string; aliases: string[] }>,
+): { matchedExpectedIds: Set<string>; matchedCandidateIds: Set<string> } {
+  const matchedExpectedIds = new Set<string>();
+  const matchedCandidateIds = new Set<string>();
+  for (const expected of expectedCharacters) {
+    const expectedNames = normalizedNames(expected);
+    const candidate = candidates.find(
+      (item) =>
+        !matchedCandidateIds.has(item.id) &&
+        normalizedNames(item).some((name) => expectedNames.includes(name)),
+    );
+    if (!candidate) continue;
+    matchedExpectedIds.add(expected.id);
+    matchedCandidateIds.add(candidate.id);
+  }
+  return { matchedExpectedIds, matchedCandidateIds };
 }
 
 function normalizedNames(value: { name: string; aliases: string[] }): string[] {
