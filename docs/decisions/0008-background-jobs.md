@@ -57,13 +57,13 @@ queued → chunking → extract(0..n) → glean(0..n) → names → endings → 
 
 ### 5. 轮询而不是 SSE
 
-服务端页面在首次渲染时读取该 Source 的最新任务，刷新后仍显示同一进度。客户端组件在 `queued`/`running` 时每 1 秒请求 `GET /api/jobs/[jobId]`，成功后刷新到 `?artifact=<id>&generated=created`，与旧同步流程最终展示完全一致。
+服务端页面在首次渲染时读取该 Source 的最新任务，刷新后仍显示同一进度。客户端组件在 `queued`/`running` 时请求 `GET /api/jobs/[jobId]?projectId=<id>`：成功且仍在进行中时每 1 秒继续；网络错误或 5xx 按 1、2、4、8…秒指数退避（上限 30 秒），下一次成功后重置为 1 秒；404 表示任务不存在或不属于本项目，停止轮询并显示“任务不存在或不属于本项目”与“重新开始”；`succeeded` / `failed` / `interrupted` 等终态不再轮询。成功后刷新到 `?artifact=<id>&generated=created`，与旧同步流程最终展示完全一致。
 
 轮询的代价是每秒一个很小的本地 SQLite 读取，但收益是：无需长连接管理、无需处理 SSE 重连与代理缓冲、页面刷新天然恢复，且现有 Next.js/SQLite 单进程部署不需要新基础设施。SSE 只在真实并发与实时性需求证明不足时再评估。
 
 ### 6. 读侧只暴露脱敏视图
 
-`src/server/jobs/job-view.ts` 只保留 `id`、`status`、`progress`、`result`、`error`。API 不返回 `input`、心跳、Prompt、模型输出或原文；错误在写入前已经过统一脱敏函数，未知异常只会得到固定文案。`JobIdSchema` 先校验路径参数，非法 ID 返回 400，未知 ID 返回 404。
+`src/server/jobs/job-view.ts` 只保留 `id`、`status`、`progress`、`result`、`error`。API 不返回 `input`、心跳、Prompt、模型输出或原文；错误在写入前已经过统一脱敏函数，未知异常只会得到固定文案。`JobIdSchema` 先校验路径参数，非法 ID 返回 400；调用方还必须用查询参数 `projectId`（`ProjectIdSchema`）声明所属项目，缺失或非法返回 400。任务不存在与任务属于其它项目返回同一个 404，避免用任务 id 探测其它项目。
 
 ### 7. 明确不做的
 

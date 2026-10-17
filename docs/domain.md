@@ -59,7 +59,7 @@ Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending 
 
 Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `status === "confirmed"` 的不可变 Story Map revision。快速确认不会放宽这些仓库与生成器的 confirmed 检查，也不会自动创建 Worldline。
 
-“未精修”是纯派生的 UI 状态：当前 confirmed revision 的 operation 为 `quick_confirm_story_map`，且 readiness 尚未满足。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
+“未精修”是纯派生的 UI 状态：当前 revision 为 `confirmed` 且 readiness 尚未满足。它不依赖最新 operation 类型——快速确认后继续修正、只要 readiness 仍未满足，提示就仍然成立；`quickConfirmed` 另行记录当前 confirmed revision 的 operation 是否为 `quick_confirm_story_map`。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
 
 ### Edge 的“不确定”标记
 
@@ -86,7 +86,7 @@ Story Map 由一条确定性的分块召回管线生成，取代此前“全书 
 
 Story Map 生成不再占用一次同步 Server Action。用户点击生成后，服务端先写入 `jobs` 行（`kind: "story_map_generation"`，`input_json` 只含 `sourceId` 等稳定 ID），再由进程内 Runner 在响应之后调用同一分块管线。任务状态只能是 `queued` / `running` / `succeeded` / `failed` / `interrupted`；进度只记录固定阶段与计数（`chunking` → `extract` → `glean` → `names` → `endings` → `merge` → `saving`），不包含原文、Prompt 或模型输出。
 
-同一 project + kind + source 同时最多一个 `queued`/`running` 任务；重复点击直接回到已有任务。成功时任务只保存 `artifactId`，失败时保存经统一脱敏的短错误。任务历史只追加：`failed` / `interrupted` 行不被复用，重试创建新行。Runner 每 15 秒刷新心跳；进程首次使用或心跳超过 2 分钟时，遗留的 `queued`/`running` 任务被标为 `interrupted`。project 页面读取该 Source 的最新任务，客户端在任务进行中每秒轮询 `GET /api/jobs/[jobId]`，成功后导航到 `?artifact=<id>`；刷新页面仍从服务端恢复同一任务。详见 [`ADR 0008`](decisions/0008-background-jobs.md)。
+同一 project + kind + source 同时最多一个 `queued`/`running` 任务；重复点击直接回到已有任务。成功时任务只保存 `artifactId`，失败时保存经统一脱敏的短错误。任务历史只追加：`failed` / `interrupted` 行不被复用，重试创建新行。Runner 每 15 秒刷新心跳；进程首次使用或心跳超过 2 分钟时，遗留的 `queued`/`running` 任务被标为 `interrupted`。project 页面读取该 Source 的最新任务，客户端在任务进行中轮询 `GET /api/jobs/[jobId]?projectId=<id>`：成功且仍在 `queued`/`running` 时每 1 秒继续，网络错误或 5xx 按 1、2、4、8…秒指数退避（上限 30 秒），成功后回到 1 秒；404 表示任务不存在或不属于本项目，停止轮询并允许重新开始；终态不再轮询。成功后导航到 `?artifact=<id>`；刷新页面仍从服务端恢复同一任务。详见 [`ADR 0008`](decisions/0008-background-jobs.md)。
 
 ## Character
 
@@ -225,7 +225,7 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 方向生成没有 `selected_direction`，其余段相同。
 
-`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试，返回第一个渲染长度不超过预算的状态；每一级都只删除或严格缩短内容，因此更大的预算不会得到更靠后的降级状态：
+`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试；每一级都只删除或严格缩短内容，因此更大的预算不会得到更靠后的降级状态。最终在放得下的状态中选证据最多、同等证据下降级最少的一个：
 
 1. 完整内容；
 2. `canon_evidence` 按优先级从低到高、同优先级从末尾一次丢一条，因此相关事件证据最后才被裁掉；
@@ -233,12 +233,14 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 4. `path_summary` 按整行从开头裁剪，首行省略/压缩提示保留到最后一刻，绝不把一行切成半句；
 5. 若调用方提供了严格更短的紧凑 `worldline_setup`，整体替换为紧凑形式（只保留计数与 key，不包含任何 fact 正文）；
 6. 最新场景有非空且严格短于正文的 `summary` 时，用该摘要替换正文；
-7. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；若连句末前缀都放不下或正文没有句末边界，则进入第 8 步；
+7. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；截断不得落在未闭合的引号内（`「」『』“”‘’` 与 ASCII 引号），也不得拆开 `……`；若只有引号内的句末可用，则在最外层开引号之前截断；若连安全前缀都放不下或正文没有句末边界，则进入第 8 步；
 8. 仍超过预算则 fail closed，错误消息包含所需长度与 `maxChars`，不返回半成品。
+
+第 5—7 步释放预算后，会按 priority 从高到低、同优先级按原始顺序回填第 2 步丢弃的证据，直到下一条放不下；回填后仍按原始顺序渲染。若较早状态已放得下但仍有证据被丢弃，会继续尝试紧凑 `worldline_setup` 以回填证据；摘要与 v1 截断仍只在仍超预算时使用。
 
 不会因为“完整形式的必需段放不下”提前启用紧凑形式：紧凑 `worldline_setup` 只出现在阶梯第 5 步，且只有它严格更短时才使用。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
 
-每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`canon_evidence` 用 `backfilledItemIds` 记录后续降级释放预算后重新放回的证据 id，这些 id 不再同时出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
 
 ### 路径滚动摘要
 

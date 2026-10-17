@@ -14,6 +14,8 @@ import type {
 } from "@/domain/schemas";
 import type { JobView } from "@/server/jobs/job-view";
 
+import { jobPollBackoffMs } from "./job-poll-backoff";
+
 const STAGE_LABELS: Record<StoryMapJobStage, string> = {
   queued: "排队",
   chunking: "分段",
@@ -50,6 +52,7 @@ export function StoryMapJobProgress({
   const router = useRouter();
   const [job, setJob] = useState(initialJob);
   const [pollError, setPollError] = useState<string | null>(null);
+  const [jobMissing, setJobMissing] = useState(false);
   const [retryState, retryAction, retryPending] = useActionState(
     startStoryMapGenerationAction.bind(null, projectId, sourceId),
     initialState,
@@ -59,39 +62,65 @@ export function StoryMapJobProgress({
   const artifactId = job.result?.artifactId ?? null;
 
   useEffect(() => {
-    if (status !== "queued" && status !== "running") return;
+    if (jobMissing || (status !== "queued" && status !== "running")) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let consecutiveFailures = 0;
+
+    const scheduleNext = (delayMs: number) => {
+      if (cancelled) return;
+      timer = setTimeout(() => {
+        void poll();
+      }, delayMs);
+    };
+
+    const retryLater = (message: string) => {
+      consecutiveFailures += 1;
+      const delayMs = jobPollBackoffMs(consecutiveFailures);
+      if (!cancelled) {
+        setPollError(`${message}，${delayMs / 1_000} 秒后重试…`);
+      }
+      scheduleNext(delayMs);
+    };
 
     const poll = async () => {
       try {
+        const query = new URLSearchParams({ projectId });
         const response = await fetch(
-          `/api/jobs/${encodeURIComponent(job.id)}`,
+          `/api/jobs/${encodeURIComponent(job.id)}?${query}`,
           { cache: "no-store" },
         );
+        if (cancelled) return;
+        // 不存在与不属于本项目使用同一个 404；停止轮询并让用户重新开始。
+        if (response.status === 404) {
+          setJobMissing(true);
+          setPollError(null);
+          return;
+        }
         if (!response.ok) {
-          if (!cancelled) setPollError("暂时无法获取进度，正在继续重试…");
+          retryLater("暂时无法获取进度");
           return;
         }
         const next = (await response.json()) as JobView;
-        if (!cancelled) {
-          setJob(next);
-          setPollError(null);
+        if (cancelled) return;
+        consecutiveFailures = 0;
+        setPollError(null);
+        setJob(next);
+        if (next.status === "queued" || next.status === "running") {
+          scheduleNext(1_000);
         }
       } catch {
-        if (!cancelled) setPollError("网络暂时不可用，正在继续重试…");
+        if (!cancelled) retryLater("网络暂时不可用");
       }
     };
 
     void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, 1_000);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer !== null) clearTimeout(timer);
     };
-  }, [job.id, status]);
+  }, [job.id, jobMissing, projectId, status]);
 
   useEffect(() => {
     if (status !== "succeeded" || !artifactId) return;
@@ -181,19 +210,43 @@ export function StoryMapJobProgress({
 
       <p className="form-help">
         {status === "queued" || status === "running"
-          ? "生成在服务器后台运行；刷新页面不会中断，进度每秒更新。"
+          ? jobMissing
+            ? "轮询已经停止；可以重新开始一个生成任务。"
+            : "生成在服务器后台运行；刷新页面不会中断，进度每秒更新。"
           : status === "succeeded"
             ? "正在打开新的候选 Story Map…"
             : "任务历史会保留；重试总是创建一条新任务，不复用失败记录。"}
       </p>
 
-      {pollError && (status === "queued" || status === "running") ? (
+      {pollError && !jobMissing && (status === "queued" || status === "running") ? (
         <p className="form-error" role="alert">
           {pollError}
         </p>
       ) : null}
 
-      {retryable ? (
+      {jobMissing ? (
+        <div className="story-map-job-retry">
+          <p className="form-error" role="alert">
+            任务不存在或不属于本项目，已停止轮询。
+          </p>
+          {retryState.error ? (
+            <p className="form-error" role="alert">
+              {retryState.error}
+            </p>
+          ) : null}
+          <form action={retryAction}>
+            <button
+              className="primary-button full-width-button"
+              disabled={retryPending}
+              type="submit"
+            >
+              {retryPending ? "正在重新启动…" : "重新开始"}
+            </button>
+          </form>
+        </div>
+      ) : null}
+
+      {retryable && !jobMissing ? (
         <form action={retryAction} className="story-map-job-retry">
           {job.error ? (
             <p className="form-error" role="alert">

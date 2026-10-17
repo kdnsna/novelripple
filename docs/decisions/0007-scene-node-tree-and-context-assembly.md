@@ -37,9 +37,9 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 6. `selected_direction`；
 7. `anchor_reminder`。
 
-总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，按 UTF-16 字符数而非 token 计算，只约束组装后的上下文素材，不包含约 2–3k 字符的系统 Prompt 模板。超预算时只沿一条固定降级阶梯前进，返回第一个渲染长度不超过预算的状态；每一级只删除或严格缩短内容：完整内容 → 按 priority 从低到高丢弃 `canon_evidence`（同优先级从末尾，相关事件证据最后丢）→ 从最旧开始整条丢弃 `recent_scenes`（始终保留最新一个场景）→ 按整行从开头裁剪 `path_summary`（保留首行省略/压缩提示到最后一刻，不切半行）→ 用严格更短的紧凑 `worldline_setup` 整体替换 → 用最新场景自己的非空且严格更短的 `summary` 替换正文 → 最新场景没有可用摘要（v1）时在句末边界截断并追加 `（后文已截断）` → 仍超预算才 fail closed。不会因为“完整形式的必需段放不下”提前启用紧凑形式；紧凑形式只出现在阶梯第 5 步。`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 永不整段裁剪（`worldline_setup` 只允许整体替换为更紧凑的等价形式）。
+总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，按 UTF-16 字符数而非 token 计算，只约束组装后的上下文素材，不包含约 2–3k 字符的系统 Prompt 模板。超预算时只沿一条固定降级阶梯前进；每一级只删除或严格缩短内容：完整内容 → 按 priority 从低到高丢弃 `canon_evidence`（同优先级从末尾，相关事件证据最后丢）→ 从最旧开始整条丢弃 `recent_scenes`（始终保留最新一个场景）→ 按整行从开头裁剪 `path_summary`（保留首行省略/压缩提示到最后一刻，不切半行）→ 用严格更短的紧凑 `worldline_setup` 整体替换 → 用最新场景自己的非空且严格更短的 `summary` 替换正文 → 最新场景没有可用摘要（v1）时在句末边界截断并追加 `（后文已截断）` → 仍超预算才 fail closed。最终在放得下的状态中选证据最多、同等证据下降级最少的一个：第 5—7 步释放预算后按 priority 从高到低回填第 2 步丢弃的证据，直到下一条放不下；若较早状态已放得下但仍有证据被丢弃，也会继续尝试紧凑 `worldline_setup` 以回填。v1 截断不得落在未闭合引号内（`「」『』“”‘’` 与 ASCII 引号），不得拆开 `……`；若只有引号内句末可用，则在最外层开引号前截断。不会因为“完整形式的必需段放不下”提前启用紧凑形式；紧凑形式只出现在阶梯第 5 步。`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 永不整段裁剪（`worldline_setup` 只允许整体替换为更紧凑的等价形式）。
 
-每次场景生成保存不含正文的 Context Manifest：只含段名、`included`、`chars`、`trimmed`、`droppedItemIds`、`budget` 计数，以及 `path_summary` 的 `coveredItemIds` / `watermarkId`（只含场景 id）。`recent_scenes` 另用 `summarizedItemIds` 记录用自身摘要替换正文的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；两者都不再计入 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录被移除的字段名（只含字段名，不含正文）。manifest 随场景 Artifact 保存，前端抽屉只展示段名、字数和丢弃项数量，不展示原文或生成正文。
+每次场景生成保存不含正文的 Context Manifest：只含段名、`included`、`chars`、`trimmed`、`droppedItemIds`、`budget` 计数，以及 `path_summary` 的 `coveredItemIds` / `watermarkId`（只含场景 id）。`recent_scenes` 另用 `summarizedItemIds` 记录用自身摘要替换正文的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；两者都不再计入 `droppedItemIds`。`canon_evidence` 用 `backfilledItemIds` 记录后续降级释放预算后重新放回的证据 id；它们不再同时出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录被移除的字段名（只含字段名，不含正文）。manifest 随场景 Artifact 保存，前端抽屉只展示段名、字数和丢弃项数量，不展示原文或生成正文。
 
 ### 4. 路径滚动摘要是确定性派生，不额外调用模型
 
@@ -75,7 +75,7 @@ v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树�
 
 - 旧方向和旧场景不被覆盖；继续、重试和换一批都产生新行，历史可回读。确定性 ID 让并发重复请求幂等，不产生重复批次或重复场景；同一进程内按目标 Artifact id 的 in-flight 锁让并发同内容请求只调用一次模型。
 - 兄弟分支的状态与摘要互不可见；断裂父子链、跨世界线父节点、深度不连续或循环引用都在构树时 fail closed，不返回部分树。
-- 上下文预算有硬上限，manifest 可审计且不泄露正文。代价是预算按字符近似 token，且没有按段配额：降级按固定阶梯进行，先丢证据、旧场景和摘要行，再启用紧凑 `currentState`，最后才用最新场景摘要或 v1 正文截断兜底；只有最后一级仍超预算才 fail closed。v1 正文只在句末边界截断并标记 `（后文已截断）`，不会把最新场景切成半句。
+- 上下文预算有硬上限，manifest 可审计且不泄露正文。代价是预算按字符近似 token，且没有按段配额：降级按固定阶梯进行，先丢证据、旧场景和摘要行，再启用紧凑 `currentState`，最后才用最新场景摘要或 v1 正文截断兜底；只有最后一级仍超预算才 fail closed。后续降级释放预算后会按优先级回填证据，因此同预算下证据比旧行为更多；v1 正文只在安全句末边界截断并标记 `（后文已截断）`，不会切进未闭合引号或半个省略号。
 - 路径摘要不增加模型调用，但需要每个场景都产出 `summary`；v1 场景只有标题，摘要行会退化为标题，不会伪造旧场景摘要。
 - v1 兼容只做读取归一化，不迁移历史行；v1 场景只能作为根节点，不能获得真实的祖先树。
 - 当前 UI 默认沿首选分支（每层优先 `attemptIndex === 0`）走到叶子，兄弟用 `‹ 2/3 ›` 切换；“当前阅读位置”仍由客户端选择表达，尚未持久化 `headNodeId`。

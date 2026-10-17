@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assembleContext,
   CONTEXT_SECTION_ORDER,
+  TRUNCATION_MARKER,
   type ContextAssemblerInput,
   type ContextAssemblerResult,
 } from "@/domain/continuation/context-assembler";
@@ -54,6 +55,32 @@ function tryAssemble(
   } catch {
     return null;
   }
+}
+
+/** 只保留最新 v1 场景正文，并按“可用正文字符数”触发句末截断。 */
+function truncateProse(
+  prose: string,
+  available: number,
+): ContextAssemblerResult {
+  const proseSections: ContextAssemblerInput["sections"] = {
+    ...sections,
+    worldlineSetup: "设定。",
+    canonEvents: "",
+    pathSummary: "",
+    canonEvidence: [],
+    recentScenes: [{ id: "legacy_scene", text: prose }],
+    selectedDirection: "",
+    anchorReminder: "",
+  };
+  const full = assembleContext({ maxChars: 100_000, sections: proseSections });
+  return assembleContext({
+    maxChars:
+      available +
+      full.prompt.length -
+      prose.length +
+      TRUNCATION_MARKER.length,
+    sections: proseSections,
+  });
 }
 
 describe("assembleContext", () => {
@@ -420,6 +447,220 @@ describe("assembleContext", () => {
     });
     expect(scenes.summarizedItemIds ?? []).toEqual([]);
     expect(result.prompt.length).toBeLessThanOrEqual(full.prompt.length - 3);
+  });
+
+  it("reuses budget freed by a newest-scene summary for the highest-priority dropped evidence", () => {
+    const evidence = [
+      { id: "style_low", text: "低优先级证据。", priority: 1 },
+      { id: "related_high", text: "高优先级证据。", priority: 3 },
+    ];
+    const summary = "摘要。";
+    const backfillSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: evidence,
+      recentScenes: [
+        { id: "scene_latest", text: "长正文。".repeat(40), summary },
+      ],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: backfillSections,
+    });
+    const mandatory = assembleContext({
+      maxChars: 100_000,
+      sections: {
+        ...backfillSections,
+        canonEvidence: [],
+        recentScenes: [],
+      },
+    });
+    const summaryPromptLength =
+      mandatory.prompt.length +
+      2 +
+      `<recent_scenes>\n${summary}\n</recent_scenes>`.length;
+    const highPriorityContribution =
+      `<canon_evidence>\n${evidence[1]!.text}\n</canon_evidence>`.length + 2;
+    // 预算恰好放得下高优先级证据、放不下低优先级证据。
+    const budget = summaryPromptLength + highPriorityContribution;
+    expect(budget).toBeLessThan(full.prompt.length);
+
+    const result = assembleContext({
+      maxChars: budget,
+      sections: backfillSections,
+    });
+    const canon = sectionOf(result, "canon_evidence");
+
+    expect(result.prompt.length).toBeLessThanOrEqual(budget);
+    expect(result.manifest.budget.totalChars).toBe(result.prompt.length);
+    expect(canon).toMatchObject({
+      included: true,
+      trimmed: true,
+      droppedItemIds: ["style_low"],
+      backfilledItemIds: ["related_high"],
+    });
+    expect(result.prompt).toContain("高优先级证据。");
+    expect(result.prompt).not.toContain("低优先级证据。");
+    expect(result.prompt).toContain(summary);
+    expect(result.prompt).not.toContain(backfillSections.recentScenes[0]!.text);
+  });
+
+  it("never exceeds the budget and keeps backfilled evidence out of dropped ids", () => {
+    const summary = "摘要。";
+    const backfillSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: [
+        { id: "evidence_a", text: "证据甲。", priority: 2 },
+        { id: "evidence_b", text: "证据乙。", priority: 2 },
+        { id: "evidence_c", text: "证据丙。", priority: 1 },
+      ],
+      recentScenes: [
+        { id: "scene_latest", text: "长正文。".repeat(40), summary },
+      ],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: backfillSections,
+    });
+    const mandatory = assembleContext({
+      maxChars: 100_000,
+      sections: {
+        ...backfillSections,
+        canonEvidence: [],
+        recentScenes: [],
+      },
+    });
+    const minimum =
+      mandatory.prompt.length +
+      2 +
+      `<recent_scenes>\n${summary}\n</recent_scenes>`.length;
+
+    let sawBackfill = false;
+    for (let budget = minimum; budget <= full.prompt.length; budget += 1) {
+      const result = assembleContext({
+        maxChars: budget,
+        sections: backfillSections,
+      });
+      const canon = sectionOf(result, "canon_evidence");
+      const backfilled = canon.backfilledItemIds ?? [];
+      sawBackfill ||= backfilled.length > 0;
+
+      expect(result.prompt.length).toBeLessThanOrEqual(budget);
+      expect(ContextManifestSchema.safeParse(result.manifest).success).toBe(
+        true,
+      );
+      for (const id of backfilled) {
+        expect(canon.droppedItemIds).not.toContain(id);
+        expect(result.prompt).toContain(
+          backfillSections.canonEvidence.find((item) => item.id === id)!.text,
+        );
+      }
+    }
+    expect(sawBackfill).toBe(true);
+  });
+
+  it("is deterministic when backfilling evidence", () => {
+    const backfillSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: [
+        { id: "style_low", text: "低优先级证据。", priority: 1 },
+        { id: "related_high", text: "高优先级证据。", priority: 3 },
+      ],
+      recentScenes: [
+        {
+          id: "scene_latest",
+          text: "长正文。".repeat(40),
+          summary: "摘要。",
+        },
+      ],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: backfillSections,
+    });
+    let budget = -1;
+    for (let candidate = 1; candidate <= full.prompt.length; candidate += 1) {
+      const result = tryAssemble(candidate, backfillSections);
+      if (
+        result &&
+        (sectionOf(result, "canon_evidence").backfilledItemIds ?? []).length > 0
+      ) {
+        budget = candidate;
+        break;
+      }
+    }
+    expect(budget).toBeGreaterThan(0);
+
+    const first = assembleContext({ maxChars: budget, sections: backfillSections });
+    const second = assembleContext({ maxChars: budget, sections: backfillSections });
+    expect(first).toEqual(second);
+  });
+
+  it("does not cut inside an open quotation", () => {
+    const prose =
+      "第一句。他说：「第二句。」第三句。后面还有很长的一段叙述，足够触发截断。";
+    const result = truncateProse(prose, prose.indexOf("。」") + 1);
+
+    expect(result.prompt).toContain("第一句。（后文已截断）");
+    expect(result.prompt).not.toContain("第二句");
+    expect(sectionOf(result, "recent_scenes").truncatedItemIds).toEqual([
+      "legacy_scene",
+    ]);
+  });
+
+  it("treats ASCII quotes as quotation boundaries", () => {
+    const prose =
+      '开场。他说"别走。"然后离开。后面还有很长的一段叙述，足够触发截断。';
+    const result = truncateProse(prose, prose.indexOf('。"') + 1);
+
+    expect(result.prompt).toContain("开场。（后文已截断）");
+    expect(result.prompt).not.toContain("别走");
+  });
+
+  it("does not treat an ASCII apostrophe as an open quotation", () => {
+    const prose =
+      "开场写着 don't panic。随后又是一句。后面还有很长的一段叙述，足够触发截断。";
+    const result = truncateProse(prose, prose.indexOf("随后又是一句。") + "随后又是一句。".length);
+
+    expect(result.prompt).toContain("随后又是一句。（后文已截断）");
+  });
+
+  it("cuts before the opening quote when only quoted sentence ends fit", () => {
+    const prose =
+      "他压低声音说：「别走。」然后转身。后面还有很长的一段叙述，足够触发截断。";
+    const insideQuote = truncateProse(prose, prose.indexOf("。」") + 1);
+    const afterClosingQuote = truncateProse(prose, prose.indexOf("」") + 1);
+
+    expect(insideQuote.prompt).toContain("他压低声音说：（后文已截断）");
+    expect(afterClosingQuote.prompt).toContain("他压低声音说：（后文已截断）");
+    expect(insideQuote.prompt).not.toContain("别走");
+  });
+
+  it("never splits an ellipsis pair at the truncation boundary", () => {
+    const prose =
+      "第一句。他停顿……然后离开。后面还有很长的一段叙述，足够触发截断。";
+    const firstEllipsis = prose.indexOf("…");
+    const halfPair = truncateProse(prose, firstEllipsis + 1);
+    const wholePair = truncateProse(prose, firstEllipsis + 2);
+
+    expect(halfPair.prompt).toContain("第一句。（后文已截断）");
+    expect(halfPair.prompt).not.toContain("停顿");
+    expect(wholePair.prompt).toContain("第一句。他停顿……（后文已截断）");
   });
 
   it("fails closed when legacy prose has no sentence boundary to truncate", () => {

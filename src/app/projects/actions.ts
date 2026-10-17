@@ -10,6 +10,7 @@ import { z } from "zod";
 import {
   type ContinuationDirectionsArtifact,
   type ContinuationSceneArtifact,
+  ProjectIdSchema,
   StoryMapRevisionChangeSchema,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
@@ -41,7 +42,6 @@ import {
 import { acceptImpactPlan } from "@/server/repositories/ripple-repository";
 
 const ProjectTitleSchema = z.string().trim().min(1).max(200);
-const ProjectIdSchema = z.string().min(1);
 
 /**
  * 部署边界（有意为之）：当前产品是本地单用户工具，没有会话/所有权概念，

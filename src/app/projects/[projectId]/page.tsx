@@ -200,6 +200,8 @@ export default async function ProjectPage({
         <>
           {latestJob ? (
             <StoryMapJobProgress
+              // 重新开始/重试会换成新的 job 行；用 id 作 key 让本地轮询状态从头开始。
+              key={latestJob.id}
               initialJob={toJobView(latestJob)}
               projectId={project.id}
               sourceId={latestJob.input.sourceId}

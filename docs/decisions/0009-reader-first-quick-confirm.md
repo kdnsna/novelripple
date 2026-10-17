@@ -19,7 +19,7 @@ Story Map review operation 增加 `quick_confirm_story_map`。仓库函数 `quic
 - 从项目内最新 draft revision 创建**新的** confirmed revision，旧行永不 UPDATE；
 - 仍执行 Source 查找、Evidence Unit 派生、`assertValidStoryMap`、`assertValidStoryMapReview` 与 Artifact Schema 校验；
 - 不调用 `requireReadyForRipple`，因此未完成核对也可确认；
-- 不新增或删除 review confirmations，因此 revision 能派生为“未精修”；
+- 不新增或删除 review confirmations，因此未完成的核对仍按 readiness 如实派生“未精修”；快速确认本身不检查 readiness；
 - 已经 confirmed 时幂等返回同一行；base 不是最新 revision 时仍报 stale 并 fail closed；
 - 普通 `confirm_story_map` 路径和 readiness 门完全不变。
 
@@ -30,7 +30,7 @@ confirmed 之后的下游检查一行未改：Ripple Suggestions 生成器、Imp
 新增 `src/domain/review/derive-story-map-refinement.ts`。它接收当前 Artifact 和已有的 `deriveStoryMapReview` 结果：
 
 - `quickConfirmed`：当前 confirmed revision 的 `review.operation.type` 为 `quick_confirm_story_map`；
-- `needsRefinement`：`quickConfirmed` 且 readiness 尚未满足；
+- `needsRefinement`：当前 revision 的 `storyMap.status` 为 `confirmed` 且 `readiness.readyForRipple` 为 false；它不看 operation 类型。普通 `confirm_story_map` 要求 readiness，所以实际上通常只有快速确认的 revision 会满足它；任何修正都会产生新的 draft revision，draft 不满足该条件，因此不显示横幅；
 - 待核对的 Event / Edge / Ending Candidate ID 直接取 Review Queue 中 `status === "pending"` 且目标类型不是 character 的项，沿用原队列与优先级；
 - 不新增置信度阈值、总分或持久化字段。
 
@@ -82,7 +82,7 @@ confirmed 之后的下游检查一行未改：Ripple Suggestions 生成器、Imp
 ## 后果
 
 - 读者生成 candidate Story Map 后可一键确认并立即看到 3 个值得改变的瞬间，Guided Review 成为可选精修。
-- 快速确认的 revision 如实记录“未精修”：operation 为 `quick_confirm_story_map`，confirmations 保持为空；界面可派生角标与横幅，后续修正仍创建新 revision。
+- 快速确认的 revision 如实记录确认方式：operation 为 `quick_confirm_story_map`，confirmations 保持为空；只要 readiness 尚未满足，界面就派生“未精修”角标与横幅，后续修正仍创建新 revision。
 - 下游 confirmed 检查、Source/Evidence 校验、不可变 Artifact、Worldline 隔离与 fail closed 全部保持不变。
 - 自动建议生成会给每个没有 Suggestions 的 confirmed revision 增加一次模型调用；这是现有生成器的一次调用，不新增 Prompt 或并发路径。如果调用失败，用户仍可从时间线自己选事件继续。
 - 读者文案与内部枚举分离；日志、Schema、API 与世界线记录仍使用 `strict` / `open`。
