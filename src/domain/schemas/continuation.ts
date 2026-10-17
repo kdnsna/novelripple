@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { ContextManifestSchema } from "./context-manifest";
 import { CharacterChangeSchema } from "./impact-plan";
 
 const FactKeySchema = z
@@ -98,9 +99,8 @@ export const ContinuationDirectionSchema = ContinuationDirectionModelSchema.exte
   id: z.string().min(1),
 }).strict();
 
-export const ContinuationDirectionsSchema = z
+const ContinuationDirectionsBaseSchema = z
   .object({
-    schemaVersion: z.literal(1),
     id: z.string().min(1),
     worldlineId: z.string().min(1),
     acceptedImpactPlanId: z.string().min(1),
@@ -108,6 +108,23 @@ export const ContinuationDirectionsSchema = z
     createdAt: z.iso.datetime(),
   })
   .strict();
+
+export const ContinuationDirectionsV1Schema =
+  ContinuationDirectionsBaseSchema.extend({
+    schemaVersion: z.literal(1),
+  }).strict();
+
+export const ContinuationDirectionsV2Schema =
+  ContinuationDirectionsBaseSchema.extend({
+    schemaVersion: z.literal(2),
+    parentSceneId: z.string().min(1).nullable(),
+    batchIndex: z.number().int().min(0),
+  }).strict();
+
+export const ContinuationDirectionsSchema = z.discriminatedUnion(
+  "schemaVersion",
+  [ContinuationDirectionsV1Schema, ContinuationDirectionsV2Schema],
+);
 
 export const ContinuationSceneModelOutputSchema = z
   .object({
@@ -117,15 +134,18 @@ export const ContinuationSceneModelOutputSchema = z
   })
   .strict();
 
-export const ContinuationSchema = z
+export const ContinuationSceneModelOutputV3Schema =
+  ContinuationSceneModelOutputSchema.extend({
+    summary: z.string().trim().min(1).max(200),
+  }).strict();
+
+const ContinuationSceneBaseSchema = z
   .object({
-    schemaVersion: z.literal(1),
     id: z.string().min(1),
     worldlineId: z.string().min(1),
     acceptedImpactPlanId: z.string().min(1),
     directionsArtifactId: z.string().min(1),
     selectedDirectionId: z.string().min(1),
-    sequence: z.literal(1),
     title: z.string().trim().min(1).max(200),
     prose: z.string().trim().min(1_200),
     statePatch: StatePatchSchema,
@@ -133,6 +153,26 @@ export const ContinuationSchema = z
     createdAt: z.iso.datetime(),
   })
   .strict();
+
+export const ContinuationSceneV1Schema = ContinuationSceneBaseSchema.extend({
+  schemaVersion: z.literal(1),
+  sequence: z.literal(1),
+}).strict();
+
+export const ContinuationSceneV2Schema = ContinuationSceneBaseSchema.extend({
+  schemaVersion: z.literal(2),
+  parentSceneId: z.string().min(1).nullable(),
+  depth: z.number().int().min(1),
+  origin: z.enum(["generated", "retry"]),
+  attemptIndex: z.number().int().min(0),
+  summary: z.string().trim().min(1).max(200),
+  contextManifest: ContextManifestSchema,
+}).strict();
+
+export const ContinuationSchema = z.discriminatedUnion("schemaVersion", [
+  ContinuationSceneV1Schema,
+  ContinuationSceneV2Schema,
+]);
 
 function addDuplicateIssues(
   values: string[],
@@ -159,8 +199,19 @@ export type ContinuationDirectionsModelOutput = z.infer<
   typeof ContinuationDirectionsModelOutputSchema
 >;
 export type ContinuationDirection = z.infer<typeof ContinuationDirectionSchema>;
+export type ContinuationDirectionsV1 = z.infer<
+  typeof ContinuationDirectionsV1Schema
+>;
+export type ContinuationDirectionsV2 = z.infer<
+  typeof ContinuationDirectionsV2Schema
+>;
 export type ContinuationDirections = z.infer<typeof ContinuationDirectionsSchema>;
 export type ContinuationSceneModelOutput = z.infer<
   typeof ContinuationSceneModelOutputSchema
 >;
+export type ContinuationSceneModelOutputV3 = z.infer<
+  typeof ContinuationSceneModelOutputV3Schema
+>;
+export type ContinuationSceneV1 = z.infer<typeof ContinuationSceneV1Schema>;
+export type ContinuationSceneV2 = z.infer<typeof ContinuationSceneV2Schema>;
 export type Continuation = z.infer<typeof ContinuationSchema>;

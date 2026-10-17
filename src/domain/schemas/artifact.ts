@@ -382,7 +382,7 @@ const ContinuationArtifactBaseSchema = z
     sourceId: z.string().min(1),
     worldlineId: z.string().min(1),
     kind: z.literal("continuation"),
-    schemaVersion: z.literal(1),
+    schemaVersion: z.union([z.literal(1), z.literal(2)]),
     basedOnArtifactId: z.string().min(1),
     generationRunId: z.string().min(1),
     createdAt: z.iso.datetime(),
@@ -416,6 +416,13 @@ export const ContinuationDirectionsArtifactSchema =
           message: "后续方向必须直接基于 accepted Impact Plan Artifact",
         });
       }
+      if (artifact.schemaVersion !== artifact.continuation.schemaVersion) {
+        context.addIssue({
+          code: "custom",
+          path: ["schemaVersion"],
+          message: "Artifact 与后续方向 schemaVersion 必须一致",
+        });
+      }
     });
 
 export const ContinuationSceneArtifactSchema =
@@ -443,6 +450,13 @@ export const ContinuationSceneArtifactSchema =
           code: "custom",
           path: ["basedOnArtifactId"],
           message: "后续场景必须直接基于方向 Artifact",
+        });
+      }
+      if (artifact.schemaVersion !== artifact.continuation.schemaVersion) {
+        context.addIssue({
+          code: "custom",
+          path: ["schemaVersion"],
+          message: "Artifact 与后续场景 schemaVersion 必须一致",
         });
       }
     });
