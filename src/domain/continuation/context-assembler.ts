@@ -71,8 +71,6 @@ type NormalizedItem = {
   text: string;
   priority: number;
   summary: string;
-  /** 调用方原始顺序，回填证据时用来恢复确定性顺序。 */
-  order: number;
 };
 
 type LiveSections = {
@@ -97,8 +95,8 @@ export const TRUNCATION_MARKER = "（后文已截断）";
  * → recent_scenes → selected_direction → anchor_reminder。
  * 所有段都渲染为稳定的 XML 风格标签。
  *
- * 超预算时只沿一条固定降级阶梯前进；最终在渲染长度 <= maxChars 的状态中，
- * 选择证据最多、同等证据下降级最少的一个：
+ * 超预算时只沿一条固定降级阶梯前进。阶梯是单一嵌套序列，结果是该预算下
+ * 第一个放得下的状态：
  * 1. 完整内容；
  * 2. canon_evidence 按 priority 从低到高、同优先级从末尾整条丢弃；
  * 3. recent_scenes 从最旧开始整条丢弃，但始终保留最新一个场景；
@@ -108,14 +106,15 @@ export const TRUNCATION_MARKER = "（后文已截断）";
  * 7. 最新场景没有可用摘要时，在句末边界截断正文并追加 TRUNCATION_MARKER；
  * 8. 仍超过预算则 fail closed，错误消息包含所需长度与 maxChars。
  *
- * 第 5—7 步释放预算后，会按 priority 从高到低把第 2 步丢弃的证据重新放回，
- * 直到下一条放不下；回填只改变证据集合，不越过预算，且按原始顺序渲染。
- * 较早状态已经放得下但仍有证据被丢弃时，会继续尝试紧凑 worldline_setup
- * 以回填证据；摘要替换与 v1 截断仍只在仍超预算时使用。
+ * 每一步只删除或严格缩短上一步的内容，因此状态序列逐级“更少”。更大预算只会
+ * 停留在更早（或相同）的状态：它绝不会丢掉更小预算已保留的证据或场景，也不会
+ * 使用更小预算没有启用的降级。降级释放的预算不回填第 2 步丢弃的证据——回填会
+ * 把低优先级内容塞回更小预算的结果（大预算停在第 3—4 步时证据为零，小预算却
+ * 带着第 5—7 步回填的证据），破坏嵌套顺序。因此没有跨层证据回填，新 manifest
+ * 也不写 backfilledItemIds。
  *
  * 不会因为“必需段（完整形式）放不下”提前启用紧凑形式：必需段只是预算下限，
- * 紧凑形式只出现在第 5 步。每一级都只删除或严格缩短内容，因此更大的预算
- * 不会得到更靠后的降级状态。
+ * 紧凑形式只出现在第 5 步。
  *
  * worldline_setup、canon_events、selected_direction、anchor_reminder
  * 永不整段裁剪（worldline_setup 只允许整体替换为更紧凑的等价形式）。
@@ -148,7 +147,6 @@ export function assembleContext(
   let scenesTrimmed = false;
   let pathTrimmed = false;
   const droppedEvidence: NormalizedItem[] = [];
-  const backfilledEvidenceIds: string[] = [];
   const droppedSceneIds: string[] = [];
   const summarizedSceneIds: string[] = [];
   const truncatedSceneIds: string[] = [];
@@ -174,7 +172,6 @@ export function assembleContext(
       scenesTrimmed,
       pathTrimmed,
       droppedEvidenceIds: droppedEvidence.map((item) => item.id),
-      backfilledEvidenceIds,
       droppedSceneIds,
       summarizedSceneIds,
       truncatedSceneIds,
@@ -184,50 +181,6 @@ export function assembleContext(
   let prompt = renderPrompt(live);
   if (prompt.length <= maxChars) return finish(prompt);
 
-  const candidates: Array<{
-    result: ContextAssemblerResult;
-    evidenceCount: number;
-  }> = [];
-
-  /** 记录放得下的降级状态；后续按“证据最多、其次降级最少”选择最终状态。 */
-  const record = (): void => {
-    if (prompt.length > maxChars) return;
-    candidates.push({
-      result: structuredClone(finish(prompt)),
-      evidenceCount: live.canonEvidence.length,
-    });
-  };
-
-  /**
-   * 后续降级释放预算后回填证据：按 priority 从高到低、同优先级按原始顺序
-   * 逐条尝试，只有整条放得下才放回；回填后仍按原始顺序渲染。
-   */
-  const backfillEvidence = (): void => {
-    if (droppedEvidence.length === 0) return;
-    const backfillCandidates = [...droppedEvidence].sort(
-      (left, right) =>
-        right.priority - left.priority || left.order - right.order,
-    );
-    for (const candidate of backfillCandidates) {
-      const index = droppedEvidence.indexOf(candidate);
-      if (index < 0) continue;
-      const restored = [...live.canonEvidence, candidate].sort(
-        (left, right) => left.order - right.order,
-      );
-      const restoredPrompt = renderPrompt({
-        ...live,
-        canonEvidence: restored,
-      });
-      // 只回填优先级最高的连续前缀：下一条放不下就停止，不回填更低的条目。
-      if (restoredPrompt.length > maxChars) break;
-      live.canonEvidence = restored;
-      prompt = restoredPrompt;
-      evidenceTrimmed = true;
-      droppedEvidence.splice(index, 1);
-      backfilledEvidenceIds.push(candidate.id);
-    }
-  };
-
   // 2. 原著证据：低优先级先丢，同优先级从末尾整条丢弃。
   while (live.canonEvidence.length > 0 && prompt.length > maxChars) {
     const index = lowestPriorityLastIndex(live.canonEvidence);
@@ -236,7 +189,7 @@ export function assembleContext(
     evidenceTrimmed = true;
     prompt = renderPrompt(live);
   }
-  record();
+  if (prompt.length <= maxChars) return finish(prompt);
 
   // 3. 最近场景：只在仍超预算时从最旧开始整条丢弃，最新一个永远保留。
   while (prompt.length > maxChars && live.recentScenes.length > 1) {
@@ -244,8 +197,8 @@ export function assembleContext(
     droppedSceneIds.push(dropped.id);
     scenesTrimmed = true;
     prompt = renderPrompt(live);
-    record();
   }
+  if (prompt.length <= maxChars) return finish(prompt);
 
   // 4. 路径摘要：按整行从开头裁剪，不切断任何一行；首行提示最后才丢。
   while (prompt.length > maxChars && pathLines.length > 0) {
@@ -256,27 +209,25 @@ export function assembleContext(
     live.pathSummary = pathLines.join("\n");
     pathTrimmed = true;
     prompt = renderPrompt(live);
-    record();
   }
+  if (prompt.length <= maxChars) return finish(prompt);
 
   // 5. 紧凑 worldline_setup：只在阶梯走到这里时使用，且必须严格更短。
-  // 已经放得下但有证据被丢时也尝试，让第 5—7 步释放的预算能回填证据。
+  // 这里释放的预算不再回填证据，否则更小预算会保留更大预算已经丢掉的内容。
   const compactSetup = input.sections.worldlineSetupCompact?.trim() ?? "";
   if (
-    (prompt.length > maxChars || droppedEvidence.length > 0) &&
     compactSetup.length > 0 &&
     compactSetup.length < live.worldlineSetup.length
   ) {
     live.worldlineSetup = compactSetup;
     worldlineSetupTrimmed = true;
     prompt = renderPrompt(live);
-    backfillEvidence();
-    record();
   }
+  if (prompt.length <= maxChars) return finish(prompt);
 
   // 6. 最新场景有可用摘要：用摘要替换正文，与“整体丢弃”分开记录。
   let summarySwapped = false;
-  if (prompt.length > maxChars && live.recentScenes.length > 0) {
+  if (live.recentScenes.length > 0) {
     const index = live.recentScenes.length - 1;
     const newest = live.recentScenes[index]!;
     if (hasUsableSummary(newest)) {
@@ -285,44 +236,28 @@ export function assembleContext(
       summarySwapped = true;
       scenesTrimmed = true;
       prompt = renderPrompt(live);
-      backfillEvidence();
-      record();
     }
   }
+  if (prompt.length <= maxChars) return finish(prompt);
 
   // 7. 最新场景没有可用摘要（v1）：在句末边界截断，保留标点并标记后文省略。
-  if (prompt.length > maxChars && live.recentScenes.length > 0 && !summarySwapped) {
+  // 找不到非空安全前缀时返回 null，走 fail closed，不返回只有标记的半成品。
+  if (live.recentScenes.length > 0 && !summarySwapped) {
     const index = live.recentScenes.length - 1;
     const newest = live.recentScenes[index]!;
-    if (!hasUsableSummary(newest)) {
-      const available =
-        maxChars - (prompt.length - newest.text.length) - TRUNCATION_MARKER.length;
-      const prefix = longestSentencePrefix(newest.text, available);
-      if (prefix !== null) {
-        live.recentScenes[index] = {
-          ...newest,
-          text: `${prefix}${TRUNCATION_MARKER}`,
-        };
-        truncatedSceneIds.push(newest.id);
-        scenesTrimmed = true;
-        prompt = renderPrompt(live);
-        backfillEvidence();
-        record();
-      }
+    const available =
+      maxChars - (prompt.length - newest.text.length) - TRUNCATION_MARKER.length;
+    const prefix = longestSentencePrefix(newest.text, available);
+    if (prefix !== null && prefix.length > 0) {
+      live.recentScenes[index] = {
+        ...newest,
+        text: `${prefix}${TRUNCATION_MARKER}`,
+      };
+      truncatedSceneIds.push(newest.id);
+      scenesTrimmed = true;
+      prompt = renderPrompt(live);
+      if (prompt.length <= maxChars) return finish(prompt);
     }
-  }
-
-  // 选择证据最多、同等证据下降级最少的状态；这保证预算增大时已保留的
-  // 证据不会因为更早返回一个“放得下但证据更少”的状态而消失。
-  const feasible = candidates.filter(
-    (candidate) => candidate.result.prompt.length <= maxChars,
-  );
-  if (feasible.length > 0) {
-    let best = feasible[0]!;
-    for (const candidate of feasible) {
-      if (candidate.evidenceCount > best.evidenceCount) best = candidate;
-    }
-    return best.result;
   }
 
   // 8. 所有可用降级都试过仍放不下：fail closed，不返回半成品。
@@ -397,7 +332,7 @@ function normalizeEvidence(
   items: readonly ContextEvidenceItem[],
 ): NormalizedItem[] {
   return items
-    .map((item, order) => {
+    .map((item) => {
       const priority = item.priority ?? 0;
       if (!Number.isInteger(priority)) {
         throw new Error(`证据优先级必须是整数：${item.id}`);
@@ -407,7 +342,6 @@ function normalizeEvidence(
         text: item.text.trim(),
         priority,
         summary: "",
-        order,
       };
     })
     .filter((item) => item.text.length > 0);
@@ -415,12 +349,11 @@ function normalizeEvidence(
 
 function normalizeScenes(items: readonly ContextSceneItem[]): NormalizedItem[] {
   return items
-    .map((item, order) => ({
+    .map((item) => ({
       id: item.id,
       text: item.text.trim(),
       priority: 0,
       summary: item.summary?.trim() ?? "",
-      order,
     }))
     .filter((item) => item.text.length > 0);
 }
@@ -450,9 +383,11 @@ type OpenQuote = {
 /**
  * 返回不超过 maxLength 的最长句末前缀（保留标点）。
  *
- * 只按句末边界截断，不在句子中间切；句末落在未闭合引号内时跳过，
- * 不把引号切成两半，也不把 `……` 拆成单个省略号。若只有引号内的句末
- * 可选，则在最外层开引号之前截断；完全没有边界时返回 null。
+ * 只按句末边界截断，不在句子中间切；句末落在未闭合引号内时，若其后紧跟
+ * 恰好闭合这些引号的连续闭引号（如 `。」`、`。』」`、`……」`），则在所有
+ * 闭引号之后截断，否则跳过。不把引号切成两半，也不把 `……` 拆成单个省略号。
+ * 若只有引号内的句末可选，则在最外层开引号之前截断；若最外层开引号就在
+ * 开头（整段都在引号内），没有安全的非空前缀，返回 null，由调用方 fail closed。
  */
 function longestSentencePrefix(
   text: string,
@@ -491,22 +426,47 @@ function longestSentencePrefix(
       if (text[index + 1] === "…" && index + 2 > limit) continue;
     }
 
+    const end =
+      char === "…" && text[index + 1] === "…" ? index + 2 : index + 1;
+
     if (openQuotes.length > 0) {
-      if (fallbackOpenIndex < 0) {
+      const closedAt = closingQuoteRunEnd(text, end, openQuotes, limit);
+      if (closedAt !== null) {
+        cut = Math.max(cut, closedAt);
+      } else if (fallbackOpenIndex < 0) {
         fallbackOpenIndex = openQuotes[0]!.index;
       }
       continue;
     }
 
-    cut = Math.max(
-      cut,
-      char === "…" && text[index + 1] === "…" ? index + 2 : index + 1,
-    );
+    cut = Math.max(cut, end);
   }
 
   if (cut > 0) return text.slice(0, cut);
-  if (fallbackOpenIndex >= 0) return text.slice(0, fallbackOpenIndex);
+  if (fallbackOpenIndex > 0) return text.slice(0, fallbackOpenIndex);
   return null;
+}
+
+/**
+ * 句末之后紧跟的连续闭引号若恰好闭合当前所有开引号，返回闭合后的下标；
+ * 只接受连续闭引号，遇到其他字符或预算边界即放弃。
+ */
+function closingQuoteRunEnd(
+  text: string,
+  start: number,
+  openQuotes: readonly OpenQuote[],
+  limit: number,
+): number | null {
+  if (openQuotes.length === 0) return null;
+  const stack = [...openQuotes];
+  let index = start;
+  while (stack.length > 0 && index < limit) {
+    const char = text[index]!;
+    if (stack.at(-1)!.close !== char) return null;
+    stack.pop();
+    index += 1;
+  }
+  return stack.length === 0 && index > start ? index : null;
 }
 
 /** 最低优先级中最后一个条目的下标，等价于同优先级从末尾丢弃。 */
@@ -584,7 +544,6 @@ function buildManifest(input: {
   scenesTrimmed: boolean;
   pathTrimmed: boolean;
   droppedEvidenceIds: string[];
-  backfilledEvidenceIds: string[];
   droppedSceneIds: string[];
   summarizedSceneIds: string[];
   truncatedSceneIds: string[];
@@ -654,9 +613,6 @@ function buildManifest(input: {
             : 0,
           input.evidenceTrimmed,
           input.droppedEvidenceIds,
-          input.backfilledEvidenceIds.length > 0
-            ? { backfilledItemIds: input.backfilledEvidenceIds }
-            : undefined,
         );
       }
       case "recent_scenes": {
@@ -721,7 +677,6 @@ function buildManifest(input: {
 type SectionExtras = {
   summarizedItemIds?: string[];
   truncatedItemIds?: string[];
-  backfilledItemIds?: string[];
   compactedFields?: string[];
   coveredItemIds?: string[];
   watermarkId?: string | null;

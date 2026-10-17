@@ -449,166 +449,85 @@ describe("assembleContext", () => {
     expect(result.prompt.length).toBeLessThanOrEqual(full.prompt.length - 3);
   });
 
-  it("reuses budget freed by a newest-scene summary for the highest-priority dropped evidence", () => {
-    const evidence = [
-      { id: "style_low", text: "低优先级证据。", priority: 1 },
-      { id: "related_high", text: "高优先级证据。", priority: 3 },
-    ];
-    const summary = "摘要。";
-    const backfillSections: ContextAssemblerInput["sections"] = {
+  it("returns the first fitting ladder state instead of backfilling evidence", () => {
+    const newest = { id: "scene_latest", text: "长正文。".repeat(40) };
+    const baseSections: ContextAssemblerInput["sections"] = {
       ...sections,
-      worldlineSetup: "设定。",
-      canonEvents: "",
-      pathSummary: "",
-      canonEvidence: evidence,
-      recentScenes: [
-        { id: "scene_latest", text: "长正文。".repeat(40), summary },
-      ],
-      selectedDirection: "",
-      anchorReminder: "",
-    };
-    const full = assembleContext({
-      maxChars: 100_000,
-      sections: backfillSections,
-    });
-    const mandatory = assembleContext({
-      maxChars: 100_000,
-      sections: {
-        ...backfillSections,
-        canonEvidence: [],
-        recentScenes: [],
-      },
-    });
-    const summaryPromptLength =
-      mandatory.prompt.length +
-      2 +
-      `<recent_scenes>\n${summary}\n</recent_scenes>`.length;
-    const highPriorityContribution =
-      `<canon_evidence>\n${evidence[1]!.text}\n</canon_evidence>`.length + 2;
-    // 预算恰好放得下高优先级证据、放不下低优先级证据。
-    const budget = summaryPromptLength + highPriorityContribution;
-    expect(budget).toBeLessThan(full.prompt.length);
-
-    const result = assembleContext({
-      maxChars: budget,
-      sections: backfillSections,
-    });
-    const canon = sectionOf(result, "canon_evidence");
-
-    expect(result.prompt.length).toBeLessThanOrEqual(budget);
-    expect(result.manifest.budget.totalChars).toBe(result.prompt.length);
-    expect(canon).toMatchObject({
-      included: true,
-      trimmed: true,
-      droppedItemIds: ["style_low"],
-      backfilledItemIds: ["related_high"],
-    });
-    expect(result.prompt).toContain("高优先级证据。");
-    expect(result.prompt).not.toContain("低优先级证据。");
-    expect(result.prompt).toContain(summary);
-    expect(result.prompt).not.toContain(backfillSections.recentScenes[0]!.text);
-  });
-
-  it("never exceeds the budget and keeps backfilled evidence out of dropped ids", () => {
-    const summary = "摘要。";
-    const backfillSections: ContextAssemblerInput["sections"] = {
-      ...sections,
-      worldlineSetup: "设定。",
+      worldlineSetup: `完整设定：${"事实正文".repeat(40)}`,
+      worldlineSetupCompact:
+        '{"currentState":{"factsAddedCount":1,"factsAddedKeys":["generated:x"]}}',
       canonEvents: "",
       pathSummary: "",
       canonEvidence: [
-        { id: "evidence_a", text: "证据甲。", priority: 2 },
-        { id: "evidence_b", text: "证据乙。", priority: 2 },
-        { id: "evidence_c", text: "证据丙。", priority: 1 },
-      ],
-      recentScenes: [
-        { id: "scene_latest", text: "长正文。".repeat(40), summary },
-      ],
-      selectedDirection: "",
-      anchorReminder: "",
-    };
-    const full = assembleContext({
-      maxChars: 100_000,
-      sections: backfillSections,
-    });
-    const mandatory = assembleContext({
-      maxChars: 100_000,
-      sections: {
-        ...backfillSections,
-        canonEvidence: [],
-        recentScenes: [],
-      },
-    });
-    const minimum =
-      mandatory.prompt.length +
-      2 +
-      `<recent_scenes>\n${summary}\n</recent_scenes>`.length;
-
-    let sawBackfill = false;
-    for (let budget = minimum; budget <= full.prompt.length; budget += 1) {
-      const result = assembleContext({
-        maxChars: budget,
-        sections: backfillSections,
-      });
-      const canon = sectionOf(result, "canon_evidence");
-      const backfilled = canon.backfilledItemIds ?? [];
-      sawBackfill ||= backfilled.length > 0;
-
-      expect(result.prompt.length).toBeLessThanOrEqual(budget);
-      expect(ContextManifestSchema.safeParse(result.manifest).success).toBe(
-        true,
-      );
-      for (const id of backfilled) {
-        expect(canon.droppedItemIds).not.toContain(id);
-        expect(result.prompt).toContain(
-          backfillSections.canonEvidence.find((item) => item.id === id)!.text,
-        );
-      }
-    }
-    expect(sawBackfill).toBe(true);
-  });
-
-  it("is deterministic when backfilling evidence", () => {
-    const backfillSections: ContextAssemblerInput["sections"] = {
-      ...sections,
-      worldlineSetup: "设定。",
-      canonEvents: "",
-      pathSummary: "",
-      canonEvidence: [
-        { id: "style_low", text: "低优先级证据。", priority: 1 },
         { id: "related_high", text: "高优先级证据。", priority: 3 },
+        { id: "style_low", text: "低优先级证据。", priority: 1 },
       ],
       recentScenes: [
+        { id: "scene_old", text: "旧正文。".repeat(40) },
+        newest,
+      ],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    const withoutEvidence = assembleContext({
+      maxChars: 100_000,
+      sections: { ...baseSections, canonEvidence: [] },
+    });
+    const withoutEvidenceOneScene = assembleContext({
+      maxChars: 100_000,
+      sections: {
+        ...baseSections,
+        canonEvidence: [],
+        recentScenes: [newest],
+      },
+    });
+    // 比“无证据且保留两幕”短一个字符：必须先丢证据、再丢最旧场景才放得下。
+    // 紧凑设定虽然还有空间，但它属于更靠后的阶梯状态，不得回填证据。
+    const budget = withoutEvidence.prompt.length - 1;
+    expect(budget).toBeGreaterThanOrEqual(
+      withoutEvidenceOneScene.prompt.length,
+    );
+
+    const result = assembleContext({ maxChars: budget, sections: baseSections });
+
+    expect(sectionOf(result, "worldline_setup")).toMatchObject({
+      included: true,
+      trimmed: false,
+    });
+    expect(sectionOf(result, "canon_evidence")).toMatchObject({
+      included: false,
+      droppedItemIds: ["style_low", "related_high"],
+    });
+    expect(sectionOf(result, "canon_evidence").backfilledItemIds).toBeUndefined();
+    expect(sectionOf(result, "recent_scenes").droppedItemIds).toEqual([
+      "scene_old",
+    ]);
+    expect(result.prompt).toContain(newest.text);
+    expect(result.prompt).not.toContain("factsAddedKeys");
+    expect(result.prompt).not.toContain("高优先级证据");
+    expect(result.prompt).not.toContain("低优先级证据");
+  });
+
+  it("parses legacy backfilledItemIds but new manifests never write them", () => {
+    const legacyManifest = {
+      budget: { totalChars: 10, maxChars: 100, percentageUsed: 10 },
+      sections: [
         {
-          id: "scene_latest",
-          text: "长正文。".repeat(40),
-          summary: "摘要。",
+          kind: "canon_evidence",
+          included: true,
+          chars: 10,
+          trimmed: true,
+          droppedItemIds: [],
+          backfilledItemIds: ["evidence_1"],
         },
       ],
-      selectedDirection: "",
-      anchorReminder: "",
     };
+    expect(ContextManifestSchema.safeParse(legacyManifest).success).toBe(true);
 
-    const full = assembleContext({
-      maxChars: 100_000,
-      sections: backfillSections,
-    });
-    let budget = -1;
-    for (let candidate = 1; candidate <= full.prompt.length; candidate += 1) {
-      const result = tryAssemble(candidate, backfillSections);
-      if (
-        result &&
-        (sectionOf(result, "canon_evidence").backfilledItemIds ?? []).length > 0
-      ) {
-        budget = candidate;
-        break;
-      }
-    }
-    expect(budget).toBeGreaterThan(0);
-
-    const first = assembleContext({ maxChars: budget, sections: backfillSections });
-    const second = assembleContext({ maxChars: budget, sections: backfillSections });
-    expect(first).toEqual(second);
+    const result = assemble(420);
+    expect(
+      sectionOf(result, "canon_evidence").backfilledItemIds,
+    ).toBeUndefined();
   });
 
   it("does not cut inside an open quotation", () => {
@@ -647,8 +566,60 @@ describe("assembleContext", () => {
     const afterClosingQuote = truncateProse(prose, prose.indexOf("」") + 1);
 
     expect(insideQuote.prompt).toContain("他压低声音说：（后文已截断）");
-    expect(afterClosingQuote.prompt).toContain("他压低声音说：（后文已截断）");
+    expect(afterClosingQuote.prompt).toContain(
+      "他压低声音说：「别走。」（后文已截断）",
+    );
     expect(insideQuote.prompt).not.toContain("别走");
+    expect(afterClosingQuote.prompt).not.toContain("然后转身");
+  });
+
+  it("fails closed when the whole v1 scene is inside a quotation", () => {
+    for (const prose of ["「没有人来过这里。", "“只有这一句。"]) {
+      const baseSections: ContextAssemblerInput["sections"] = {
+        ...sections,
+        worldlineSetup: "设定。",
+        canonEvents: "",
+        pathSummary: "",
+        canonEvidence: [],
+        recentScenes: [{ id: "legacy_scene", text: prose }],
+        selectedDirection: "",
+        anchorReminder: "",
+      };
+      const full = assembleContext({ maxChars: 100_000, sections: baseSections });
+
+      // 最外层开引号就在开头，没有安全的非空前缀：不得只返回截断标记。
+      expect(() =>
+        assembleContext({
+          maxChars: full.prompt.length - 1,
+          sections: baseSections,
+        }),
+      ).toThrow(/必需上下文段与最新场景超过预算/);
+    }
+  });
+
+  it("cuts after closing quotes that follow a sentence terminator", () => {
+    const suffix = "后面还有很长的一段叙述，足够触发截断。";
+    const cases = [
+      { prose: `他说：“走吧。”然后离开。${suffix}`, end: "”", tail: "然后离开" },
+      { prose: `他喊道：「快走！」然后转身。${suffix}`, end: "」", tail: "然后转身" },
+      { prose: `她问：「真的吗？」随后沉默。${suffix}`, end: "」", tail: "随后沉默" },
+      { prose: `他说：「等等……」然后停下。${suffix}`, end: "」", tail: "然后停下" },
+      {
+        prose: `他说：「她低声说：『走吧。』」然后离开。${suffix}`,
+        end: "』」",
+        tail: "然后离开",
+      },
+    ];
+    for (const { prose, end, tail } of cases) {
+      const prefix = prose.slice(0, prose.indexOf(end) + end.length);
+      const result = truncateProse(prose, prefix.length);
+
+      expect(result.prompt).toContain(`${prefix}${TRUNCATION_MARKER}`);
+      expect(result.prompt).not.toContain(tail);
+      expect(sectionOf(result, "recent_scenes").truncatedItemIds).toEqual([
+        "legacy_scene",
+      ]);
+    }
   });
 
   it("never splits an ellipsis pair at the truncation boundary", () => {
@@ -913,4 +884,246 @@ describe("assembleContext", () => {
     expect(sawCompact).toBe(true);
     expect(sawSummary).toBe(true);
   });
+
+  it(
+    "keeps the ladder monotonic for every budget across seeded random fixtures",
+    { timeout: 30_000 },
+    () => {
+      /** 全部为测试构造的短句，不是任何作品原文。 */
+      const sentences = [
+        "许澄把账簿放回抽屉。",
+        "沈砚在门外等了很久。",
+        "顾闻舟提前抵达钟楼。",
+        "雨声盖住了脚步。",
+        "钟楼的门半开着。",
+        "灯影在墙上摇晃……",
+        "他把信折好放进衣袖。",
+        "远处传来一声钟响。",
+        "她没有再说话。",
+        "桌角压着一张旧车票。",
+      ];
+      const quotedSentences = [
+        "他说：「走吧。」然后停下。",
+        "她低声说：「别回头。」继续向前。",
+        "「没有人来过这里。」他回答。",
+        "她问：「真的吗？」随后沉默。",
+        "他喊道：「快走！」转身离开。",
+        "她说：「等等……」又改了口。",
+        "他念道：「灯灭了。』」",
+      ];
+      const pick = (rng: () => number, pool: readonly string[]): string =>
+        pool[Math.floor(rng() * pool.length)]!;
+      const randomInt = (
+        rng: () => number,
+        min: number,
+        max: number,
+      ): number => min + Math.floor(rng() * (max - min + 1));
+      const makeText = (
+        rng: () => number,
+        minSentences: number,
+        maxSentences: number,
+      ): string => {
+        const pool = rng() < 0.45 ? quotedSentences : sentences;
+        const count = randomInt(rng, minSentences, maxSentences);
+        return Array.from({ length: count }, () => pick(rng, pool)).join("");
+      };
+
+      const makeFixture = (
+        rng: () => number,
+      ): ContextAssemblerInput["sections"] => {
+        const setupSentences =
+          rng() < 0.6 ? randomInt(rng, 3, 6) : randomInt(rng, 1, 3);
+        const worldlineSetup = `世界线设定：${Array.from(
+          { length: setupSentences },
+          () => pick(rng, sentences),
+        ).join("")}`;
+        const compactSetup =
+          rng() < 0.65
+            ? `{"currentState":{"factsAddedCount":${randomInt(rng, 0, 9)}}}`
+            : undefined;
+
+        const evidenceCount =
+          rng() < 0.15 ? 0 : randomInt(rng, 1, 7);
+        const canonEvidence = Array.from({ length: evidenceCount }, (_, index) => ({
+          id: `evidence_${index}`,
+          text: makeText(rng, 1, 4),
+          priority: randomInt(rng, 0, 2),
+        }));
+
+        const sceneCount = randomInt(rng, 1, 6);
+        const recentScenes = Array.from({ length: sceneCount }, (_, index) => {
+          const hasSummary = rng() < 0.45;
+          const text = makeText(
+            rng,
+            hasSummary ? 3 : 1,
+            hasSummary ? 5 : 3,
+          );
+          if (!hasSummary) return { id: `scene_${index}`, text };
+          return {
+            id: `scene_${index}`,
+            text,
+            summary: pick(rng, sentences),
+          };
+        });
+
+        const pathLineCount = randomInt(rng, 0, 3);
+        const pathLines = Array.from({ length: pathLineCount }, (_, index) =>
+          index === 0 && rng() < 0.4
+            ? `更早剧情（第 1–2 幕）：${pick(rng, sentences)}`
+            : `第 ${index + 1} 幕：${pick(rng, sentences)}`,
+        );
+
+        return {
+          worldlineSetup,
+          ...(compactSetup === undefined
+            ? {}
+            : { worldlineSetupCompact: compactSetup }),
+          canonEvents:
+            rng() < 0.8
+              ? `{"events":[{"id":"event_${randomInt(rng, 0, 9)}"}],"edges":[]}`
+              : "",
+          pathSummary: pathLines.join("\n"),
+          pathSummaryCoveredSceneIds: pathLines.map((_, index) => `p${index}`),
+          canonEvidence,
+          recentScenes,
+          selectedDirection: rng() < 0.7 ? "让沈砚在雨夜说出真相。" : "",
+          anchorReminder: rng() < 0.7 ? "请保留顾闻舟在钟楼出现的结局。" : "",
+        };
+      };
+
+      // mulberry32：测试内自带的确定性 PRNG，不引入依赖。
+      const mulberry32 = (seed: number): (() => number) => {
+        let state = seed >>> 0;
+        return () => {
+          state = (state + 0x6d2b79f5) | 0;
+          let value = state;
+          value = Math.imul(value ^ (value >>> 15), value | 1);
+          value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+          return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+        };
+      };
+
+      const sectionOfResult = (
+        result: ContextAssemblerResult,
+        kind: ContextManifestSectionKind,
+      ) => {
+        const found = result.manifest.sections.find(
+          (section) => section.kind === kind,
+        );
+        if (!found) throw new Error(`manifest 缺少段：${kind}`);
+        return found;
+      };
+      const droppedSet = (result: ContextAssemblerResult, kind: "canon_evidence" | "recent_scenes") =>
+        new Set(sectionOfResult(result, kind).droppedItemIds);
+      const retainedEvidenceIds = (
+        result: ContextAssemblerResult,
+        ids: readonly string[],
+      ): string[] => {
+        const dropped = droppedSet(result, "canon_evidence");
+        return ids.filter((id) => !dropped.has(id));
+      };
+      const keptSceneIds = (
+        result: ContextAssemblerResult,
+        ids: readonly string[],
+      ): string[] => {
+        const dropped = droppedSet(result, "recent_scenes");
+        return ids.filter((id) => !dropped.has(id));
+      };
+      const fullSceneIds = (
+        result: ContextAssemblerResult,
+        ids: readonly string[],
+      ): string[] => {
+        const scenes = sectionOfResult(result, "recent_scenes");
+        const degraded = new Set([
+          ...scenes.droppedItemIds,
+          ...(scenes.summarizedItemIds ?? []),
+          ...(scenes.truncatedItemIds ?? []),
+        ]);
+        return ids.filter((id) => !degraded.has(id));
+      };
+      const usesCompact = (result: ContextAssemblerResult): boolean =>
+        sectionOfResult(result, "worldline_setup").trimmed;
+      const usesSummary = (result: ContextAssemblerResult): boolean =>
+        (sectionOfResult(result, "recent_scenes").summarizedItemIds ?? [])
+          .length > 0;
+      const usesTruncation = (result: ContextAssemblerResult): boolean =>
+        (sectionOfResult(result, "recent_scenes").truncatedItemIds ?? [])
+          .length > 0;
+
+      const FIXTURE_COUNT = 300;
+      // 全预算扫描会产生数十万次比较；用 throw 保持测试在几秒内完成。
+      const assertTrue = (condition: boolean, message: string): void => {
+        if (!condition) throw new Error(message);
+      };
+      for (let fixtureIndex = 0; fixtureIndex < FIXTURE_COUNT; fixtureIndex += 1) {
+        const rng = mulberry32(
+          0x9e3779b9 ^ Math.imul(fixtureIndex + 1, 0x85ebca6b),
+        );
+        const fixture = makeFixture(rng);
+        const evidenceIds = fixture.canonEvidence.map((item) => item.id);
+        const sceneIds = fixture.recentScenes.map((item) => item.id);
+        const full = assembleContext({ maxChars: 1_000_000, sections: fixture });
+        let previous: ContextAssemblerResult | null = null;
+        let firstFeasible: number | null = null;
+
+        for (let budget = 1; budget <= full.prompt.length + 20; budget += 1) {
+          const result = tryAssemble(budget, fixture);
+          const label = `fixture ${fixtureIndex} budget ${budget}`;
+          if (!result) {
+            assertTrue(firstFeasible === null, `${label} 放出后不得再失败`);
+            continue;
+          }
+          firstFeasible ??= budget;
+          assertTrue(result.prompt.length <= budget, `${label} 不得超预算`);
+          if (previous) {
+            assertTrue(
+              result.prompt.length >= previous.prompt.length,
+              `${label} 的 prompt 不得短于更小预算`,
+            );
+
+            const currentEvidence = new Set(
+              retainedEvidenceIds(result, evidenceIds),
+            );
+            for (const id of retainedEvidenceIds(previous, evidenceIds)) {
+              assertTrue(
+                currentEvidence.has(id),
+                `${label} 证据集合必须包含 ${id}`,
+              );
+            }
+
+            const currentFullScenes = new Set(fullSceneIds(result, sceneIds));
+            for (const id of fullSceneIds(previous, sceneIds)) {
+              assertTrue(
+                currentFullScenes.has(id),
+                `${label} 完整场景集合必须包含 ${id}`,
+              );
+            }
+
+            const currentScenes = new Set(keptSceneIds(result, sceneIds));
+            for (const id of keptSceneIds(previous, sceneIds)) {
+              assertTrue(
+                currentScenes.has(id),
+                `${label} 场景集合必须包含 ${id}`,
+              );
+            }
+
+            assertTrue(
+              !usesCompact(result) || usesCompact(previous),
+              `${label} 不得更早启用紧凑设定`,
+            );
+            assertTrue(
+              !usesSummary(result) || usesSummary(previous),
+              `${label} 不得更早启用摘要替换`,
+            );
+            assertTrue(
+              !usesTruncation(result) || usesTruncation(previous),
+              `${label} 不得更早启用截断`,
+            );
+          }
+          previous = result;
+        }
+        expect(firstFeasible, `fixture ${fixtureIndex} 必须能放下`).not.toBeNull();
+      }
+    },
+  );
 });
