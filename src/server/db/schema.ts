@@ -77,6 +77,8 @@ export const jobs = sqliteTable(
     progressJson: text("progress_json").notNull(),
     resultJson: text("result_json"),
     error: text("error"),
+    /** 本 attempt 实际发起的模型调用数（含 repair 与瞬时网络重试）。 */
+    modelCalls: integer("model_calls").notNull().default(0),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
     heartbeatAt: text("heartbeat_at").notNull(),
@@ -84,6 +86,46 @@ export const jobs = sqliteTable(
   (table) => [
     index("jobs_project_kind_idx").on(table.projectId, table.kind),
     index("jobs_status_heartbeat_idx").on(table.status, table.heartbeatAt),
+  ],
+);
+
+/**
+ * Story Map 分块检查点：只追加，不 UPDATE。
+ *
+ * 每个 (run_group_id, checkpoint_key, stage) 保存一次已验证的分块中间输出
+ * （stage = extract / glean），供同一 run group 的后续 attempt 复用。
+ * checkpoint_key 已包含 Source 内容身份、分块计划、Prompt 版本与模型身份；
+ * 任何一项变化都会得到新 key，旧行自然失效但仍保留。
+ */
+export const storyMapChunkCheckpoints = sqliteTable(
+  "story_map_chunk_checkpoints",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    sourceId: text("source_id")
+      .notNull()
+      .references(() => sources.id, { onDelete: "cascade" }),
+    sourceContentHash: text("source_content_hash").notNull(),
+    runGroupId: text("run_group_id").notNull(),
+    checkpointKey: text("checkpoint_key").notNull(),
+    chunkIndex: integer("chunk_index").notNull(),
+    stage: text("stage", { enum: ["extract", "glean"] }).notNull(),
+    resultJson: text("result_json").notNull(),
+    modelCalls: integer("model_calls").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("story_map_chunk_checkpoints_group_key_idx").on(
+      table.runGroupId,
+      table.checkpointKey,
+      table.stage,
+    ),
+    index("story_map_chunk_checkpoints_project_source_idx").on(
+      table.projectId,
+      table.sourceId,
+    ),
   ],
 );
 

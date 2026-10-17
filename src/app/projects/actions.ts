@@ -12,6 +12,7 @@ import {
   type ContinuationSceneArtifact,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
+  StoryMapGenerationStartModeSchema,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
   type StoryMapArtifact,
@@ -126,15 +127,20 @@ export async function importProjectSourceAction(
 export async function startStoryMapGenerationAction(
   projectId: string,
   sourceId: string,
+  mode: string,
   _previousState: ProjectActionState,
   _formData: FormData,
 ): Promise<ProjectActionState> {
   void _previousState;
   void _formData;
   const parsed = z
-    .object({ projectId: ProjectIdSchema, sourceId: z.string().min(1) })
+    .object({
+      projectId: ProjectIdSchema,
+      sourceId: z.string().min(1),
+      mode: StoryMapGenerationStartModeSchema,
+    })
     .strict()
-    .safeParse({ projectId, sourceId });
+    .safeParse({ projectId, sourceId, mode });
   if (!parsed.success) return { error: "Story Map 生成参数无效。" };
 
   let started: ReturnType<typeof startStoryMapGenerationJob>;

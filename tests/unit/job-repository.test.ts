@@ -25,6 +25,8 @@ import {
   markJobRunning,
   markJobSucceeded,
   QUEUED_JOB_PROGRESS,
+  sumRunGroupModelCalls,
+  updateJobModelCalls,
   updateJobProgress,
 } from "@/server/repositories/job-repository";
 import { storyMapGenerationErrorMessage } from "@/server/story-map/story-map-generation-error";
@@ -129,6 +131,7 @@ describe("job repository", () => {
     const retried = startStoryMapGenerationJob({
       projectId: project.id,
       sourceId: "source_retry",
+      mode: "resume",
     });
 
     expect(retried.created).toBe(true);
@@ -146,6 +149,112 @@ describe("job repository", () => {
         sourceId: "source_retry",
       })?.id,
     ).toBe(retried.job.id);
+  });
+
+  it("links a retry into the same run group and accumulates its model calls", () => {
+    resetJobRecoveryForTests();
+    const project = createTestProject();
+    const first = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: "source_retry_group",
+    });
+    markJobRunning({ id: first.job.id });
+    updateJobModelCalls({ id: first.job.id, modelCalls: 4 });
+    markJobFailed({
+      id: first.job.id,
+      error: "Story Map 生成失败，未保存 Artifact。",
+    });
+
+    const retried = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: "source_retry_group",
+      mode: "resume",
+    });
+    const runGroupId = first.job.input.runGroupId;
+    expect(runGroupId).toBeDefined();
+    expect(retried.job.input).toMatchObject({
+      sourceId: "source_retry_group",
+      retryOfJobId: first.job.id,
+      runGroupId,
+    });
+    expect(getJob(retried.job.id)?.modelCalls).toBe(0);
+    expect(
+      sumRunGroupModelCalls({
+        projectId: project.id,
+        runGroupId: runGroupId!,
+        excludeJobId: retried.job.id,
+      }),
+    ).toBe(4);
+  });
+
+  it("links a retry after an interrupted job without reusing the old row", () => {
+    resetJobRecoveryForTests();
+    const project = createTestProject();
+    const first = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: "source_retry_interrupted",
+    });
+    markJobRunning({ id: first.job.id });
+    setHeartbeat(first.job.id, "2000-01-01T00:00:00.000Z");
+    interruptStaleJobs({
+      staleBefore: new Date(Date.now() - JOB_HEARTBEAT_STALE_MS).toISOString(),
+    });
+
+    const retried = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: "source_retry_interrupted",
+      mode: "resume",
+    });
+
+    expect(retried.created).toBe(true);
+    expect(retried.job.id).not.toBe(first.job.id);
+    expect(getJob(first.job.id)?.status).toBe("interrupted");
+    expect(retried.job.input).toMatchObject({
+      retryOfJobId: first.job.id,
+      runGroupId: first.job.input.runGroupId,
+    });
+  });
+
+  it("fresh starts a new run group and never links to the exhausted attempt", () => {
+    resetJobRecoveryForTests();
+    const project = createTestProject();
+    const first = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: "source_fresh_group",
+    });
+    markJobRunning({ id: first.job.id });
+    updateJobModelCalls({ id: first.job.id, modelCalls: 9 });
+    markJobFailed({
+      id: first.job.id,
+      error: "Story Map 生成失败，未保存 Artifact。",
+    });
+
+    const fresh = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: "source_fresh_group",
+      mode: "fresh",
+    });
+
+    expect(fresh.created).toBe(true);
+    expect(fresh.job.id).not.toBe(first.job.id);
+    expect(fresh.job.input.sourceId).toBe("source_fresh_group");
+    expect(fresh.job.input.runGroupId).toBeDefined();
+    expect(fresh.job.input.runGroupId).not.toBe(first.job.input.runGroupId);
+    expect(fresh.job.input.retryOfJobId).toBeUndefined();
+    expect(fresh.job.modelCalls).toBe(0);
+    expect(
+      sumRunGroupModelCalls({
+        projectId: project.id,
+        runGroupId: fresh.job.input.runGroupId!,
+      }),
+    ).toBe(0);
+    // 旧 run group 的历史调用仍保留，只是 fresh 不再读取它。
+    expect(
+      sumRunGroupModelCalls({
+        projectId: project.id,
+        runGroupId: first.job.input.runGroupId!,
+      }),
+    ).toBe(9);
   });
 
   it("records progress and stores the artifact id only on success", () => {

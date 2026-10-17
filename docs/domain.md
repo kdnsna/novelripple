@@ -88,6 +88,10 @@ Story Map 生成不再占用一次同步 Server Action。用户点击生成后�
 
 同一 project + kind + source 同时最多一个 `queued`/`running` 任务；重复点击直接回到已有任务。成功时任务只保存 `artifactId`，失败时保存经统一脱敏的短错误。任务历史只追加：`failed` / `interrupted` 行不被复用，重试创建新行。Runner 每 15 秒刷新心跳；进程首次使用或心跳超过 2 分钟时，遗留的 `queued`/`running` 任务被标为 `interrupted`。project 页面读取该 Source 的最新任务，客户端在任务进行中轮询 `GET /api/jobs/[jobId]?projectId=<id>`：成功且仍在 `queued`/`running` 时每 1 秒继续，网络错误或 5xx 按 1、2、4、8…秒指数退避（上限 30 秒），成功后回到 1 秒；404 表示任务不存在或不属于本项目，停止轮询并允许重新开始；终态不再轮询。成功后导航到 `?artifact=<id>`；刷新页面仍从服务端恢复同一任务。详见 [`ADR 0008`](decisions/0008-background-jobs.md)。
 
+重试不是从零重跑：每个分块的抽取与补抽结果在通过 Schema 与 Unit 引用校验后，作为只追加的检查点保存（`story_map_chunk_checkpoints`，阶段为 `extract` / `glean`），不保存 Prompt、原文或 raw model output。检查点按 project + `runGroupId` 加载，key 覆盖 Source id / `contentHash`、分块 `coreUnitIds` / `contextUnitIds` 与序号、全部 Prompt 版本以及模型/provider 身份；key 不匹配、损坏或无法再次通过阶段校验的行被忽略。启动任务接受显式 `mode`：`resume`（默认）在最新任务 `failed` / `interrupted` 时创建新任务行、沿用其 `runGroupId` 并写入 `retryOfJobId`，只补跑缺失的抽取/补抽分块；`fresh` 无论上一任务状态如何都使用全新 `runGroupId`，不读旧检查点、预算从 0 开始。首次生成没有可重试任务，`resume` 也自然得到新 group；人名、结局、合并始终重跑，并走同一 merge/Evidence/领域校验路径。
+
+模型调用预算跨 attempt 累计：`jobs.model_calls` 记录本 attempt 每次真实 provider 调用（含 repair，调用前落库），同一 run group 的此前 attempt 之和同时参与预检与运行中计数；预计剩余调用或实际累计超过 `STORY_MAP_MAX_MODEL_CALLS` 时 fail closed，默认重试不能靠新任务行重置预算。因此失败/中断界面同时提供“重试（复用已完成分块）”（`resume`）与“从头重新生成”（`fresh`）；预算耗尽时错误文案固定脱敏并说明预算已用完，界面把 `fresh` 作为明确出路，避免某一 Source 被已耗尽的 run group 永久锁死。续跑进度显示 `已复用 N/M 个分块`（抽取与补抽都已复用的分块数）。检查点只追加、不 UPDATE；检查点行的调用数用于成本审计，预算以任务行为准，以覆盖“调用已发生但结果尚未落检查点”的崩溃窗口。
+
 ## Character
 
 Story Map 中可被事件引用的人物实体。Character 在所属 Story Map 版本内有唯一 ID，`role` 取 `protagonist` / `antagonist` / `supporting` / `minor` / `deceased`；`minor` 表示只短暂出现、无名、边缘或不确定是否重要的具体人物，仍与主要人物一样必须参与至少一个有 Evidence 的 Event。当前不在 Character 上复制独立 Evidence：可作为剧情事实使用的人物状态必须写入带 Evidence 的 Event；`role` 与 `initialState` 只用于地图浏览和提取定向，不能脱离相关 Event 充当 Canon 事实。别名可以归到同一 Character，但不确定的合并不得静默发生。Character split 只有真实 benchmark 记录明确需求后才实现；M1-04 没有取得该证据。
