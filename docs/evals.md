@@ -126,6 +126,8 @@ M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三�
 
 M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级路径；baseline 必须记录实际的 `json_schema`、`json_object` 或 `prompt_json` 模式。Story Map Candidate 的 Evidence Unit ID 只负责让模型选择证据，最终 Evidence 仍由服务端确定性解析为现有 `SourceReference[]` 并接受全部领域校验。
 
+当前生产 Story Map 管线（Phase 1 分块召回）使用五个版本化 Prompt：`story-map-chunk.v1`、`story-map-glean.v1`、`story-map-names.v1`、`story-map-endings.v1`、`story-map-merge.v1`。历史报告中的 `story-map.v2` + `story-map-reconcile.v2` 只代表旧的两步式管线，不用于新运行。
+
 ### 指标口径
 
 - `characterCount`：Source 规范化后按 Unicode code point 计数并排除空白；只用于作品规模分组，不进入生产 Schema。
