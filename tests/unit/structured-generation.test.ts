@@ -3,12 +3,21 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIUserAbortError,
+} from "openai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { closeDatabase, getDatabase } from "@/server/db/client";
-import { generateStructured } from "@/server/ai/generate-structured";
+import {
+  generateStructured,
+  isTransientNetworkError,
+} from "@/server/ai/generate-structured";
 import { MockAIProvider } from "@/server/ai/mock-provider";
+import type { AIProvider } from "@/server/ai/types";
 import { createProject } from "@/server/repositories/project-repository";
 import {
   getGenerationRun,
@@ -339,5 +348,179 @@ describe("structured generation", () => {
     expect(listProjectGenerationRuns(project.id)[0]).toMatchObject({
       status: "failed",
     });
+  });
+
+  it("retries the initial call once after a transient network error", async () => {
+    const project = createProject({ title: "网络瞬时重试" });
+    const provider = new MockAIProvider([
+      new APIConnectionError({ cause: new Error("terminated") }),
+      '{"answer":"ok"}',
+    ]);
+
+    const result = await generateStructured(createInput(project.id), provider);
+
+    expect(provider.requests).toHaveLength(2);
+    expect(result.value).toEqual({ answer: "ok" });
+    expect(result.generation.attemptCount).toBe(1);
+    expect(getGenerationRun(result.generation.runId)).toMatchObject({
+      status: "succeeded",
+    });
+  });
+
+  it("counts the transient retry through the attempt hook", async () => {
+    const project = createProject({ title: "网络重试计数" });
+    const attempts: number[] = [];
+    const provider = new MockAIProvider([
+      new Error("fetch failed"),
+      '{"answer":"ok"}',
+    ]);
+
+    await generateStructured(
+      {
+        ...createInput(project.id),
+        onAttempt: () => attempts.push(attempts.length + 1),
+      },
+      provider,
+    );
+
+    expect(provider.requests).toHaveLength(2);
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it("fails after two transient network errors without a third call", async () => {
+    const project = createProject({ title: "网络两次失败" });
+    const provider = new MockAIProvider([
+      new Error("fetch failed"),
+      new Error("terminated"),
+      '{"answer":"must not run"}',
+    ]);
+
+    await expect(
+      generateStructured(createInput(project.id), provider),
+    ).rejects.toThrow("terminated");
+
+    expect(provider.requests).toHaveLength(2);
+    expect(listProjectGenerationRuns(project.id)[0]).toMatchObject({
+      status: "failed",
+      error: "terminated",
+    });
+  });
+
+  it("throws the abort reason instead of retrying a transient network error", async () => {
+    const project = createProject({ title: "网络重试前中止" });
+    const controller = new AbortController();
+    const abortReason = new Error("aborted before network retry");
+    let providerCalls = 0;
+    const provider: AIProvider = {
+      providerName: "mock",
+      async generate() {
+        providerCalls += 1;
+        controller.abort(abortReason);
+        throw new APIConnectionError({ cause: new Error("terminated") });
+      },
+    };
+
+    await expect(
+      generateStructured(
+        { ...createInput(project.id), signal: controller.signal },
+        provider,
+      ),
+    ).rejects.toBe(abortReason);
+
+    expect(providerCalls).toBe(1);
+    expect(listProjectGenerationRuns(project.id)[0]).toMatchObject({
+      status: "failed",
+      error: "aborted before network retry",
+    });
+  });
+
+  it("retries the repair call once after a transient network error", async () => {
+    const project = createProject({ title: "修复网络重试" });
+    const provider = new MockAIProvider([
+      '{"answer":123}',
+      new APIConnectionTimeoutError(),
+      '{"answer":"repaired"}',
+    ]);
+
+    const result = await generateStructured(createInput(project.id), provider);
+
+    expect(provider.requests).toHaveLength(3);
+    expect(provider.requests[1]?.repair).toMatchObject({
+      previousRawOutput: '{"answer":123}',
+    });
+    expect(provider.requests[2]?.repair).toMatchObject({
+      previousRawOutput: '{"answer":123}',
+    });
+    expect(result.value).toEqual({ answer: "repaired" });
+    expect(result.generation.attemptCount).toBe(2);
+  });
+});
+
+describe("isTransientNetworkError", () => {
+  it("recognizes OpenAI SDK connection errors and transient causes", () => {
+    expect(
+      isTransientNetworkError(
+        new APIConnectionError({ cause: new Error("terminated") }),
+      ),
+    ).toBe(true);
+    expect(isTransientNetworkError(new APIConnectionTimeoutError())).toBe(true);
+
+    const socketError = Object.assign(new Error("other side closed"), {
+      code: "UND_ERR_SOCKET",
+    });
+    expect(
+      isTransientNetworkError(
+        new TypeError("fetch failed", { cause: socketError }),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches transient names, codes and messages", () => {
+    for (const error of [
+      new Error("terminated"),
+      new Error("fetch failed"),
+      new Error("socket hang up"),
+      Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+      Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+      Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
+    ]) {
+      expect(isTransientNetworkError(error)).toBe(true);
+    }
+  });
+
+  it("never treats aborts, HTTP 4xx or validation errors as transient", () => {
+    expect(
+      isTransientNetworkError(new DOMException("Aborted", "AbortError")),
+    ).toBe(false);
+    expect(isTransientNetworkError(new APIUserAbortError())).toBe(false);
+    expect(
+      isTransientNetworkError(
+        Object.assign(new APIUserAbortError(), {
+          cause: new Error("terminated"),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientNetworkError(
+        Object.assign(new Error("terminated"), {
+          name: "BadRequestError",
+          status: 400,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isTransientNetworkError(
+        Object.assign(new Error("fetch failed"), { status: 404 }),
+      ),
+    ).toBe(false);
+    expect(isTransientNetworkError(new z.ZodError([]))).toBe(false);
+  });
+
+  it("returns false for unrelated errors and non-error values", () => {
+    expect(isTransientNetworkError(new Error("upstream unavailable"))).toBe(
+      false,
+    );
+    expect(isTransientNetworkError("terminated")).toBe(false);
+    expect(isTransientNetworkError(null)).toBe(false);
   });
 });

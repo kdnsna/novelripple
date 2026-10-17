@@ -39,6 +39,7 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Fixed / 修复
 
+- 结构化生成新增瞬时网络错误识别与重试：OpenAI SDK 连接/超时错误及 `terminated`、`fetch failed`、`ECONNRESET`、`ETIMEDOUT`、`UND_ERR_SOCKET`、`socket hang up` 等错误，首轮与 repair 各重试一次；中止、HTTP 4xx 与校验错误不重试。每次重试仍经 `onAttempt` 计入 Story Map 模型调用预算。Transient network errors (OpenAI SDK connection/timeout errors and matching causes/messages) now retry once for both the initial and repair calls, while aborts, HTTP 4xx and validation errors never retry; retries still count through `onAttempt` in the Story Map model-call budget.
 - 人名归并增加错并防护：`mergedFrom` 候选名必须等于合并后人物的 `name` 或出现在 `aliases` 中，否则 repair 一次后 fail closed。Wrong-merge guard for the roster pass: every merged candidate name must match the merged name or an alias, otherwise one repair then fail closed.
 - 错并比较先做 NFKC、转小写、去首尾空白并折叠内部空白，全角/半角与大小写变体不再误判。The roster guard normalizes names with NFKC, lowercasing and whitespace folding so full-width/case variants compare equal.
 - 分块按整块 core 文本控制在 `CHUNK_MAX_CHARS` 内：下一段会超限时即使当前块未到最小长度也换块；单段超长仍独占一块，短尾回并只在结果不超限时发生。Chunking now caps the whole chunk core at `CHUNK_MAX_CHARS`, starts a new chunk before an overflow even below the minimum, lets a single oversized paragraph stand alone, and only folds a short tail when the result stays within the max.
