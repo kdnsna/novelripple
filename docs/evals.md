@@ -140,9 +140,10 @@ M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三�
 - **truncated gold-aligned copy 基线**（`chanceBaseline.goldAlignedTruncatedCopy2x` / `.goldAlignedTruncatedCopy4x`，同样 loose / strict 评分）：位置、participants 与 edges 和 `goldAlignedCopy` 完全相同，但每个事件 summary / 结局 requirement 只保留 gold 对齐拼接原文的前 `factor × gold label 的 Unicode code point 数` 个字符（至少 1 个、最多全文），事件 title 取截断文本前 20 个字符；`factor` 分别为 2 和 4，对应常量 `GOLD_ALIGNED_TRUNCATION_FACTORS`。`goldAlignedCopy` 与两条 truncated 基线都不是复制能拿到的上界，只用于观察不同复制长度下的得分变化。
 - **strict 内容检查的已知限制**（2026-10-18，按 #6 最终运行 `563c27b` 逐对核对）：
   - precision 下限 0.08 紧贴真实摘要的 precision 分布：真实 strict 事件匹配中最低的 precision 分别为 A 0.083、B 0.089、C 0.080，余量很小。模型摘要如果变长，strict 分数会无声下滑；解读 strict 时请同时看候选摘要长度。
-  - 长摘要仍会被稀释：评审确认的 26 对真实事件对中有 8 对未匹配，其中 5 对 recall 已过 0.2（0.26–0.42），但候选摘要 79–152 字，precision 只有 0.037–0.072，被精度下限拒绝；2 对 recall 不足（0.10、0.14），是真正没有词面重合的转述；1 对内容检查已过，只是该 gold 在一对一分配中被另一个候选占用（该 gold 仍计为命中）。
+  - 长摘要仍会被稀释：评审确认的 26 对真实事件对中有 8 对未匹配，其中 5 对 recall 已过 0.2（0.26–0.42），但候选文本（内容检查用的是事件 title + summary）共 78–151 字，precision 只有 0.037–0.072，被精度下限拒绝；2 对 recall 不足（0.10、0.14），是真正没有词面重合的转述；1 对内容检查已过，只是该 gold 在一对一分配中被另一个候选占用（该 gold 仍计为命中）。
   - 结局：strict 结局还要求结局自身 Unit 与人物交集，比人工判断保守；评审人工判为真命中的结局里只有少数被 strict 匹配，strict 结局分数应视为下界式的保守信号。
   - 所有 gold-aligned copy 基线（整段与截断）都不是“复制能拿多少分”的上界。
+  - 复制基线与真实结果的余量在结局上很小：同样只用 gold 位置，截取对齐原文**末尾**（尾部截断）时，strict 结局可达 A 0.67（真实 0.77，尾部 2× label 长度）、C 0.25（真实 0.33，尾部 4×）；截取**开头** 3× label 长度时，strict 事件可达 A 0.43、C 0.28（真实 0.75、0.69）。报告内置的只是开头 2× / 4× 两条截断基线，因此 strict 结局分数的“高于复制”结论应谨慎解读。
 - **只有 strict 减去对应 chance / 对抗 baseline 才能作为抽取质量证据**：loose F1 只是 Unit 邻近信号，内容无关的 dummy Story Map 也可能把它刷高；chance 与对抗基线给出“不比较内容 / 只堆高频词 / 直接抄原文”也能碰巧得到多少分。因此不允许只用 loose 的 events/edges/endings F1 声称抽取质量提升。
 - 控制台每篇打印 `goldEvents loose=F1 strict=F1 chance(loose/strict)=x/y dense(loose/strict)=x/y stuffing(loose/strict)=x/y sourceCopy(loose/strict)=x/y goldAlignedCopy(loose/strict)=x/y gaTrunc2x(loose/strict)=x/y gaTrunc4x(loose/strict)=x/y`，edges / endings 同样；`gaTrunc2x` / `gaTrunc4x` 分别是 2x / 4x truncated gold-aligned copy 基线，完整 F1/P/R 见报告里的 `chanceBaseline`。
 - 严格人物 identity 数字保持不变；lenient identity 只把匹配 gold `mentionedOnly` 的候选从 precision 分母中排除。
