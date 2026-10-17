@@ -4,6 +4,7 @@ import {
   applyStatePatch,
   buildSceneTree,
   derivePathState,
+  getDefaultScenePath,
   getScenePath,
 } from "@/domain/continuation/scene-tree";
 import {
@@ -240,6 +241,56 @@ describe("scene tree", () => {
       "scene_root",
     ]);
     expect(() => getScenePath(tree, "scene_missing")).toThrow("不存在节点");
+  });
+
+  it("defaults to the deepest first-attempt path", () => {
+    const root = v2Scene({
+      id: "scene_root",
+      parentSceneId: null,
+      depth: 1,
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+    const generated = v2Scene({
+      id: "scene_generated",
+      parentSceneId: "scene_root",
+      depth: 2,
+      createdAt: "2026-08-11T00:01:00.000Z",
+      attemptIndex: 0,
+    });
+    const retry = v2Scene({
+      id: "scene_retry",
+      parentSceneId: "scene_root",
+      depth: 2,
+      createdAt: "2026-08-11T00:02:00.000Z",
+      origin: "retry",
+      attemptIndex: 1,
+    });
+    const deeper = v2Scene({
+      id: "scene_deeper",
+      parentSceneId: "scene_generated",
+      depth: 3,
+      createdAt: "2026-08-11T00:03:00.000Z",
+    });
+    const retryChild = v2Scene({
+      id: "scene_retry_child",
+      parentSceneId: "scene_retry",
+      depth: 3,
+      createdAt: "2026-08-11T00:04:00.000Z",
+    });
+
+    const tree = buildSceneTree([
+      root,
+      retry,
+      generated,
+      retryChild,
+      deeper,
+    ]);
+
+    expect(getDefaultScenePath(tree).map((node) => node.id)).toEqual([
+      "scene_root",
+      "scene_generated",
+      "scene_deeper",
+    ]);
   });
 
   describe("fails closed", () => {

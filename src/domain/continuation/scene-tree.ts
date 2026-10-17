@@ -104,6 +104,23 @@ export function buildSceneTree(scenes: readonly ScenePayload[]): SceneTree {
   return { nodes, childrenByParent };
 }
 
+/**
+ * 返回默认选中的最深路径。
+ *
+ * 从根开始，每一层优先选择 `attemptIndex === 0` 的节点（首次生成），
+ * 没有首次生成时选择最早的兄弟节点。结果始终是当前树的一条真实路径。
+ */
+export function getDefaultScenePath(tree: SceneTree): SceneNode[] {
+  const path: SceneNode[] = [];
+  let siblings = tree.childrenByParent.get(null) ?? [];
+  while (siblings.length > 0) {
+    const next = siblings.find((node) => node.attemptIndex === 0) ?? siblings[0]!;
+    path.push(next);
+    siblings = tree.childrenByParent.get(next.id) ?? [];
+  }
+  return path;
+}
+
 /** 返回从根到目标节点的路径；未知节点 fail closed。 */
 export function getScenePath(tree: SceneTree, nodeId: string): SceneNode[] {
   const target = tree.nodes.get(nodeId);

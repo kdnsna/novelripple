@@ -6,23 +6,45 @@ import {
   generateContinuationDirectionsAction,
   generateContinuationSceneAction,
 } from "@/app/projects/actions";
+import {
+  buildSceneTree,
+  getDefaultScenePath,
+  getScenePath,
+  type SceneNode,
+} from "@/domain/continuation/scene-tree";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import type {
-  ContinuationArtifact,
-  ContinuationDirectionsArtifact,
+  ContextManifest,
+  ContextManifestSectionKind,
   ContinuationSceneArtifact,
   ImpactPlanArtifact,
   StoryMapArtifact,
   Worldline,
 } from "@/domain/schemas";
+import {
+  appendContinuationArtifact,
+  type ContinuationDirectionBatchView,
+  type ContinuationTreeView,
+} from "./continuation-tree-view";
+
+type PendingKind = "directions" | "newBatch" | "scene" | "retry";
 
 type WorldlineContinuationPanelProps = {
   projectId: string;
   storyMapArtifact: StoryMapArtifact;
   worldline: Worldline;
   acceptedImpactPlanArtifact: ImpactPlanArtifact;
-  initialArtifacts: ContinuationArtifact[];
+  initialContinuation: ContinuationTreeView;
   onClose: () => void;
+};
+
+const contextSectionLabels: Record<ContextManifestSectionKind, string> = {
+  worldline_setup: "世界线设定",
+  path_summary: "路径摘要",
+  canon_evidence: "原著证据",
+  recent_scenes: "最近场景",
+  selected_direction: "所选方向",
+  anchor_reminder: "锚点提醒",
 };
 
 export function WorldlineContinuationPanel({
@@ -30,22 +52,19 @@ export function WorldlineContinuationPanel({
   storyMapArtifact,
   worldline,
   acceptedImpactPlanArtifact,
-  initialArtifacts,
+  initialContinuation,
   onClose,
 }: WorldlineContinuationPanelProps) {
-  const [directionsArtifact, setDirectionsArtifact] =
-    useState<ContinuationDirectionsArtifact | null>(() =>
-      findDirections(initialArtifacts),
-    );
-  const [sceneArtifact, setSceneArtifact] =
-    useState<ContinuationSceneArtifact | null>(() =>
-      findScene(initialArtifacts),
-    );
-  const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>(
-    () => findScene(initialArtifacts)?.continuation.selectedDirectionId ?? null,
-  );
+  const [view, setView] = useState(initialContinuation);
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [pendingKind, setPendingKind] = useState<PendingKind | null>(null);
+  const [pendingDirectionId, setPendingDirectionId] = useState<string | null>(
+    null,
+  );
+
   const storyMap = storyMapArtifact.storyMap;
   const plan = acceptedImpactPlanArtifact.impactPlan;
   const currentState = useMemo(
@@ -64,41 +83,98 @@ export function WorldlineContinuationPanel({
     storyMap.events.map((event) => [event.id, event.title]),
   );
 
-  function generateDirections(): void {
+  const tree = useMemo(() => buildSceneTree(view.scenes), [view.scenes]);
+  const defaultPath = useMemo(() => getDefaultScenePath(tree), [tree]);
+  const selectedNode = selectedSceneId
+    ? tree.nodes.get(selectedSceneId) ?? null
+    : null;
+  const currentPath = useMemo(
+    () => (selectedNode ? getScenePath(tree, selectedNode.id) : defaultPath),
+    [defaultPath, selectedNode, tree],
+  );
+  const selectedScene = currentPath[currentPath.length - 1] ?? null;
+
+  const rootBatch = latestBatchForParent(view.directionBatches, null);
+  const activeBatch = activeBatchId
+    ? view.directionBatches.find((batch) => batch.id === activeBatchId) ?? null
+    : selectedScene
+      ? null
+      : rootBatch;
+
+  function runDirections(parentSceneId: string | null, newBatch: boolean): void {
     setError(null);
+    setPendingKind(newBatch ? "newBatch" : "directions");
     startTransition(async () => {
       const result = await generateContinuationDirectionsAction({
         projectId,
         worldlineId: worldline.id,
+        parentSceneId,
+        newBatch,
       });
+      setPendingKind(null);
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      setDirectionsArtifact(result.artifact);
+      setView((current) =>
+        appendContinuationArtifact(current, result.artifact),
+      );
+      setActiveBatchId(result.artifact.id);
     });
   }
 
-  function generateScene(directionId: string): void {
-    if (!directionsArtifact) return;
+  function generateScene(batch: ContinuationDirectionBatchView, directionId: string): void {
     setError(null);
-    const previousSelectedDirectionId = selectedDirectionId;
-    setSelectedDirectionId(directionId);
+    setPendingKind("scene");
+    setPendingDirectionId(directionId);
     startTransition(async () => {
       const result = await generateContinuationSceneAction({
         projectId,
         worldlineId: worldline.id,
-        directionsArtifactId: directionsArtifact.id,
+        directionsArtifactId: batch.id,
         selectedDirectionId: directionId,
       });
+      setPendingKind(null);
+      setPendingDirectionId(null);
       if (!result.ok) {
-        setSelectedDirectionId(previousSelectedDirectionId);
         setError(result.error);
         return;
       }
-      setSelectedDirectionId(result.artifact.continuation.selectedDirectionId);
-      setSceneArtifact(result.artifact);
+      selectGeneratedScene(result.artifact);
     });
+  }
+
+  function retrySelectedScene(): void {
+    if (!selectedScene) return;
+    setError(null);
+    setPendingKind("retry");
+    startTransition(async () => {
+      const result = await generateContinuationSceneAction({
+        projectId,
+        worldlineId: worldline.id,
+        directionsArtifactId: selectedScene.directionsArtifactId,
+        selectedDirectionId: selectedScene.selectedDirectionId,
+        retry: true,
+      });
+      setPendingKind(null);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      selectGeneratedScene(result.artifact);
+    });
+  }
+
+  function selectGeneratedScene(artifact: ContinuationSceneArtifact): void {
+    setView((current) => appendContinuationArtifact(current, artifact));
+    setSelectedSceneId(artifact.id);
+    setActiveBatchId(null);
+  }
+
+  function selectSibling(sibling: SceneNode): void {
+    setSelectedSceneId(sibling.id);
+    setActiveBatchId(null);
+    setError(null);
   }
 
   return (
@@ -108,8 +184,8 @@ export function WorldlineContinuationPanel({
     >
       <div className="panel-heading detail-heading">
         <div>
-          <span className="panel-kicker">Worldline · 基线 + Delta</span>
-          <h2>单场景 Continuation</h2>
+          <span className="panel-kicker">Worldline · 场景节点树</span>
+          <h2>续写当前路径</h2>
         </div>
         <button className="text-button" onClick={onClose} type="button">
           返回 Evidence
@@ -155,36 +231,197 @@ export function WorldlineContinuationPanel({
         </div>
       </section>
 
-      {!directionsArtifact ? (
+      {currentPath.length === 0 ? (
         <section className="continuation-empty">
-          <h3>下一步：生成 3 个未来方向</h3>
+          <h3>下一步：从分歧点生成 3 个方向</h3>
           <p>
             只读取当前 Worldline、已接受 ImpactPlan、相关原文 Evidence
             和当前状态。
           </p>
+          {!activeBatch ? (
+            <button
+              className="primary-button full-width-button"
+              disabled={pending}
+              onClick={() => runDirections(null, false)}
+              type="button"
+            >
+              {pendingKind === "directions"
+                ? "正在生成方向…"
+                : "生成 3 个后续方向"}
+            </button>
+          ) : null}
+        </section>
+      ) : (
+        <section
+          className="continuation-path"
+          aria-label="当前场景路径"
+          data-testid="continuation-path"
+        >
+          {currentPath.map((scene, index) => {
+            const isSelected = index === currentPath.length - 1;
+            const siblings =
+              tree.childrenByParent.get(scene.parentSceneId) ?? [];
+            const siblingIndex = siblings.findIndex(
+              (sibling) => sibling.id === scene.id,
+            );
+            return (
+              <article
+                className={`path-scene ${isSelected ? "selected" : ""}`}
+                data-testid={
+                  isSelected ? "continuation-scene" : "continuation-path-scene"
+                }
+                key={scene.id}
+              >
+                <div className="path-scene-meta">
+                  <span className="panel-kicker">
+                    第 {scene.depth} 幕
+                    {scene.origin === "retry" ? " · 重试" : ""}
+                  </span>
+                  {siblings.length > 1 ? (
+                    <div
+                      className="scene-sibling-nav"
+                      data-testid="scene-siblings"
+                    >
+                      <button
+                        aria-label="上一个兄弟场景"
+                        disabled={siblingIndex <= 0}
+                        onClick={() => {
+                          const sibling = siblings[siblingIndex - 1];
+                          if (sibling) selectSibling(sibling);
+                        }}
+                        type="button"
+                      >
+                        ‹
+                      </button>
+                      <span>
+                        {siblingIndex + 1}/{siblings.length}
+                      </span>
+                      <button
+                        aria-label="下一个兄弟场景"
+                        disabled={siblingIndex >= siblings.length - 1}
+                        onClick={() => {
+                          const sibling = siblings[siblingIndex + 1];
+                          if (sibling) selectSibling(sibling);
+                        }}
+                        type="button"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <h3>{scene.title}</h3>
+                <div className="scene-prose">
+                  {scene.prose
+                    .split(/\n+/)
+                    .filter(Boolean)
+                    .map((paragraph) => (
+                      <p key={paragraph}>{paragraph}</p>
+                    ))}
+                </div>
+
+                {isSelected ? (
+                  <>
+                    <details className="state-patch-details">
+                      <summary>查看 State Patch</summary>
+                      <dl>
+                        <div>
+                          <dt>新增事实</dt>
+                          <dd>
+                            {scene.statePatch.factsAdded
+                              .map((fact) => fact.statement)
+                              .join("；") || "无"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>删除事实</dt>
+                          <dd>
+                            {scene.statePatch.factsRemoved.join("；") || "无"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>人物变化</dt>
+                          <dd>
+                            {scene.statePatch.characterChanges
+                              .map(
+                                (change) =>
+                                  `${characterNames[change.characterId] ?? change.characterId}：${change.summary}`,
+                              )
+                              .join("；") || "无"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>线索变化</dt>
+                          <dd>
+                            开启：
+                            {scene.statePatch.threadsOpened.join("；") || "无"}
+                            <br />
+                            关闭：
+                            {scene.statePatch.threadsClosed.join("；") || "无"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </details>
+
+                    {scene.contextManifest ? (
+                      <ContextViewer manifest={scene.contextManifest} />
+                    ) : null}
+                  </>
+                ) : null}
+              </article>
+            );
+          })}
+        </section>
+      )}
+
+      {selectedScene ? (
+        <div className="continuation-scene-actions">
           <button
             className="primary-button full-width-button"
             disabled={pending}
-            onClick={generateDirections}
+            onClick={() => runDirections(selectedScene.id, false)}
             type="button"
           >
-            {pending ? "正在生成方向…" : "生成 3 个后续方向"}
+            {pendingKind === "directions" ? "正在生成方向…" : "继续"}
           </button>
-        </section>
-      ) : (
-        <section className="continuation-directions">
+          <button
+            className="secondary-button"
+            disabled={pending}
+            onClick={retrySelectedScene}
+            type="button"
+          >
+            {pendingKind === "retry" ? "正在重试本幕…" : "重试本幕"}
+          </button>
+        </div>
+      ) : null}
+
+      {activeBatch ? (
+        <section
+          className="continuation-directions"
+          data-testid="continuation-directions"
+        >
           <div className="continuation-section-heading">
-            <span className="panel-kicker">3 个后续方向</span>
-            <h3>选择本次唯一场景</h3>
+            <div>
+              <span className="panel-kicker">
+                方向批次 {activeBatch.batchIndex + 1}
+              </span>
+              <h3>选择一个方向生成本幕</h3>
+            </div>
+            <button
+              className="text-button"
+              disabled={pending}
+              onClick={() =>
+                runDirections(activeBatch.parentSceneId, true)
+              }
+              type="button"
+            >
+              {pendingKind === "newBatch" ? "正在换一批…" : "换一批"}
+            </button>
           </div>
           <div className="direction-card-list">
-            {directionsArtifact.continuation.directions.map((direction) => (
-              <article
-                className={`direction-card ${
-                  selectedDirectionId === direction.id ? "selected" : ""
-                }`}
-                key={direction.id}
-              >
+            {activeBatch.directions.map((direction) => (
+              <article className="direction-card" key={direction.id}>
                 <h4>{direction.title}</h4>
                 <p>{direction.premise}</p>
                 <small>
@@ -199,85 +436,19 @@ export function WorldlineContinuationPanel({
                 </p>
                 <button
                   className="secondary-button"
-                  disabled={pending || sceneArtifact !== null}
-                  onClick={() => generateScene(direction.id)}
+                  disabled={pending}
+                  onClick={() => generateScene(activeBatch, direction.id)}
                   type="button"
                 >
-                  {sceneArtifact?.continuation.selectedDirectionId ===
-                  direction.id
-                    ? "已生成此场景"
-                    : pending && selectedDirectionId === direction.id
-                      ? "正在生成场景…"
-                      : "选择此方向"}
+                  {pendingKind === "scene" &&
+                  pendingDirectionId === direction.id
+                    ? "正在生成场景…"
+                    : "选择此方向"}
                 </button>
               </article>
             ))}
           </div>
         </section>
-      )}
-
-      {sceneArtifact ? (
-        <article className="continuation-scene" data-testid="continuation-scene">
-          <span className="panel-kicker">当前场景 · 1 / 1</span>
-          <h3>{sceneArtifact.continuation.title}</h3>
-          <div className="scene-prose">
-            {sceneArtifact.continuation.prose
-              .split(/\n+/)
-              .filter(Boolean)
-              .map((paragraph) => (
-                <p key={paragraph}>{paragraph}</p>
-              ))}
-          </div>
-          <details className="state-patch-details">
-            <summary>查看 State Patch</summary>
-            <dl>
-              <div>
-                <dt>新增事实</dt>
-                <dd>
-                  {sceneArtifact.continuation.statePatch.factsAdded
-                    .map((fact) => fact.statement)
-                    .join("；") || "无"}
-                </dd>
-              </div>
-              <div>
-                <dt>删除事实</dt>
-                <dd>
-                  {sceneArtifact.continuation.statePatch.factsRemoved.join(
-                    "；",
-                  ) || "无"}
-                </dd>
-              </div>
-              <div>
-                <dt>人物变化</dt>
-                <dd>
-                  {sceneArtifact.continuation.statePatch.characterChanges
-                    .map(
-                      (change) =>
-                        `${characterNames[change.characterId] ?? change.characterId}：${change.summary}`,
-                    )
-                    .join("；") || "无"}
-                </dd>
-              </div>
-              <div>
-                <dt>线索变化</dt>
-                <dd>
-                  开启：
-                  {sceneArtifact.continuation.statePatch.threadsOpened.join(
-                    "；",
-                  ) || "无"}
-                  <br />
-                  关闭：
-                  {sceneArtifact.continuation.statePatch.threadsClosed.join(
-                    "；",
-                  ) || "无"}
-                </dd>
-              </div>
-            </dl>
-          </details>
-          <p className="m0-continuation-boundary">
-            M0 在此停止：本世界线只生成一个场景，不提供无限续写。
-          </p>
-        </article>
       ) : null}
 
       {error ? (
@@ -289,20 +460,48 @@ export function WorldlineContinuationPanel({
   );
 }
 
-function findDirections(
-  artifacts: ContinuationArtifact[],
-): ContinuationDirectionsArtifact | null {
-  const artifact = artifacts.find(
-    (candidate) => candidate.artifactType === "directions",
+function ContextViewer({ manifest }: { manifest: ContextManifest }) {
+  return (
+    <details className="context-viewer" data-testid="context-viewer">
+      <summary>上下文</summary>
+      <div className="context-viewer-body">
+        <p>
+          预算使用 {manifest.budget.percentageUsed}% ·{" "}
+          {manifest.budget.totalChars}/{manifest.budget.maxChars} 字符
+        </p>
+        <ul>
+          {manifest.sections.map((section) => (
+            <li data-kind={section.kind} key={section.kind}>
+              <strong>{contextSectionLabels[section.kind]}</strong>
+              <span>
+                {section.included ? "已包含" : "未包含"} · {section.chars} 字符
+                {section.trimmed ? " · 已裁剪" : ""} · 丢弃{" "}
+                {section.droppedItemIds.length} 项
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </details>
   );
-  return artifact?.artifactType === "directions" ? artifact : null;
 }
 
-function findScene(
-  artifacts: ContinuationArtifact[],
-): ContinuationSceneArtifact | null {
-  const artifact = artifacts.find(
-    (candidate) => candidate.artifactType === "scene",
-  );
-  return artifact?.artifactType === "scene" ? artifact : null;
+function latestBatchForParent(
+  batches: readonly ContinuationDirectionBatchView[],
+  parentSceneId: string | null,
+): ContinuationDirectionBatchView | null {
+  let latest: ContinuationDirectionBatchView | null = null;
+  for (const batch of batches) {
+    if (batch.parentSceneId !== parentSceneId) continue;
+    if (
+      !latest ||
+      latest.batchIndex < batch.batchIndex ||
+      (latest.batchIndex === batch.batchIndex &&
+        (latest.createdAt < batch.createdAt ||
+          (latest.createdAt === batch.createdAt && latest.id < batch.id)))
+    ) {
+      latest = batch;
+    }
+  }
+  return latest;
 }

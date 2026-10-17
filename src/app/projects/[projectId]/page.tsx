@@ -5,11 +5,12 @@ import { PersistedSourceReader } from "@/components/project/persisted-source-rea
 import { SourceImportForm } from "@/components/project/source-import-form";
 import { StoryMapGenerationForm } from "@/components/project/story-map-generation-form";
 import { StoryMapReviewWorkspace } from "@/components/story-workspace/story-map-review-workspace";
+import { buildContinuationTreeView } from "@/components/story-workspace/continuation-tree-view";
 import {
   deriveEvidenceUnits,
   sourceReferenceForUnit,
 } from "@/domain/source/evidence-units";
-import { listProjectContinuationArtifacts } from "@/server/repositories/continuation-repository";
+import { listContinuationArtifactsForWorldline } from "@/server/repositories/continuation-repository";
 import {
   getProject,
   getProjectSource,
@@ -73,14 +74,13 @@ export default async function ProjectPage({
   const selectedImpactPlanArtifacts = selectedArtifact
     ? listImpactPlanArtifactsForStoryMap(project.id, selectedArtifact.id)
     : [];
-  const selectedWorldlineIds = new Set(
-    selectedWorldlines.map((worldline) => worldline.id),
-  );
-  const selectedContinuationArtifacts = selectedArtifact
-    ? listProjectContinuationArtifacts(project.id).filter((artifact) =>
-        selectedWorldlineIds.has(artifact.worldlineId),
-      )
-    : [];
+  const selectedContinuationTrees = selectedWorldlines.map((worldline) => {
+    const artifacts = listContinuationArtifactsForWorldline(worldline.id);
+    return buildContinuationTreeView(worldline.id, [
+      ...artifacts.directions,
+      ...artifacts.scenes,
+    ]);
+  });
 
   return (
     <main className="foundation-shell">
@@ -168,7 +168,7 @@ export default async function ProjectPage({
               text: unit.text,
               reference: sourceReferenceForUnit(unit),
             }))}
-            initialContinuationArtifacts={selectedContinuationArtifacts}
+            initialContinuationTrees={selectedContinuationTrees}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
             initialWorldlines={selectedWorldlines}
             projectId={project.id}
