@@ -15,10 +15,11 @@ import {
   sha256,
 } from "@/domain/source/normalize-source";
 import {
-  STRICT_CONTENT_SCORE,
+  STRICT_CONTENT_F1,
   UNIT_WINDOW,
   buildM1ChanceBaselines,
   contentBigramScore,
+  contentF1Score,
   matchM1Gold,
 } from "@/evals/m1-gold-matcher";
 import type { M1Gold } from "@/evals/m1-gold";
@@ -372,6 +373,8 @@ describe("M1 gold matcher", () => {
       total: 1,
       rate: 1,
     });
+    // strict 不再接受“目标事件 Unit”作为结局位置依据。
+    expect(result.strict.endings.matchedPairs).toEqual([]);
   });
 
   it("uses mapped character names in the ending requirement text", () => {
@@ -535,9 +538,11 @@ describe("M1 gold matcher", () => {
 
     const result = matchM1Gold({ gold, source, storyMap });
 
-    expect(STRICT_CONTENT_SCORE).toBe(0.25);
+    expect(STRICT_CONTENT_F1).toBe(0.2);
     expect(contentBigramScore("甲在钟楼发现一封信", "甲在钟楼找到一封旧信"))
-      .toBeGreaterThanOrEqual(STRICT_CONTENT_SCORE);
+      .toBeGreaterThanOrEqual(STRICT_CONTENT_F1);
+    expect(contentF1Score("甲在钟楼发现一封信", "甲在钟楼找到一封旧信", ["甲"]))
+      .toBeGreaterThanOrEqual(STRICT_CONTENT_F1);
     expect(result.strict.events.matchedPairs).toEqual([
       { candidateId: "event_discover", goldId: "g1" },
     ]);
@@ -631,5 +636,85 @@ describe("M1 gold matcher", () => {
     expect(result.strict.endings.matchedPairs).toEqual([
       { candidateId: "ending_final", goldId: "end_1" },
     ]);
+  });
+
+  it("ignores names and stopword-only overlap in strict content F1", () => {
+    expect(contentF1Score("阿甲阿乙", "阿甲阿乙", ["阿甲", "阿乙"])).toBe(0);
+    expect(contentF1Score("他们的了着过", "是在和与也都")).toBe(0);
+    expect(contentF1Score("他们我们因为所以", "他们我们因为所以")).toBe(0);
+    expect(contentF1Score("钟楼里的旧信", "钟楼里的旧信", ["甲"])).toBeGreaterThan(0.9);
+  });
+
+  it("scores a long verbose candidate below a concise paraphrase", () => {
+    const goldLabel = "甲在钟楼发现一封信";
+    const concise = "甲在钟楼发现信";
+    const verbose =
+      `${concise}。他在钟楼外面来回走了很久，又问了很多人，` +
+      "最后还是没有找到别的线索，只好把这件事记在心里，准备以后再查。";
+
+    const conciseScore = contentF1Score(goldLabel, concise, ["甲"]);
+    const verboseScore = contentF1Score(goldLabel, verbose, ["甲"]);
+
+    expect(conciseScore).toBeGreaterThanOrEqual(STRICT_CONTENT_F1);
+    expect(verboseScore).toBeLessThan(conciseScore);
+  });
+
+  it("keeps stuffing and source-copy strict event/ending F1 at or below 0.1", () => {
+    const gold = createGold({
+      characters: [
+        { id: "hero", name: "甲" },
+        { id: "ally", name: "乙" },
+      ],
+      events: [
+        {
+          id: "g1",
+          characterIds: ["hero"],
+          evidenceUnits: [1],
+          label: "秘密终于揭开",
+        },
+        {
+          id: "g2",
+          characterIds: ["ally"],
+          evidenceUnits: [4],
+          label: "归途无人知晓",
+        },
+      ],
+      endings: [
+        {
+          id: "end_1",
+          characterIds: ["hero"],
+          evidenceUnits: [8],
+          label: "灯火熄灭之后",
+        },
+        {
+          id: "end_2",
+          characterIds: ["ally"],
+          evidenceUnits: [7],
+          label: "海面归于平静",
+        },
+      ],
+    });
+    const baselines = buildM1ChanceBaselines({ gold, units });
+
+    expect(baselines.stuffing.events).toHaveLength(gold.events.length);
+    expect(baselines.stuffing.endingCandidates).toHaveLength(
+      gold.endings.length,
+    );
+    expect(baselines.sourceCopy.events[0]?.summary).toBe(units[0]!.text);
+    expect(baselines.sourceCopy.events[0]?.title).toBe(
+      [...units[0]!.text].slice(0, 20).join(""),
+    );
+
+    for (const name of ["stuffing", "sourceCopy"] as const) {
+      const result = matchM1Gold({
+        gold,
+        source,
+        storyMap: baselines[name],
+      });
+      expect(result.chanceBaseline[name].strict.events.f1)
+        .toBeLessThanOrEqual(0.1);
+      expect(result.chanceBaseline[name].strict.endings.f1)
+        .toBeLessThanOrEqual(0.1);
+    }
   });
 });

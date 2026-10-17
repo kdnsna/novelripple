@@ -213,6 +213,18 @@ describe("M1 baseline contract", () => {
 
     expect(score.coreCharacterRecall.rate).toBe(1);
     expect(score.evidenceValidity.rate).toBe(1);
+    expect(score.identity.aliasStats).toMatchObject({
+      aliasCap: 12,
+      characters: storyMap.characters.length,
+      totalAliases: storyMap.characters.reduce(
+        (total, character) => total + character.aliases.length,
+        0,
+      ),
+      maxAliases: Math.max(
+        0,
+        ...storyMap.characters.map((character) => character.aliases.length),
+      ),
+    });
     expect(score.events).toEqual({
       expectedTotal: 2,
       candidateTotal: storyMap.events.length,
@@ -618,6 +630,9 @@ describe("M1 baseline contract", () => {
 
     expect(script).toContain("tieredIdentityF1=");
     expect(script).toContain("minorCandidates=");
+    expect(script).toContain("aliases(mean/max/atCap)=");
+    expect(script).toContain("sourceCopy(loose/strict)=");
+    expect(script).toContain("stuffing(loose/strict)=");
   });
 
   it("keeps every required human correction counter and A-K diagnosis explicit", () => {

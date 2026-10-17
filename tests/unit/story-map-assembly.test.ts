@@ -18,6 +18,7 @@ import {
   applyEndingPass,
   applyMerge,
   applyRoster,
+  canRejectRosterCandidate,
   CHARACTER_ENDING_PREFIX,
   cleanupCandidateIds,
   dedupeEdges,
@@ -473,6 +474,65 @@ describe("roster pass", () => {
     ]);
     expect(applied.characters.map((item) => item.id)).not.toContain("char_crowd");
     expect(applied.characters.map((item) => item.id)).not.toContain("char_narrator");
+    expect(applied.events[0]!.participants).toEqual(["char_lin", "char_porter"]);
+  });
+
+  it("drops a rejected mention-only candidate but still demotes event participants", () => {
+    const pool: StoryMapPool = {
+      characters: [
+        { ...character("char_lin", "林舟"), kind: "individual" },
+        { ...character("char_porter", "码头脚夫"), kind: "individual" },
+        { ...character("char_rumor", "传闻中的船主"), kind: "individual" },
+      ],
+      events: [
+        {
+          ...event("event_meet", "u1", ["char_lin", "char_porter"]),
+          chunkIndex: 0,
+        },
+      ],
+      edges: [],
+    };
+    const participants = new Set(
+      pool.events.flatMap((item) => item.participants),
+    );
+    const mentioned = {
+      ...character("char_rumor", "传闻中的船主"),
+      kind: "individual" as const,
+    };
+    const porter = {
+      ...character("char_porter", "码头脚夫"),
+      kind: "individual" as const,
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_lin",
+          name: "林舟",
+          aliases: [],
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_lin"],
+        },
+      ],
+      rejectedCandidateIds: ["char_rumor", "char_porter"],
+    };
+
+    expect(canRejectRosterCandidate(mentioned, participants)).toBe(true);
+    expect(canRejectRosterCandidate(porter, participants)).toBe(false);
+    expect(validateRoster(roster, pool)).toEqual([]);
+
+    const applied = applyRoster(pool, roster);
+    expect(applied.characters).toEqual([
+      expect.objectContaining({ id: "char_lin", role: "protagonist" }),
+      expect.objectContaining({
+        id: "char_porter",
+        name: "码头脚夫",
+        role: "minor",
+      }),
+    ]);
+    expect(applied.characters.map((item) => item.id)).not.toContain(
+      "char_rumor",
+    );
     expect(applied.events[0]!.participants).toEqual(["char_lin", "char_porter"]);
   });
 

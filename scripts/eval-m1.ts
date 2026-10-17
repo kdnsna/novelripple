@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import {
   mkdir,
   readFile,
@@ -284,6 +285,7 @@ async function main() {
     reportDirProvided: args.reportDirProvided,
     ...(extraPrivateRoot ? { extraPrivateRoot } : {}),
     isGitIgnored: isGitIgnored,
+    realpath: (candidate) => realpathSync(candidate),
   });
 
   // 2. 人工输入（缺失 = null，计入 missingData）
@@ -466,8 +468,9 @@ async function main() {
       }
     : report;
 
-  await mkdir(args.reportDir, { recursive: true });
-  const runDirectory = path.join(args.reportDir, runId);
+  const resolvedReportDir = routing.resolvedReportDir ?? args.reportDir;
+  await mkdir(resolvedReportDir, { recursive: true });
+  const runDirectory = path.join(resolvedReportDir, runId);
   await mkdir(runDirectory, { recursive: true });
   const metricsPath = path.join(runDirectory, "metrics.json");
   await writeFile(

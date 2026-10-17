@@ -13,10 +13,42 @@ import type { M1Gold } from "./m1-gold";
 export const UNIT_WINDOW = 2;
 /** 严格（strict）匹配要求候选 Evidence Unit 与 gold Unit 精确相等。 */
 export const STRICT_UNIT_WINDOW = 0;
-/** 严格匹配的内容信号下限：gold label 的 bigram 至少被候选标题/摘要覆盖 25%。 */
-export const STRICT_CONTENT_SCORE = 0.25;
+/** 严格匹配的内容信号下限：gold label 与候选文本的内容 F1 至少 0.2。 */
+export const STRICT_CONTENT_F1 = 0.2;
 /** dense chance baseline：每 3 个 Unit 放一个内容无关事件。 */
 export const DENSE_BASELINE_EVENT_STRIDE = 3;
+
+/**
+ * 中文高频虚词 / 填充 bigram。strict 内容 F1 会先剔除这些 token，
+ * 避免“他们、已经、因为”这类共同措辞制造虚假重合。
+ */
+export const CJK_STOPWORD_BIGRAMS: readonly string[] = [
+  "一个", "一些", "这个", "那个", "这些", "那些", "他们", "我们", "你们", "自己",
+  "没有", "什么", "已经", "因为", "所以", "但是", "然后", "时候", "不是", "就是",
+  "还是", "可以", "知道", "起来", "出来", "一样", "这样", "那样", "这里", "那里",
+  "之后", "之前", "以后", "事件", "故事", "人物", "结局", "最后", "开始", "发生",
+  "如果", "虽然", "而且", "并且", "以及", "于是", "因此", "然而", "不过", "只是",
+  "只有", "还有", "也是", "都是", "就会", "不会", "不能", "可能", "应该", "需要",
+  "觉得", "看到", "听到", "说道", "说着", "看着", "想着", "走到", "来到", "回到",
+  "出去", "进来", "进去", "下来", "上去", "过去", "现在", "当时", "此时", "后来",
+  "最终", "终于", "突然", "忽然", "慢慢", "渐渐", "一直", "一定", "一起", "一边",
+  "一面", "许多", "很多", "多少", "几个", "一次", "一天", "一年", "地方", "东西",
+  "事情", "问题", "办法", "样子", "眼睛", "心里", "心中", "身上", "手里",
+];
+
+/** 单个虚词字符；两个都命中时该 bigram 直接丢弃。 */
+export const CJK_STOP_CHARS: ReadonlySet<string> = new Set([
+  "的", "了", "着", "过", "地", "得", "是", "在", "和", "与", "也", "都",
+  "就", "又", "把", "被", "让", "给", "一", "不", "这", "那", "他", "她",
+  "它", "我", "你",
+]);
+
+const CJK_STOPWORD_BIGRAM_SET = new Set(CJK_STOPWORD_BIGRAMS);
+const CJK_CHARACTER_PATTERN = /^\p{Script=Han}$/u;
+const ASCII_WORD_PATTERN = /[a-z0-9]+/gu;
+
+/** stuffing baseline 使用的源文高频 non-stopword bigram 数。 */
+const STUFFING_BIGRAM_LIMIT = 30;
 
 type NamedCharacter = {
   id: string;
@@ -99,14 +131,16 @@ const StrictGoldMatchSchema = z
   })
   .strict();
 
+const ChanceMapScoreSchema = z
+  .object({ loose: ChanceMatchSchema, strict: ChanceMatchSchema })
+  .strict();
+
 const ChanceBaselineSchema = z
   .object({
-    matched: z
-      .object({ loose: ChanceMatchSchema, strict: ChanceMatchSchema })
-      .strict(),
-    dense: z
-      .object({ loose: ChanceMatchSchema, strict: ChanceMatchSchema })
-      .strict(),
+    matched: ChanceMapScoreSchema,
+    dense: ChanceMapScoreSchema,
+    stuffing: ChanceMapScoreSchema,
+    sourceCopy: ChanceMapScoreSchema,
   })
   .strict();
 
@@ -131,22 +165,22 @@ export type M1GoldStrictMatch = z.infer<typeof StrictGoldMatchSchema>;
 export type M1GoldChanceMatch = z.infer<typeof ChanceMatchSchema>;
 export type M1GoldChanceBaseline = z.infer<typeof ChanceBaselineSchema>;
 
-/** 匹配策略参数：loose 只看 Unit 邻近，strict 额外要求精确 Unit 与内容重合。 */
+/** 匹配策略参数：loose 只看 Unit 邻近，strict 额外要求精确 Unit 与内容 F1。 */
 type MatchStrategy = {
   unitWindow: number;
-  minimumContentScore: number | null;
+  minimumContentF1: number | null;
   assignmentOrder: "loose" | "strict";
 };
 
 const LOOSE_STRATEGY: MatchStrategy = {
   unitWindow: UNIT_WINDOW,
-  minimumContentScore: null,
+  minimumContentF1: null,
   assignmentOrder: "loose",
 };
 
 const STRICT_STRATEGY: MatchStrategy = {
   unitWindow: STRICT_UNIT_WINDOW,
-  minimumContentScore: STRICT_CONTENT_SCORE,
+  minimumContentF1: STRICT_CONTENT_F1,
   assignmentOrder: "strict",
 };
 
@@ -155,8 +189,8 @@ export type M1GoldMatchOptions = {
   looseUnitWindow?: number;
   /** 严格匹配 Unit 窗口，默认 `STRICT_UNIT_WINDOW`（0）。 */
   strictUnitWindow?: number;
-  /** 严格匹配内容重合下限，默认 `STRICT_CONTENT_SCORE`。 */
-  strictMinimumContentScore?: number;
+  /** 严格匹配内容 F1 下限，默认 `STRICT_CONTENT_F1`。 */
+  strictMinimumContentF1?: number;
 };
 
 type UnitBoundary = {
@@ -251,47 +285,31 @@ export function matchM1Gold(input: {
     gold: input.gold,
     units: evidenceUnits,
   });
+  const scoreChanceMap = (storyMap: StoryMap) => ({
+    loose: compactChanceMatch(
+      evaluateGoldMatch({
+        gold: input.gold,
+        storyMap,
+        units,
+        sourceId: input.source.id,
+        strategy: looseStrategy,
+      }),
+    ),
+    strict: compactChanceMatch(
+      evaluateGoldMatch({
+        gold: input.gold,
+        storyMap,
+        units,
+        sourceId: input.source.id,
+        strategy: strictStrategy,
+      }),
+    ),
+  });
   const chanceBaseline = {
-    matched: {
-      loose: compactChanceMatch(
-        evaluateGoldMatch({
-          gold: input.gold,
-          storyMap: chanceMaps.matched,
-          units,
-          sourceId: input.source.id,
-          strategy: looseStrategy,
-        }),
-      ),
-      strict: compactChanceMatch(
-        evaluateGoldMatch({
-          gold: input.gold,
-          storyMap: chanceMaps.matched,
-          units,
-          sourceId: input.source.id,
-          strategy: strictStrategy,
-        }),
-      ),
-    },
-    dense: {
-      loose: compactChanceMatch(
-        evaluateGoldMatch({
-          gold: input.gold,
-          storyMap: chanceMaps.dense,
-          units,
-          sourceId: input.source.id,
-          strategy: looseStrategy,
-        }),
-      ),
-      strict: compactChanceMatch(
-        evaluateGoldMatch({
-          gold: input.gold,
-          storyMap: chanceMaps.dense,
-          units,
-          sourceId: input.source.id,
-          strategy: strictStrategy,
-        }),
-      ),
-    },
+    matched: scoreChanceMap(chanceMaps.matched),
+    dense: scoreChanceMap(chanceMaps.dense),
+    stuffing: scoreChanceMap(chanceMaps.stuffing),
+    sourceCopy: scoreChanceMap(chanceMaps.sourceCopy),
   };
   const lenientIdentity = scoreLenientIdentity({
     expectedCharacters: input.expectedCharacters ?? input.gold.characters,
@@ -320,10 +338,10 @@ function resolveStrategy(
       base.assignmentOrder === "strict"
         ? (options.strictUnitWindow ?? base.unitWindow)
         : (options.looseUnitWindow ?? base.unitWindow),
-    minimumContentScore:
+    minimumContentF1:
       base.assignmentOrder === "strict"
-        ? (options.strictMinimumContentScore ?? base.minimumContentScore)
-        : base.minimumContentScore,
+        ? (options.strictMinimumContentF1 ?? base.minimumContentF1)
+        : base.minimumContentF1,
   };
 }
 
@@ -362,7 +380,6 @@ function evaluateGoldMatch(input: {
     units: input.units,
     sourceId: input.sourceId,
     candidateToGold,
-    candidateEventToGold: events.candidateToGold,
     strategy: input.strategy,
   });
   return { events: events.score, edges, endings };
@@ -394,8 +411,9 @@ function toUnitBoundaries(units: readonly EvidenceUnit[]): UnitBoundary[] {
 }
 
 /**
- * 内容信号：去掉空白、标点和符号后做字符 bigram（CJK 按字符，ASCII 先小写），
- * 返回 gold bigram 被候选文本覆盖的比例。
+ * 旧版内容信号（保留导出供对照/测试）：去掉空白、标点和符号后做字符 bigram
+ * （CJK 按字符，ASCII 先小写），返回 gold bigram 被候选文本覆盖的比例。
+ * strict v2 使用 `contentF1Score`，不再使用这里的覆盖率口径。
  */
 export function contentBigramScore(
   goldText: string,
@@ -423,39 +441,227 @@ function contentBigrams(value: string): Set<string> {
 }
 
 /**
+ * strict v2 内容信号：CJK 字符 bigram + 小写 ASCII 词，剔除中文停用 bigram
+ * 与人物名（gold 和 candidate 的全部 name / alias）。返回 P/R 的 F1；
+ * 任一侧为空则为 0，避免长候选靠覆盖率取胜。
+ */
+export function contentF1Score(
+  goldText: string,
+  candidateText: string,
+  characterNames: readonly string[] = [],
+): number {
+  const goldTokens = new Set(contentTokens(goldText, characterNames));
+  const candidateTokens = new Set(contentTokens(candidateText, characterNames));
+  if (goldTokens.size === 0 || candidateTokens.size === 0) return 0;
+  const shared = intersectionSize(goldTokens, candidateTokens);
+  const precision = divide(shared, candidateTokens.size);
+  const recall = divide(shared, goldTokens.size);
+  return f1Score(precision, recall);
+}
+
+function contentTokens(
+  value: string,
+  characterNames: readonly string[],
+): string[] {
+  const masked = maskStopwordBigrams(
+    maskCharacterNames(
+      value.normalize("NFC").toLowerCase(),
+      characterNames,
+    ),
+  );
+  const tokens: string[] = [];
+  for (const match of masked.matchAll(ASCII_WORD_PATTERN)) {
+    tokens.push(match[0]);
+  }
+  const compact = masked.replace(/[\s\p{P}\p{S}]+/gu, "");
+  const chars = [...compact];
+  for (let index = 0; index + 1 < chars.length; index += 1) {
+    const left = chars[index]!;
+    const right = chars[index + 1]!;
+    if (!CJK_CHARACTER_PATTERN.test(left) || !CJK_CHARACTER_PATTERN.test(right)) {
+      continue;
+    }
+    const bigram = `${left}${right}`;
+    if (isStopwordBigram(bigram)) continue;
+    tokens.push(bigram);
+  }
+  return tokens;
+}
+
+/**
+ * 先遮掉停用 bigram，再生成相邻 bigram，避免“他们我们”被拼出“们我”
+ * 这类跨停用词的假重合；剩余全虚词 bigram 仍由 `isStopwordBigram` 兜底。
+ */
+function maskStopwordBigrams(value: string): string {
+  let masked = value;
+  for (const bigram of CJK_STOPWORD_BIGRAM_SET) {
+    masked = masked.split(bigram).join("\u0000");
+  }
+  return masked;
+}
+
+/** 用 NUL 占位符遮掉人物名，既不会生成名字 bigram，也不会跨名字拼接。 */
+function maskCharacterNames(
+  value: string,
+  characterNames: readonly string[],
+): string {
+  const keys = characterNames
+    .map((name) =>
+      name
+        .normalize("NFC")
+        .toLowerCase()
+        .replace(/[\s\p{P}\p{S}]+/gu, ""),
+    )
+    .filter((name) => name.length > 0)
+    .sort((left, right) => right.length - left.length);
+  let masked = value;
+  for (const key of new Set(keys)) {
+    masked = masked.split(key).join("\u0000");
+  }
+  return masked;
+}
+
+function isStopwordBigram(bigram: string): boolean {
+  if (CJK_STOPWORD_BIGRAM_SET.has(bigram)) return true;
+  const chars = [...bigram];
+  return chars.every((character) => CJK_STOP_CHARS.has(character));
+}
+
+/** 源文中最常见、非停用的 CJK bigram；按频次降序、token 升序稳定输出。 */
+function mostFrequentContentBigrams(
+  units: readonly EvidenceUnit[],
+  limit: number,
+): string[] {
+  const counts = new Map<string, number>();
+  for (const unit of units) {
+    for (const token of contentTokens(unit.text, [])) {
+      if (!isCjkBigram(token)) continue;
+      counts.set(token, (counts.get(token) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || compareIds(left[0], right[0]))
+    .slice(0, limit)
+    .map(([token]) => token);
+}
+
+function isCjkBigram(value: string): boolean {
+  const chars = [...value];
+  return (
+    chars.length === 2 &&
+    chars.every((character) => CJK_CHARACTER_PATTERN.test(character))
+  );
+}
+
+/**
  * 内容无关的机会基线（不调用模型）：
  * - matched：事件数量与 gold 相同、Unit 在全篇均匀铺开，边按 gold 数量上限串联，
  *   结局数量与 gold 相同并落在最后 20% 的 Unit；
- * - dense：每 3 个 Unit 一个空事件。
- * 两者都使用全部 gold 人物作为参与者，标题为“事件 n”，摘要/结局要求不含内容。
+ * - dense：每 3 个 Unit 一个空事件；
+ * - stuffing：与 matched 相同布局，但标题/摘要/结局要求都填入源文最高频的 30 个
+ *   非停用 bigram；
+ * - sourceCopy：与 matched 相同布局，但直接复制证据 Unit 的原文。
+ * 四者都使用全部 gold 人物作为参与者，并分别用 loose / strict 评分。
  */
 export function buildM1ChanceBaselines(input: {
   gold: M1Gold;
   units: readonly EvidenceUnit[];
-}): { matched: StoryMap; dense: StoryMap } {
+}): {
+  matched: StoryMap;
+  dense: StoryMap;
+  stuffing: StoryMap;
+  sourceCopy: StoryMap;
+} {
+  const stuffingText = mostFrequentContentBigrams(
+    input.units,
+    STUFFING_BIGRAM_LIMIT,
+  ).join(" ");
   return {
-    matched: buildMatchedChanceBaseline(input.gold, input.units),
+    matched: buildMatchedChanceBaseline(input.gold, input.units, {
+      mapId: "chance_matched",
+      eventPrefix: "chance_event",
+      edgePrefix: "chance_edge",
+      endingPrefix: "chance_ending",
+      title: "机会基线",
+      logline: "内容无关的机会基线地图",
+      text: {
+        eventTitle: (index) => `事件 ${index + 1}`,
+        eventSummary: () => "...",
+        endingRequirement: () => "...",
+      },
+    }),
     dense: buildDenseChanceBaseline(input.gold, input.units),
+    stuffing: buildMatchedChanceBaseline(input.gold, input.units, {
+      mapId: "chance_stuffing",
+      eventPrefix: "stuffing_event",
+      edgePrefix: "stuffing_edge",
+      endingPrefix: "stuffing_ending",
+      title: "填充基线",
+      logline: "用源文高频 bigram 填充的对抗基线",
+      text: {
+        eventTitle: () => stuffingText,
+        eventSummary: () => stuffingText,
+        endingRequirement: () => stuffingText,
+      },
+    }),
+    sourceCopy: buildMatchedChanceBaseline(input.gold, input.units, {
+      mapId: "chance_source_copy",
+      eventPrefix: "source_copy_event",
+      edgePrefix: "source_copy_edge",
+      endingPrefix: "source_copy_ending",
+      title: "原文复制基线",
+      logline: "直接复制证据 Unit 原文的对抗基线",
+      text: {
+        eventTitle: (_index, unit) => firstCharacters(unit.text, 20),
+        eventSummary: (_index, unit) => unit.text,
+        endingRequirement: (_index, unit) => unit.text,
+      },
+    }),
   };
 }
+
+type MatchedBaselineText = {
+  eventTitle: (index: number, unit: EvidenceUnit) => string;
+  eventSummary: (index: number, unit: EvidenceUnit) => string;
+  endingRequirement: (index: number, unit: EvidenceUnit) => string;
+};
+
+type MatchedBaselineConfig = {
+  mapId: string;
+  eventPrefix: string;
+  edgePrefix: string;
+  endingPrefix: string;
+  title: string;
+  logline: string;
+  text: MatchedBaselineText;
+};
 
 function buildMatchedChanceBaseline(
   gold: M1Gold,
   units: readonly EvidenceUnit[],
+  config: MatchedBaselineConfig,
 ): StoryMap {
   const characters = chanceCharacters(gold);
   const participants = characters.map((character) => character.id);
   const eventCount =
     units.length > 0 && participants.length > 0 ? gold.events.length : 0;
-  const events = Array.from({ length: eventCount }, (_, index) =>
-    chanceEvent(index, evenlySpacedUnit(units, index, eventCount), participants),
-  );
+  const events = Array.from({ length: eventCount }, (_, index) => {
+    const unit = evenlySpacedUnit(units, index, eventCount);
+    return chanceEvent(
+      index,
+      unit,
+      participants,
+      config.eventPrefix,
+      config.text.eventTitle(index, unit),
+      config.text.eventSummary(index, unit),
+    );
+  });
   const edgeCount = Math.min(
     gold.causalLinks.length,
     Math.max(0, eventCount - 1),
   );
   const edges = Array.from({ length: edgeCount }, (_, index) => ({
-    id: `chance_edge_${index + 1}`,
+    id: `${config.edgePrefix}_${index + 1}`,
     from: events[index]!.id,
     to: events[index + 1]!.id,
     type: "causes" as const,
@@ -481,21 +687,27 @@ function buildMatchedChanceBaseline(
         )
       ] ?? units.at(-1)!;
     return {
-      id: `chance_ending_${index + 1}`,
+      id: `${config.endingPrefix}_${index + 1}`,
       targetEventId: events[eventIndex]!.id,
-      requirement: "...",
+      requirement: config.text.endingRequirement(index, unit),
       evidence: [sourceReferenceForUnit(unit)],
     };
   });
 
   return chanceStoryMap({
-    id: "chance_matched",
+    id: config.mapId,
+    title: config.title,
+    logline: config.logline,
     sourceId: units[0]?.sourceId ?? "chance_source",
     characters,
     events,
     edges,
     endingCandidates,
   });
+}
+
+function firstCharacters(value: string, count: number): string {
+  return [...value].slice(0, count).join("");
 }
 
 function buildDenseChanceBaseline(
@@ -513,10 +725,15 @@ function buildDenseChanceBaseline(
       index,
       units[index * DENSE_BASELINE_EVENT_STRIDE]!,
       participants,
+      "chance_event",
+      `事件 ${index + 1}`,
+      "...",
     ),
   );
   return chanceStoryMap({
     id: "chance_dense",
+    title: "机会基线",
+    logline: "内容无关的机会基线地图",
     sourceId: units[0]?.sourceId ?? "chance_source",
     characters,
     events,
@@ -539,11 +756,14 @@ function chanceEvent(
   index: number,
   unit: EvidenceUnit,
   participants: string[],
+  idPrefix: string,
+  title: string,
+  summary: string,
 ): StoryMap["events"][number] {
   return {
-    id: `chance_event_${index + 1}`,
-    title: `事件 ${index + 1}`,
-    summary: "...",
+    id: `${idPrefix}_${index + 1}`,
+    title,
+    summary,
     sequence: index + 1,
     participants,
     stateChanges: [],
@@ -554,6 +774,8 @@ function chanceEvent(
 
 function chanceStoryMap(input: {
   id: string;
+  title: string;
+  logline: string;
   sourceId: string;
   characters: StoryMap["characters"];
   events: StoryMap["events"];
@@ -566,8 +788,8 @@ function chanceStoryMap(input: {
     sourceId: input.sourceId,
     version: 1,
     status: "draft",
-    title: "机会基线",
-    logline: "内容无关的机会基线地图",
+    title: input.title,
+    logline: input.logline,
     characters: input.characters,
     events: input.events,
     edges: input.edges,
@@ -721,6 +943,16 @@ function matchEvents(input: {
   candidateToGold: Map<string, string>;
 } {
   const pairs: ScoredPair[] = [];
+  const characterNames = [
+    ...input.gold.characters.flatMap((character) => [
+      character.name,
+      ...character.aliases,
+    ]),
+    ...input.storyMap.characters.flatMap((character) => [
+      character.name,
+      ...character.aliases,
+    ]),
+  ];
 
   for (const candidate of input.storyMap.events) {
     const candidateUnits = referenceUnits(
@@ -747,15 +979,16 @@ function matchEvents(input: {
       );
       if (characterIds.size > 0 && sharedCharacterCount === 0) continue;
       const contentScore =
-        input.strategy.minimumContentScore === null
+        input.strategy.minimumContentF1 === null
           ? 0
-          : contentBigramScore(
+          : contentF1Score(
               gold.label,
               `${candidate.title} ${candidate.summary}`,
+              characterNames,
             );
       if (
-        input.strategy.minimumContentScore !== null &&
-        contentScore < input.strategy.minimumContentScore
+        input.strategy.minimumContentF1 !== null &&
+        contentScore < input.strategy.minimumContentF1
       ) {
         continue;
       }
@@ -840,16 +1073,22 @@ function matchEndings(input: {
   units: UnitBoundary[];
   sourceId: string;
   candidateToGold: Map<string, string>;
-  candidateEventToGold: Map<string, string>;
   strategy: MatchStrategy;
 }): M1GoldEndingMatch {
   const pairs: ScoredPair[] = [];
   const eventsById = new Map(
     input.storyMap.events.map((event) => [event.id, event] as const),
   );
-  const goldEventsById = new Map(
-    input.gold.events.map((event) => [event.id, event] as const),
-  );
+  const characterNames = [
+    ...input.gold.characters.flatMap((character) => [
+      character.name,
+      ...character.aliases,
+    ]),
+    ...input.storyMap.characters.flatMap((character) => [
+      character.name,
+      ...character.aliases,
+    ]),
+  ];
 
   for (const ending of input.storyMap.endingCandidates) {
     const targetEvent = eventsById.get(ending.targetEventId);
@@ -858,7 +1097,8 @@ function matchEndings(input: {
       input.units,
       input.sourceId,
     );
-    if (targetEvent) {
+    // strict 只看结局自身的 Evidence Unit；loose 仍允许通过目标事件定位。
+    if (input.strategy.minimumContentF1 === null && targetEvent) {
       for (const unit of referenceUnits(
         targetEvent.evidence,
         input.units,
@@ -893,36 +1133,21 @@ function matchEndings(input: {
     for (const gold of input.gold.endings) {
       const goldUnits = new Set(gold.evidence.map((item) => item.unit));
       if (goldUnits.size === 0) continue;
-      let distance = minimumDistance(candidateUnits, goldUnits);
-      // strict 还接受“目标事件已严格匹配到的 gold 事件 Unit”作为位置依据。
-      if (input.strategy.minimumContentScore !== null) {
-        const targetGoldId = input.candidateEventToGold.get(
-          ending.targetEventId,
-        );
-        const targetGoldEvent = targetGoldId
-          ? goldEventsById.get(targetGoldId)
-          : undefined;
-        if (targetGoldEvent) {
-          distance = Math.min(
-            distance,
-            minimumDistance(candidateUnits, goldEventUnits(targetGoldEvent)),
-          );
-        }
-      }
+      const distance = minimumDistance(candidateUnits, goldUnits);
       if (distance > input.strategy.unitWindow) continue;
       const goldCharacterIds = new Set(gold.characterIds);
       const sharedCharacterCount = intersectionSize(
         candidateGoldCharacters,
         goldCharacterIds,
       );
-      if (sharedCharacterCount === 0) continue;
+      if (goldCharacterIds.size > 0 && sharedCharacterCount === 0) continue;
       const contentScore =
-        input.strategy.minimumContentScore === null
+        input.strategy.minimumContentF1 === null
           ? 0
-          : contentBigramScore(gold.label, ending.requirement);
+          : contentF1Score(gold.label, ending.requirement, characterNames);
       if (
-        input.strategy.minimumContentScore !== null &&
-        contentScore < input.strategy.minimumContentScore
+        input.strategy.minimumContentF1 !== null &&
+        contentScore < input.strategy.minimumContentF1
       ) {
         continue;
       }
