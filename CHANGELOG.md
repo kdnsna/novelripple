@@ -7,6 +7,9 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Added / 新增
 
+- P0 服务层场景节点树：v2 方向批次与场景 Artifact 使用确定性幂等 ID；任一场景可继续、retry 生成兄弟场景、「换一批」创建新批次，旧行不更新；v1 行保持可读并可作为根父节点。P0 server-side scene tree: deterministic v2 directions/scene artifacts support continue, retry siblings and new batches without mutating old rows; v1 rows stay readable as root parents.
+- 续写上下文改为分段组装（世界线设定、路径摘要、原著证据、最近场景、所选方向、Anchor 提示），预算 `CONTINUATION_CONTEXT_MAX_CHARS` 默认 24000 并 fail closed；场景保存不含正文的 Context Manifest。Continuation context is now assembled by fixed sections with a fail-closed `CONTINUATION_CONTEXT_MAX_CHARS` budget (default 24000); scenes store a prose-free context manifest.
+- 新续写 Prompt：`continuation-directions.v2` 与 `continuation-scene.v3`；场景输出新增 ≤200 字 `summary` 供路径滚动摘要。New continuation prompts; v3 scene output includes a ≤200-character summary for path summaries.
 - 按稳定 Evidence Unit 分块召回 Story Map（ADR 0006）：目标 6,000 字符、最小/最大 3,000/9,000、2 个只读上下文 Unit、4 路并发。Chunked Story Map recall over stable Evidence Units (ADR 0006): 6k target, 3k/9k bounds, 2 context units, 4-way concurrency.
 - 每块一轮补抽，并用确定性人名候选（含对白说话人）驱动人名归并。One gleaning pass per chunk; deterministic name hints, including dialogue speakers, seed the roster pass.
 - 末尾约 20%（至少 3 个 Unit）的结局轮次，输出故事结局与 `【人物结局】` 人物结局。Endings pass over the last ~20% of units (min 3), including character endings.

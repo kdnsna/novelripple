@@ -7,21 +7,36 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type {
   ContinuationDirectionsModelOutput,
   ContinuationSceneModelOutput,
+  ContinuationSceneModelOutputV3,
   ImpactPlan,
 } from "@/domain/schemas";
 import { MockAIProvider } from "@/server/ai/mock-provider";
-import { closeDatabase, getDatabase } from "@/server/db/client";
-import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
+import {
+  generateConfiguredContinuationDirections,
+  generateConfiguredContinuationScene,
+} from "@/server/continuation/generate-configured-continuation";
 import {
   generateContinuationDirections,
   generateContinuationScene,
+  readContinuationContextMaxChars,
 } from "@/server/continuation/generate-continuation";
+import { closeDatabase, getDatabase } from "@/server/db/client";
+import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import {
+  createContinuationDirectionsArtifact,
+  createContinuationDirectionsArtifactV2,
   createContinuationSceneArtifact,
+  createContinuationSceneArtifactV2,
   getContinuationArtifact,
+  getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
+  listScenesForDirection,
 } from "@/server/repositories/continuation-repository";
-import { listProjectGenerationRuns } from "@/server/repositories/generation-run-repository";
+import {
+  createGenerationRun,
+  listProjectGenerationRuns,
+  succeedGenerationRun,
+} from "@/server/repositories/generation-run-repository";
 import {
   createProject,
   getProjectSource,
@@ -31,9 +46,7 @@ import {
   acceptImpactPlan,
   listProjectWorldlines,
 } from "@/server/repositories/ripple-repository";
-import {
-  getStoryMapArtifact,
-} from "@/server/repositories/story-map-artifact-repository";
+import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import { M1_06_LONG_SCENE_PROSE } from "../helpers/continuation-scene-fixtures";
@@ -51,12 +64,14 @@ beforeAll(async () => {
     "AI_PROVIDER_NAME",
     "OPENAI_MODEL",
     "OPENAI_STRUCTURED_OUTPUT_MODE",
+    "CONTINUATION_CONTEXT_MAX_CHARS",
   ]) {
     previousEnvironment.set(name, process.env[name]);
   }
   process.env.AI_PROVIDER_NAME = "mock";
   process.env.OPENAI_MODEL = "mock-continuation-model";
   process.env.OPENAI_STRUCTURED_OUTPUT_MODE = "json_schema";
+  delete process.env.CONTINUATION_CONTEXT_MAX_CHARS;
   closeDatabase();
   migrate(getDatabase(), {
     migrationsFolder: path.join(process.cwd(), "drizzle"),
@@ -101,27 +116,49 @@ const directionOutput: ContinuationDirectionsModelOutput = {
   ],
 };
 
-const sceneOutput: ContinuationSceneModelOutput = {
-  title: "潮标站的第二把锁",
-  prose: M1_06_LONG_SCENE_PROSE,
-  statePatch: {
-    factsAdded: [
-      {
-        key: "generated:scene_tide_station_lock",
-        statement: "许澄把红账原件封存在旧潮标站铁柜，并由沈砚和周岚远程见证。",
-      },
-    ],
-    factsRemoved: [],
-    characterChanges: [
-      {
-        characterId: "char_xucheng",
-        summary: "许澄决定继续持有钥匙并在风暴后亲自提交全部证据。",
-      },
-    ],
-    threadsOpened: ["堤岸上的车辆是否属于顾闻舟"],
-    threadsClosed: ["顾闻舟如何定位仍持原件的许澄"],
-  },
-};
+function makeSceneOutput(input?: {
+  title?: string;
+  factKey?: string;
+  factStatement?: string;
+}): ContinuationSceneModelOutputV3 {
+  const title = input?.title ?? "潮标站的第二把锁";
+  return {
+    title,
+    prose: M1_06_LONG_SCENE_PROSE,
+    summary: `${title}：许澄把红账原件封存，并在沈砚与周岚的见证下安排下一步交接。`,
+    statePatch: {
+      factsAdded: [
+        {
+          key: input?.factKey ?? "generated:scene_tide_station_lock",
+          statement:
+            input?.factStatement ??
+            "许澄把红账原件封存在旧潮标站铁柜，并由沈砚和周岚远程见证。",
+        },
+      ],
+      factsRemoved: [],
+      characterChanges: [
+        {
+          characterId: "char_xucheng",
+          summary: "许澄决定继续持有钥匙并在风暴后亲自提交全部证据。",
+        },
+      ],
+      threadsOpened: [],
+      threadsClosed: [],
+    },
+  };
+}
+
+const sceneOutput = makeSceneOutput();
+
+function withoutSummary(
+  output: ContinuationSceneModelOutputV3,
+): ContinuationSceneModelOutput {
+  return {
+    title: output.title,
+    prose: output.prose,
+    statePatch: output.statePatch,
+  };
+}
 
 function toImpactModelOutput(plan: ImpactPlan) {
   return {
@@ -174,8 +211,23 @@ async function createAcceptedWorldline() {
   };
 }
 
-describe("Continuation generation and persistence", () => {
-  it("generates exactly three directions and one idempotent scene without mutating Canon", async () => {
+function successfulRun(input: {
+  projectId: string;
+  worldlineId: string;
+  kind: "continuation_directions" | "continuation_scene";
+  promptVersion: string;
+}) {
+  const run = createGenerationRun({
+    ...input,
+    provider: "mock",
+    model: "legacy-continuation-model",
+    inputHash: "a".repeat(64),
+  });
+  return succeedGenerationRun({ id: run.id, rawOutput: "{}" });
+}
+
+describe("Continuation scene tree generation", () => {
+  it("generates v2 directions and a root scene with an assembled no-prose manifest", async () => {
     const context = await createAcceptedWorldline();
     const sourceBefore = structuredClone(context.source);
     const storyMapBefore = structuredClone(context.storyMapArtifact);
@@ -193,20 +245,26 @@ describe("Continuation generation and persistence", () => {
       modelConfig,
     });
 
+    expect(directions.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: null,
+      batchIndex: 0,
+    });
     expect(directions.artifact.continuation.directions).toHaveLength(3);
     expect(
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === directions.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation.v1");
+    ).toBe("continuation-directions.v2");
     expect(directionProvider.requests).toHaveLength(1);
-    expect(directionProvider.requests[0]?.prompt).toContain(
-      "relevantEvidence",
-    );
-    expect(directionProvider.requests[0]?.prompt).toContain("currentState");
-    expect(directionProvider.requests[0]?.prompt).not.toContain(
-      context.source.normalizedText,
-    );
+    const directionsPrompt = directionProvider.requests[0]?.prompt ?? "";
+    expect(directionsPrompt).toContain("<worldline_setup>");
+    expect(directionsPrompt).toContain("<canon_evidence>");
+    expect(directionsPrompt).toContain("<anchor_reminder>");
+    expect(directionsPrompt).toContain("acceptedImpactPlan");
+    expect(directionsPrompt).toContain("currentState");
+    expect(directionsPrompt).not.toContain("<selected_direction>");
+    expect(directionsPrompt).not.toContain(context.source.normalizedText);
 
     const repeatedDirections = await generateContinuationDirections({
       projectId: context.project.id,
@@ -216,8 +274,11 @@ describe("Continuation generation and persistence", () => {
     });
     expect(repeatedDirections.artifact.id).toBe(directions.artifact.id);
     expect(repeatedDirections.generation).toBeNull();
+    expect(
+      getLatestDirectionsBatch(context.worldline.id, null)?.id,
+    ).toBe(directions.artifact.id);
 
-    const selectedDirection = directions.artifact.continuation.directions[0];
+    const selectedDirection = directions.artifact.continuation.directions[0]!;
     const sceneProvider = new MockAIProvider([JSON.stringify(sceneOutput)]);
     const scene = await generateContinuationScene({
       projectId: context.project.id,
@@ -229,27 +290,54 @@ describe("Continuation generation and persistence", () => {
     });
 
     expect(scene.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
       worldlineId: context.worldline.id,
       acceptedImpactPlanId: context.acceptedArtifact.id,
       directionsArtifactId: directions.artifact.id,
       selectedDirectionId: selectedDirection.id,
-      sequence: 1,
+      parentSceneId: null,
+      depth: 1,
+      origin: "generated",
+      attemptIndex: 0,
+      summary: sceneOutput.summary,
       title: sceneOutput.title,
       statePatch: sceneOutput.statePatch,
     });
+    expect(
+      listProjectGenerationRuns(context.project.id).find(
+        (run) => run.id === scene.generation?.runId,
+      )?.promptVersion,
+    ).toBe("continuation-scene.v3");
     expect(sceneProvider.requests[0]?.prompt).toContain(selectedDirection.title);
-    expect(sceneProvider.requests[0]?.prompt).toContain("acceptedImpactPlan");
-    expect(sceneProvider.requests[0]?.prompt).toContain("styleContext");
-    expect(sceneProvider.requests[0]?.prompt).toContain("representativeExcerpts");
-    expect(sceneProvider.requests[0]?.prompt).toContain("characterEvidence");
+    expect(sceneProvider.requests[0]?.prompt).toContain("<canon_evidence>");
+    expect(sceneProvider.requests[0]?.prompt).toContain("<selected_direction>");
     expect(sceneProvider.requests[0]?.prompt).not.toContain(
       context.source.normalizedText,
     );
+
+    if (scene.artifact.continuation.schemaVersion !== 2) {
+      throw new Error("expected v2 scene");
+    }
+    const manifest = scene.artifact.continuation.contextManifest;
+    expect(manifest.budget.maxChars).toBe(24_000);
+    expect(manifest.sections.map((section) => section.kind)).toEqual([
+      "worldline_setup",
+      "path_summary",
+      "canon_evidence",
+      "recent_scenes",
+      "selected_direction",
+      "anchor_reminder",
+    ]);
     expect(
-      listProjectGenerationRuns(context.project.id).find(
-        (run) => run.kind === "continuation_scene",
-      )?.promptVersion,
-    ).toBe("continuation.v2");
+      manifest.sections.find((section) => section.kind === "selected_direction")
+        ?.included,
+    ).toBe(true);
+    expect(JSON.stringify(manifest)).not.toContain(
+      sceneOutput.prose.slice(0, 40),
+    );
+    expect(JSON.stringify(manifest)).not.toContain(
+      context.source.normalizedText.slice(0, 40),
+    );
 
     const repeatedScene = await generateContinuationScene({
       projectId: context.project.id,
@@ -261,32 +349,12 @@ describe("Continuation generation and persistence", () => {
     });
     expect(repeatedScene.artifact.id).toBe(scene.artifact.id);
     expect(repeatedScene.generation).toBeNull();
-    expect(() =>
-      createContinuationSceneArtifact({
-        projectId: context.project.id,
-        sourceId: context.source.id,
-        worldline: context.worldline,
-        acceptedImpactPlanArtifact: context.acceptedArtifact,
-        directionsArtifact: directions.artifact,
-        selectedDirectionId:
-          directions.artifact.continuation.directions[1]!.id,
-        output: sceneOutput,
-        generationRunId: scene.artifact.generationRunId,
-      }),
-    ).toThrow("M0 只允许一个后续场景");
-    await expect(
-      generateContinuationScene({
-        projectId: context.project.id,
-        worldlineId: context.worldline.id,
-        directionsArtifactId: directions.artifact.id,
-        selectedDirectionId:
-          directions.artifact.continuation.directions[1]!.id,
-        provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
-        modelConfig,
-      }),
-    ).rejects.toThrow("M0 只允许一个后续场景");
 
-    expect(listContinuationArtifactsForWorldline(context.worldline.id)).toHaveLength(2);
+    const artifacts = listContinuationArtifactsForWorldline(
+      context.worldline.id,
+    );
+    expect(artifacts.directions).toHaveLength(1);
+    expect(artifacts.scenes).toHaveLength(1);
     expect(getContinuationArtifact(directions.artifact.id)).toEqual(
       directions.artifact,
     );
@@ -298,20 +366,488 @@ describe("Continuation generation and persistence", () => {
       storyMapBefore,
     );
     expect(listProjectWorldlines(context.project.id)).toEqual(worldlinesBefore);
-    expect(context.canonicalWorldline).toEqual(
-      worldlinesBefore.find(
-        (worldline) => worldline.id === context.canonicalWorldline.id,
+  });
+
+  it("continues from a scene at depth 2 with the parent path in context", async () => {
+    const context = await createAcceptedWorldline();
+    const rootDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const rootDirection =
+      rootDirections.artifact.continuation.directions[0]!;
+    const rootScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: rootDirections.artifact.id,
+      selectedDirectionId: rootDirection.id,
+      provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+      modelConfig,
+    });
+
+    const childDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      parentSceneId: rootScene.artifact.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    expect(childDirections.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: rootScene.artifact.id,
+      batchIndex: 0,
+    });
+    expect(childDirections.artifact.id).not.toBe(rootDirections.artifact.id);
+    expect(
+      getLatestDirectionsBatch(context.worldline.id, rootScene.artifact.id)?.id,
+    ).toBe(childDirections.artifact.id);
+
+    const childDirection =
+      childDirections.artifact.continuation.directions[0]!;
+    const childOutput = makeSceneOutput({
+      title: "旧灯塔的夜谈",
+      factKey: "generated:scene_lighthouse_talk",
+      factStatement: "许澄与沈砚在旧灯塔灯室继续核对封条编号。",
+    });
+    const childProvider = new MockAIProvider([JSON.stringify(childOutput)]);
+    const childScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: childDirections.artifact.id,
+      selectedDirectionId: childDirection.id,
+      provider: childProvider,
+      modelConfig,
+    });
+
+    expect(childScene.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: rootScene.artifact.id,
+      depth: 2,
+      origin: "generated",
+      attemptIndex: 0,
+    });
+    const childPrompt = childProvider.requests[0]?.prompt ?? "";
+    expect(childPrompt).toContain("<recent_scenes>");
+    expect(childPrompt).toContain(sceneOutput.prose);
+    expect(childPrompt).toContain("generated:scene_tide_station_lock");
+    expect(childPrompt).toContain(childDirection.title);
+
+    if (childScene.artifact.continuation.schemaVersion !== 2) {
+      throw new Error("expected v2 scene");
+    }
+    const recentScenes = childScene.artifact.continuation.contextManifest.sections.find(
+      (section) => section.kind === "recent_scenes",
+    );
+    expect(recentScenes?.included).toBe(true);
+    expect(recentScenes?.chars).toBeGreaterThan(0);
+  });
+
+  it("creates a retry sibling without mutating the original scene", async () => {
+    const context = await createAcceptedWorldline();
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const direction = directions.artifact.continuation.directions[0]!;
+    const original = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId: direction.id,
+      provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+      modelConfig,
+    });
+    const originalBefore = structuredClone(original.artifact);
+
+    const retry = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId: direction.id,
+      retry: true,
+      provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+      modelConfig,
+    });
+
+    expect(retry.artifact.id).not.toBe(original.artifact.id);
+    expect(retry.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: null,
+      depth: 1,
+      origin: "retry",
+      attemptIndex: 1,
+    });
+    expect(getContinuationArtifact(original.artifact.id)).toEqual(
+      originalBefore,
+    );
+    const scenes = listScenesForDirection(
+      directions.artifact.id,
+      direction.id,
+    );
+    expect(
+      scenes.map((scene) =>
+        scene.continuation.schemaVersion === 1
+          ? -1
+          : scene.continuation.attemptIndex,
       ),
+    ).toEqual([0, 1]);
+
+    const notRetried = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId: direction.id,
+      provider: new MockAIProvider([]),
+      modelConfig,
+    });
+    expect(notRetried.artifact.id).toBe(original.artifact.id);
+  });
+
+  it("creates a new directions batch while keeping the old batch readable", async () => {
+    const context = await createAcceptedWorldline();
+    const first = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const firstBefore = structuredClone(first.artifact);
+
+    const second = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      newBatch: true,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+
+    expect(second.artifact.id).not.toBe(first.artifact.id);
+    expect(second.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: null,
+      batchIndex: 1,
+    });
+    expect(getContinuationArtifact(first.artifact.id)).toEqual(firstBefore);
+    expect(getLatestDirectionsBatch(context.worldline.id, null)?.id).toBe(
+      second.artifact.id,
+    );
+    expect(
+      listContinuationArtifactsForWorldline(context.worldline.id).directions,
+    ).toHaveLength(2);
+
+    const oldBatchScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: first.artifact.id,
+      selectedDirectionId:
+        first.artifact.continuation.directions[0]!.id,
+      provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+      modelConfig,
+    });
+    expect(oldBatchScene.artifact.continuation.schemaVersion).toBe(2);
+  });
+
+  it("isolates sibling path state so one branch's fact never reaches the other", async () => {
+    const context = await createAcceptedWorldline();
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const branchAOutput = makeSceneOutput({
+      title: "分支 A 场景",
+      factKey: "generated:branch_a_fact",
+      factStatement: "这是只属于分支 A 的独占事实。",
+    });
+    const branchAScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId:
+        directions.artifact.continuation.directions[0]!.id,
+      provider: new MockAIProvider([JSON.stringify(branchAOutput)]),
+      modelConfig,
+    });
+
+    const branchBProvider = new MockAIProvider([
+      JSON.stringify(branchAOutput),
+    ]);
+    const branchBScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId:
+        directions.artifact.continuation.directions[1]!.id,
+      provider: branchBProvider,
+      modelConfig,
+    });
+
+    expect(branchBScene.artifact.id).not.toBe(branchAScene.artifact.id);
+    expect(branchBScene.artifact.continuation).toMatchObject({
+      parentSceneId: null,
+      depth: 1,
+    });
+    const branchBPrompt = branchBProvider.requests[0]?.prompt ?? "";
+    expect(branchBPrompt).not.toContain("generated:branch_a_fact");
+    expect(branchBPrompt).not.toContain("这是只属于分支 A 的独占事实。");
+    expect(
+      branchBScene.artifact.continuation.statePatch.factsAdded.map(
+        (fact) => fact.key,
+      ),
+    ).toEqual(["generated:branch_a_fact"]);
+  });
+
+  it("keeps v1 direction and scene rows readable and usable as a root parent", async () => {
+    const context = await createAcceptedWorldline();
+    const directionsRun = successfulRun({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      kind: "continuation_directions",
+      promptVersion: "continuation.v1",
+    });
+    const legacyDirections = createContinuationDirectionsArtifact({
+      projectId: context.project.id,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedArtifact,
+      output: directionOutput,
+      generationRunId: directionsRun.id,
+    });
+    const sceneRun = successfulRun({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      kind: "continuation_scene",
+      promptVersion: "continuation.v2",
+    });
+    const legacyScene = createContinuationSceneArtifact({
+      projectId: context.project.id,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedArtifact,
+      directionsArtifact: legacyDirections,
+      selectedDirectionId: legacyDirections.continuation.directions[0]!.id,
+      output: withoutSummary(sceneOutput),
+      generationRunId: sceneRun.id,
+    });
+
+    expect(legacyDirections.continuation.schemaVersion).toBe(1);
+    expect(legacyScene.continuation.schemaVersion).toBe(1);
+    const legacyArtifacts = listContinuationArtifactsForWorldline(
+      context.worldline.id,
+    );
+    expect(legacyArtifacts.directions.map((artifact) => artifact.id)).toContain(
+      legacyDirections.id,
+    );
+    expect(legacyArtifacts.scenes.map((artifact) => artifact.id)).toContain(
+      legacyScene.id,
+    );
+    expect(getLatestDirectionsBatch(context.worldline.id, null)?.id).toBe(
+      legacyDirections.id,
     );
 
-    const continuationRuns = listProjectGenerationRuns(context.project.id).filter(
-      (run) => run.kind.startsWith("continuation_"),
+    const childDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      parentSceneId: legacyScene.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    expect(childDirections.artifact.continuation).toMatchObject({
+      parentSceneId: legacyScene.id,
+      batchIndex: 0,
+    });
+
+    const childScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: childDirections.artifact.id,
+      selectedDirectionId:
+        childDirections.artifact.continuation.directions[0]!.id,
+      provider: new MockAIProvider([
+        JSON.stringify(
+          makeSceneOutput({
+            title: "从 v1 根节点继续",
+            factKey: "generated:legacy_child_fact",
+            factStatement: "新场景从 v1 根场景继续。",
+          }),
+        ),
+      ]),
+      modelConfig,
+    });
+    expect(childScene.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: legacyScene.id,
+      depth: 2,
+    });
+  });
+
+  it("returns existing rows for duplicate v2 repository writes", async () => {
+    const context = await createAcceptedWorldline();
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    if (!directions.generation) throw new Error("expected generation run");
+    const duplicatedDirections = createContinuationDirectionsArtifactV2({
+      projectId: context.project.id,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedArtifact,
+      parentSceneId: null,
+      batchIndex: 0,
+      output: directionOutput,
+      generationRunId: directions.generation.runId,
+    });
+    expect(duplicatedDirections.id).toBe(directions.artifact.id);
+
+    const scene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId:
+        directions.artifact.continuation.directions[0]!.id,
+      provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+      modelConfig,
+    });
+    if (
+      !scene.generation ||
+      scene.artifact.continuation.schemaVersion !== 2
+    ) {
+      throw new Error("expected v2 scene generation");
+    }
+    const duplicatedScene = createContinuationSceneArtifactV2({
+      projectId: context.project.id,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedArtifact,
+      directionsArtifact: directions.artifact,
+      selectedDirectionId: scene.artifact.continuation.selectedDirectionId,
+      parentSceneId: null,
+      depth: 1,
+      origin: "generated",
+      attemptIndex: 0,
+      summary: scene.artifact.continuation.summary,
+      contextManifest: scene.artifact.continuation.contextManifest,
+      output: withoutSummary(sceneOutput),
+      generationRunId: scene.generation.runId,
+    });
+    expect(duplicatedScene.id).toBe(scene.artifact.id);
+
+    const artifacts = listContinuationArtifactsForWorldline(
+      context.worldline.id,
     );
-    expect(continuationRuns.map((run) => run.kind).toSorted()).toEqual([
-      "continuation_directions",
-      "continuation_scene",
-    ]);
-    expect(continuationRuns.every((run) => run.worldlineId === context.worldline.id)).toBe(true);
+    expect(artifacts.directions).toHaveLength(1);
+    expect(artifacts.scenes).toHaveLength(1);
+  });
+
+  it("lets the deterministic fixture provider serve summary scenes, retries and later batches", async () => {
+    const context = await createAcceptedWorldline();
+    const directions = await generateConfiguredContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+    });
+    const direction = directions.artifact.continuation.directions[0]!;
+    const rootScene = await generateConfiguredContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId: direction.id,
+    });
+    if (rootScene.artifact.continuation.schemaVersion !== 2) {
+      throw new Error("expected v2 scene");
+    }
+    expect(rootScene.artifact.continuation.summary.length).toBeLessThanOrEqual(
+      200,
+    );
+
+    const retry = await generateConfiguredContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId: direction.id,
+      retry: true,
+    });
+    expect(retry.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      origin: "retry",
+      attemptIndex: 1,
+    });
+
+    const childDirections = await generateConfiguredContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      parentSceneId: rootScene.artifact.id,
+      newBatch: true,
+    });
+    expect(childDirections.artifact.continuation).toMatchObject({
+      parentSceneId: rootScene.artifact.id,
+      batchIndex: 0,
+    });
+    const childScene = await generateConfiguredContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: childDirections.artifact.id,
+      selectedDirectionId:
+        childDirections.artifact.continuation.directions[0]!.id,
+    });
+    expect(childScene.artifact.continuation).toMatchObject({
+      schemaVersion: 2,
+      parentSceneId: rootScene.artifact.id,
+      depth: 2,
+    });
+  });
+
+  it("validates the context budget environment variable and records it in the manifest", async () => {
+    const context = await createAcceptedWorldline();
+    try {
+      for (const invalid of ["0", "-1", "1.5", "abc", "  "]) {
+        process.env.CONTINUATION_CONTEXT_MAX_CHARS = invalid;
+        expect(() => readContinuationContextMaxChars()).toThrow(
+          "CONTINUATION_CONTEXT_MAX_CHARS",
+        );
+        await expect(
+          generateContinuationDirections({
+            projectId: context.project.id,
+            worldlineId: context.worldline.id,
+            provider: new MockAIProvider([]),
+            modelConfig,
+          }),
+        ).rejects.toThrow("CONTINUATION_CONTEXT_MAX_CHARS");
+      }
+
+      process.env.CONTINUATION_CONTEXT_MAX_CHARS = "20000";
+      expect(readContinuationContextMaxChars()).toBe(20_000);
+      const directions = await generateContinuationDirections({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+        modelConfig,
+      });
+      const scene = await generateContinuationScene({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        directionsArtifactId: directions.artifact.id,
+        selectedDirectionId:
+          directions.artifact.continuation.directions[0]!.id,
+        provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+        modelConfig,
+      });
+      if (scene.artifact.continuation.schemaVersion !== 2) {
+        throw new Error("expected v2 scene");
+      }
+      expect(
+        scene.artifact.continuation.contextManifest.budget.maxChars,
+      ).toBe(20_000);
+    } finally {
+      delete process.env.CONTINUATION_CONTEXT_MAX_CHARS;
+    }
   });
 
   it("repairs once, then fails closed when a scene restores a deleted fact", async () => {
@@ -355,7 +891,9 @@ describe("Continuation generation and persistence", () => {
     expect(provider.requests[1]?.repair?.validationIssues.join(" ")).toContain(
       "不得恢复已删除事实",
     );
-    expect(listContinuationArtifactsForWorldline(context.worldline.id)).toHaveLength(1);
+    expect(
+      listContinuationArtifactsForWorldline(context.worldline.id).scenes,
+    ).toHaveLength(0);
     const failedRun = listProjectGenerationRuns(context.project.id).find(
       (run) => run.kind === "continuation_scene",
     );

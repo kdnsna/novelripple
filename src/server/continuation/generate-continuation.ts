@@ -2,16 +2,31 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  assembleContext,
+  type ContextAssemblerResult,
+  type ContextEvidenceItem,
+  type ContextSceneItem,
+} from "@/domain/continuation/context-assembler";
+import { buildPathSummary } from "@/domain/continuation/path-summary";
+import {
+  buildSceneTree,
+  derivePathState,
+  getScenePath,
+  type SceneNode,
+} from "@/domain/continuation/scene-tree";
+import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
+import {
   deriveWorldlineDelta,
   validateContinuationDirections,
   validateContinuationStatePatch,
 } from "@/domain/invariants/validate-continuation";
-import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { assertValidStoryMap } from "@/domain/invariants/validate-story-map";
 import {
   ContinuationDirectionsModelOutputSchema,
-  ContinuationSceneModelOutputSchema,
+  ContinuationSceneModelOutputV3Schema,
   type ContinuationDirection,
+  type ContinuationDirectionsArtifact,
+  type ContinuationSceneModelOutput,
   type ImpactPlanArtifact,
   type Source,
   type StoryMapArtifact,
@@ -21,11 +36,12 @@ import {
 import { generateStructured } from "@/server/ai/generate-structured";
 import type { AIProvider, ModelConfig } from "@/server/ai/types";
 import {
-  createContinuationDirectionsArtifact,
-  createContinuationSceneArtifact,
+  createContinuationDirectionsArtifactV2,
+  createContinuationSceneArtifactV2,
   getContinuationArtifact,
-  getContinuationDirectionsForWorldline,
-  getContinuationSceneForWorldline,
+  getLatestDirectionsBatch,
+  listContinuationArtifactsForWorldline,
+  listScenesForDirection,
 } from "@/server/repositories/continuation-repository";
 import { getProjectSource } from "@/server/repositories/project-repository";
 import {
@@ -34,25 +50,68 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const directionsPromptVersion = "continuation.v1";
-const scenePromptVersion = "continuation.v2";
+const directionsPromptVersion = "continuation-directions.v2";
+const scenePromptVersion = "continuation-scene.v3";
+
+export const DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS = 24_000;
+export const CONTINUATION_CONTEXT_MAX_CHARS_ENV =
+  "CONTINUATION_CONTEXT_MAX_CHARS";
+
+/**
+ * 读取上下文预算。未配置时使用默认值；配置值必须是正整数，
+ * 否则 fail closed（不做字符串截取或回退到默认值的猜测）。
+ */
+export function readContinuationContextMaxChars(): number {
+  const raw = process.env[CONTINUATION_CONTEXT_MAX_CHARS_ENV];
+  if (raw === undefined) return DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS;
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error(
+      `${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 必须是正整数：${raw}`,
+    );
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 必须是安全正整数：${raw}`,
+    );
+  }
+  return parsed;
+}
 
 export async function generateContinuationDirections(input: {
   projectId: string;
   worldlineId: string;
+  parentSceneId?: string | null;
+  newBatch?: boolean;
   provider: AIProvider;
   modelConfig: ModelConfig;
 }) {
-  const existing = getContinuationDirectionsForWorldline(input.worldlineId);
-  if (existing) {
-    if (existing.projectId !== input.projectId) {
-      throw new Error("找不到当前 Project 的 Worldline");
-    }
-    return { artifact: existing, generation: null };
-  }
-
+  const parentSceneId = input.parentSceneId ?? null;
+  const newBatch = input.newBatch ?? false;
   const context = loadContinuationContext(input);
-  const prompt = await buildPrompt("directions", context);
+  const { path } = resolveScenePath({
+    worldlineId: context.worldline.id,
+    parentSceneId,
+  });
+
+  const latestBatch = getLatestDirectionsBatch(
+    context.worldline.id,
+    parentSceneId,
+  );
+  if (!newBatch && latestBatch) {
+    return { artifact: latestBatch, generation: null };
+  }
+  const batchIndex =
+    latestBatch === null ? 0 : directionsBatchIndex(latestBatch) + 1;
+  const pathState = derivePathState(context.baseState, path);
+  const material = buildContextMaterial({
+    context,
+    path,
+    pathState,
+    selectedDirection: null,
+  });
+  const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
+
   const generation = await generateStructured(
     {
       projectId: input.projectId,
@@ -68,11 +127,13 @@ export async function generateContinuationDirections(input: {
     },
     input.provider,
   );
-  const artifact = createContinuationDirectionsArtifact({
+  const artifact = createContinuationDirectionsArtifactV2({
     projectId: input.projectId,
     sourceId: context.source.id,
     worldline: context.worldline,
     acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
+    parentSceneId,
+    batchIndex,
     output: generation.value,
     generationRunId: generation.generation.runId,
   });
@@ -85,27 +146,12 @@ export async function generateContinuationScene(input: {
   worldlineId: string;
   directionsArtifactId: string;
   selectedDirectionId: string;
+  retry?: boolean;
   provider: AIProvider;
   modelConfig: ModelConfig;
 }) {
-  const existing = getContinuationSceneForWorldline(input.worldlineId);
-  if (existing) {
-    if (
-      existing.projectId !== input.projectId ||
-      existing.continuation.directionsArtifactId !==
-        input.directionsArtifactId
-    ) {
-      throw new Error("找不到当前 Project 的 Continuation");
-    }
-    if (
-      existing.continuation.selectedDirectionId !== input.selectedDirectionId
-    ) {
-      throw new Error("M0 只允许一个后续场景，不能更换已生成方向");
-    }
-    return { artifact: existing, generation: null };
-  }
-
   const context = loadContinuationContext(input);
+  const retry = input.retry ?? false;
   const directionsArtifact = getContinuationArtifact(
     input.directionsArtifactId,
   );
@@ -123,12 +169,53 @@ export async function generateContinuationScene(input: {
     (direction) => direction.id === input.selectedDirectionId,
   );
   if (!selectedDirection) throw new Error("找不到选中的后续方向");
+
+  const parentSceneId =
+    directionsArtifact.continuation.schemaVersion === 2
+      ? directionsArtifact.continuation.parentSceneId
+      : null;
+  const siblings = listScenesForDirection(
+    directionsArtifact.id,
+    selectedDirection.id,
+  );
+  if (!retry) {
+    const first = siblings.find(
+      (scene) =>
+        scene.continuation.schemaVersion === 1 ||
+        scene.continuation.attemptIndex === 0,
+    );
+    if (first) {
+      return { artifact: first, generation: null };
+    }
+  }
+  const attemptIndex = retry
+    ? siblings.reduce((max, scene) => {
+        const attempt =
+          scene.continuation.schemaVersion === 1
+            ? 0
+            : scene.continuation.attemptIndex;
+        return Math.max(max, attempt);
+      }, -1) + 1
+    : 0;
+
+  const { path, parent } = resolveScenePath({
+    worldlineId: context.worldline.id,
+    parentSceneId,
+  });
+  const depth = parent === null ? 1 : parent.depth + 1;
+  const pathState = derivePathState(context.baseState, path);
+  const material = buildContextMaterial({
+    context,
+    path,
+    pathState,
+    selectedDirection,
+  });
+  const prompt = await buildPrompt(scenePromptVersion, material.prompt);
   const divergenceEventId = context.worldline.divergence?.eventId;
   if (!divergenceEventId) {
     throw new Error("Continuation Worldline 缺少 Divergence Event");
   }
 
-  const prompt = await buildPrompt("scene", context, selectedDirection);
   const generation = await generateStructured(
     {
       projectId: input.projectId,
@@ -137,12 +224,12 @@ export async function generateContinuationScene(input: {
       promptVersion: scenePromptVersion,
       prompt,
       schemaName: "continuation_scene",
-      schema: ContinuationSceneModelOutputSchema,
+      schema: ContinuationSceneModelOutputV3Schema,
       modelConfig: input.modelConfig,
       validate: (output) =>
         validateContinuationStatePatch(
           output.statePatch,
-          context.currentState,
+          pathState,
           context.storyMapArtifact.storyMap,
           divergenceEventId,
           context.worldline.anchors.map((anchor) => anchor.targetEventId),
@@ -150,14 +237,20 @@ export async function generateContinuationScene(input: {
     },
     input.provider,
   );
-  const artifact = createContinuationSceneArtifact({
+  const artifact = createContinuationSceneArtifactV2({
     projectId: input.projectId,
     sourceId: context.source.id,
     worldline: context.worldline,
     acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
     directionsArtifact,
     selectedDirectionId: selectedDirection.id,
-    output: generation.value,
+    parentSceneId,
+    depth,
+    origin: retry ? "retry" : "generated",
+    attemptIndex,
+    summary: generation.value.summary,
+    contextManifest: material.manifest,
+    output: sceneOutputWithoutSummary(generation.value),
     generationRunId: generation.generation.runId,
   });
 
@@ -169,7 +262,8 @@ type ContinuationContext = {
   acceptedImpactPlanArtifact: ImpactPlanArtifact;
   storyMapArtifact: StoryMapArtifact;
   source: Source;
-  currentState: WorldlineDelta;
+  /** accepted Impact Plan 派生的基础 Delta，不包含任何场景。 */
+  baseState: WorldlineDelta;
 };
 
 function loadContinuationContext(input: {
@@ -209,7 +303,7 @@ function loadContinuationContext(input: {
   const source = getProjectSource(input.projectId, storyMapArtifact.sourceId);
   if (!source) throw new Error("找不到 Worldline 对应的不可变 Source");
   assertValidStoryMap(storyMapArtifact.storyMap, source);
-  const currentState = deriveWorldlineDelta({
+  const baseState = deriveWorldlineDelta({
     worldline,
     impactPlan: acceptedImpactPlanArtifact.impactPlan,
     storyMap: storyMapArtifact.storyMap,
@@ -220,106 +314,181 @@ function loadContinuationContext(input: {
     acceptedImpactPlanArtifact,
     storyMapArtifact,
     source,
-    currentState,
+    baseState,
   };
 }
 
+/**
+ * 解析父场景并返回 root→父节点路径。
+ *
+ * 父节点必须属于当前 Worldline；树断裂、跨世界线或深度不连续时
+ * `buildSceneTree` / `getScenePath` 会 fail closed。
+ */
+function resolveScenePath(input: {
+  worldlineId: string;
+  parentSceneId: string | null;
+}): { path: SceneNode[]; parent: SceneNode | null } {
+  const { scenes } = listContinuationArtifactsForWorldline(input.worldlineId);
+  const tree = buildSceneTree(scenes.map((scene) => scene.continuation));
+  if (input.parentSceneId === null) {
+    return { path: [], parent: null };
+  }
+  const parent = tree.nodes.get(input.parentSceneId);
+  if (!parent) {
+    throw new Error("父场景不属于当前 Worldline");
+  }
+  return { path: getScenePath(tree, input.parentSceneId), parent };
+}
+
+function buildContextMaterial(input: {
+  context: ContinuationContext;
+  path: readonly SceneNode[];
+  pathState: WorldlineDelta;
+  selectedDirection: ContinuationDirection | null;
+}): ContextAssemblerResult {
+  const storyMap = input.context.storyMapArtifact.storyMap;
+  const plan = input.context.acceptedImpactPlanArtifact.impactPlan;
+  const selectorDirection =
+    input.selectedDirection ?? {
+      id: "directions",
+      title: "为当前路径生成后续方向",
+      premise: "根据当前世界线状态提出三个彼此不同的后续方向。",
+      affectedCharacterIds: storyMap.characters.map(
+        (character) => character.id,
+      ),
+      expectedConsequence: "三个方向产生不同的分支路径。",
+    };
+  const selection = selectContinuationContext({
+    storyMap,
+    source: input.context.source,
+    worldline: input.context.worldline,
+    acceptedImpactPlan: input.context.acceptedImpactPlanArtifact,
+    selectedDirection: selectorDirection,
+  });
+  const canonEvidence: ContextEvidenceItem[] = [
+    ...selection.representativeExcerpts.map((excerpt) => ({
+      id: `excerpt:${excerpt.kind}:${excerpt.start}:${excerpt.end}`,
+      text: `[${excerpt.kind} ${excerpt.sectionId} ${excerpt.start}-${excerpt.end}]\n${excerpt.excerpt}`,
+    })),
+    ...selection.characterEvidence.map((evidence) => ({
+      id: `character:${evidence.characterId}:${evidence.eventId}:${evidence.excerptHash.slice(0, 16)}`,
+      text: `[人物 ${evidence.characterId} / 事件 ${evidence.eventId} / ${evidence.sectionId} ${evidence.start}-${evidence.end}]\n${evidence.excerpt}`,
+    })),
+  ];
+  const pathSummary = buildPathSummary({ pathNodes: input.path });
+  const recentScenes: ContextSceneItem[] = input.path.slice(-2).map((node) => ({
+    id: node.id,
+    text: node.prose,
+  }));
+  const worldlineSetup = JSON.stringify({
+    worldlineId: input.context.worldline.id,
+    mode: input.context.worldline.mode,
+    divergence: input.context.worldline.divergence,
+    anchors: input.context.worldline.anchors,
+    storyMap: {
+      id: storyMap.id,
+      title: storyMap.title,
+      logline: storyMap.logline,
+    },
+    characters: storyMap.characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      aliases: character.aliases,
+      role: character.role,
+    })),
+    acceptedImpactPlan: {
+      id: plan.id,
+      mode: plan.mode,
+      divergence: plan.divergence,
+      impacts: plan.impacts.map((impact) => ({
+        id: impact.id,
+        scope: impact.scope,
+        changeType: impact.changeType,
+        fromEventId: impact.fromEventId,
+        affectedEventId: impact.affectedEventId,
+        summary: impact.summary,
+      })),
+      characterChanges: plan.characterChanges,
+      threadChanges: plan.threadChanges,
+      anchorEvaluations: plan.anchorEvaluations,
+      uncertainties: plan.uncertainties,
+    },
+    currentState: input.pathState,
+  });
+  const anchorReminder = buildAnchorReminder(input.context);
+  const selectedDirection =
+    input.selectedDirection === null
+      ? ""
+      : JSON.stringify(input.selectedDirection);
+
+  return assembleContext({
+    maxChars: readContinuationContextMaxChars(),
+    sections: {
+      worldlineSetup,
+      pathSummary: pathSummary.text,
+      canonEvidence,
+      recentScenes,
+      selectedDirection,
+      anchorReminder,
+    },
+  });
+}
+
+function buildAnchorReminder(context: ContinuationContext): string {
+  const anchors = context.worldline.anchors;
+  const lines =
+    anchors.length === 0
+      ? [
+          "开放模式：没有结局 Anchor；分歧前历史、角色认知与未被修改的世界规则仍然有效。",
+        ]
+      : [
+          "严格模式锁定以下 Anchor；不得删除或改写对应目标事件：",
+          ...anchors.map(
+            (anchor) =>
+              `- ${anchor.requirement}（目标事件 ${anchor.targetEventId}）`,
+          ),
+        ];
+  lines.push(
+    "不得删除或改写分歧点之前的 Canon Event；不得占用 event: / impact: / divergence: 命名空间。",
+    "statePatch.factsAdded 的 key 必须以 generated: 开头；不得恢复已删除事实，不得删除 accepted ImpactPlan 拥有的 Delta。",
+  );
+  return lines.join("\n");
+}
+
 async function buildPrompt(
-  stage: "directions" | "scene",
-  context: ContinuationContext,
-  selectedDirection?: ContinuationDirection,
+  promptVersion: string,
+  assembledContext: string,
 ): Promise<string> {
-  const promptVersion =
-    stage === "scene" ? scenePromptVersion : directionsPromptVersion;
   const template = await readFile(
     path.join(process.cwd(), "prompts", `${promptVersion}.md`),
     "utf8",
   );
-  const relevantEventIds = collectRelevantEventIds(
-    context.acceptedImpactPlanArtifact,
-  );
-  const storyMap = context.storyMapArtifact.storyMap;
-  const relevantEvents = storyMap.events.filter((event) =>
-    relevantEventIds.has(event.id),
-  );
-  const readonlyCanonical = {
-    sourceId: context.source.id,
-    storyMapArtifactId: context.storyMapArtifact.id,
-    storyMapId: storyMap.id,
-    characters: storyMap.characters,
-    events: relevantEvents.map((event) => ({
-      id: event.id,
-      title: event.title,
-      summary: event.summary,
-      sequence: event.sequence,
-      participants: event.participants,
-      stateChanges: event.stateChanges,
-    })),
-    edges: storyMap.edges.filter(
-      (edge) =>
-        relevantEventIds.has(edge.from) && relevantEventIds.has(edge.to),
-    ),
-    endingCandidates: storyMap.endingCandidates.filter((ending) =>
-      context.worldline.anchors.some(
-        (anchor) => anchor.targetEventId === ending.targetEventId,
-      ),
-    ),
-  };
-  const relevantEvidence = relevantEvents.flatMap((event) =>
-    event.evidence.map((reference) => ({
-      eventId: event.id,
-      eventTitle: event.title,
-      sourceId: reference.sourceId,
-      sectionId: reference.sectionId,
-      start: reference.start,
-      end: reference.end,
-      excerptHash: reference.excerptHash,
-      excerpt: context.source.normalizedText.slice(reference.start, reference.end),
-    })),
-  );
-  const styleContext =
-    stage === "scene" && selectedDirection
-      ? selectContinuationContext({
-          storyMap,
-          source: context.source,
-          worldline: context.worldline,
-          acceptedImpactPlan: context.acceptedImpactPlanArtifact,
-          selectedDirection,
-        })
-      : undefined;
-  const packet = {
-    stage,
-    readonlyCanonical,
-    currentWorldline: context.worldline,
-    divergence: context.worldline.divergence,
-    acceptedImpactPlan: context.acceptedImpactPlanArtifact.impactPlan,
-    relevantEvidence,
-    currentState: context.currentState,
-    ...(styleContext ? { styleContext } : {}),
-    ...(selectedDirection ? { selectedDirection } : {}),
-  };
-
   return [
     template,
     "<continuation_context>",
-    JSON.stringify(packet),
+    assembledContext,
     "</continuation_context>",
   ].join("\n\n");
 }
 
-function collectRelevantEventIds(
-  acceptedImpactPlanArtifact: ImpactPlanArtifact,
-): Set<string> {
-  const plan = acceptedImpactPlanArtifact.impactPlan;
-  const ids = new Set<string>([plan.divergence.eventId]);
-  for (const impact of plan.impacts) {
-    ids.add(impact.fromEventId);
-    if (impact.affectedEventId) ids.add(impact.affectedEventId);
-    for (const id of impact.reasonPath) ids.add(id);
-  }
-  for (const evaluation of plan.anchorEvaluations) {
-    for (const id of evaluation.reasonPath) ids.add(id);
-  }
-  for (const anchor of plan.anchors) ids.add(anchor.targetEventId);
-  return ids;
+function directionsBatchIndex(
+  artifact: ContinuationDirectionsArtifact,
+): number {
+  return artifact.continuation.schemaVersion === 1
+    ? 0
+    : artifact.continuation.batchIndex;
+}
+
+function sceneOutputWithoutSummary(
+  output: {
+    title: string;
+    prose: string;
+    statePatch: ContinuationSceneModelOutput["statePatch"];
+  },
+): ContinuationSceneModelOutput {
+  return {
+    title: output.title,
+    prose: output.prose,
+    statePatch: output.statePatch,
+  };
 }

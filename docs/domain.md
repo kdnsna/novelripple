@@ -177,7 +177,7 @@ Continuation 分为两个固定阶段，不是 Agent：
 1. 基于当前 Worldline 有效状态提出恰好三个方向，每个方向包含标题、前提、受影响人物与预期后果；
 2. 用户选择一个方向后生成一个完整场景及 `statePatch`。
 
-`statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。方向和场景分别保存为 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。M0 每条 Worldline 只允许一个场景，同一选择重试返回原 Artifact，更换选择必须明确失败。
+`statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。方向和场景分别保存为不可变 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。场景构成场景节点树：任一场景都可以作为父节点继续，深度递增；同一方向重试创建新的兄弟场景（`origin: retry`、`attemptIndex` 递增），旧场景不更新；「换一批」创建新的方向批次（`batchIndex` 递增），旧批次保留。场景的 `statePatch` 只折叠当前路径，兄弟分支的状态互不可见。
 
 模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan 和当前 Delta，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
 
@@ -191,7 +191,7 @@ Source
 → Impact Plan（提案并评估 Anchor）
 → 用户接受当前 Impact Plan
 → Worldline（父世界线 + Delta）
-→ Continuation（一个后续场景）
+→ Continuation（场景节点树：可继续、重试分叉、换一批方向）
 ```
 
 Impact Plan 被接受前不得创建或改变 Worldline。所有模型结构化输出只有同时通过 Schema、Evidence、引用完整性和领域不变量校验，才能成为下一步输入；失败时拒绝完整候选并停止状态推进。

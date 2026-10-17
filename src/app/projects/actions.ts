@@ -327,6 +327,8 @@ export async function generateContinuationDirectionsAction(
     .object({
       projectId: ProjectIdSchema,
       worldlineId: z.string().min(1),
+      parentSceneId: z.string().min(1).nullable().optional(),
+      newBatch: z.boolean().optional(),
     })
     .strict()
     .safeParse(input);
@@ -354,6 +356,7 @@ export async function generateContinuationSceneAction(
       worldlineId: z.string().min(1),
       directionsArtifactId: z.string().min(1),
       selectedDirectionId: z.string().min(1),
+      retry: z.boolean().optional(),
     })
     .strict()
     .safeParse(input);
@@ -414,14 +417,24 @@ function continuationErrorMessage(error: unknown): string {
     "找不到 Worldline 对应的不可变 Source",
     "找不到当前 Worldline 的后续方向 Artifact",
     "找不到选中的后续方向",
-    "M0 只允许一个后续场景，不能更换已生成方向",
+    "父场景不属于当前 Worldline",
+    "后续场景父节点与方向批次不一致",
+    "后续场景深度必须等于父场景深度加一",
+    "根场景深度必须为 1",
     "Mock AI 只支持 ripple-001 的标准 rerouted Worldline",
     "Mock AI 找不到选中的 ripple-001 后续方向",
+    "Mock AI 找不到当前路径的父场景",
     "Mock AI 只能用于测试或本地验证",
   ];
-  return safeMessages.includes(error.message)
-    ? error.message
-    : "Continuation 生成失败；结构化输出未通过校验，未保存 Artifact。";
+  if (safeMessages.includes(error.message)) return error.message;
+  if (
+    error.message.includes("CONTINUATION_CONTEXT_MAX_CHARS") ||
+    error.message.includes("必需上下文段超过预算") ||
+    error.message.includes("必需上下文段与最新场景超过预算")
+  ) {
+    return error.message;
+  }
+  return "Continuation 生成失败；结构化输出未通过校验，未保存 Artifact。";
 }
 
 function storyMapRevisionErrorMessage(error: unknown): string {
