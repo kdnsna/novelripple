@@ -174,6 +174,31 @@ describe("roster pass", () => {
     expect(validateRoster(roster, wrongPool)).toEqual([]);
   });
 
+  it("normalizes full-width, case and inner whitespace before the wrong-merge guard", () => {
+    const normalizedPool: StoryMapPool = {
+      characters: [
+        character("char_ab", "ＡＢ"),
+        character("char_ab__c2", " A  B "),
+      ],
+      events: [],
+      edges: [],
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_ab",
+          name: "ab",
+          aliases: [" A  B "],
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_ab", "char_ab__c2"],
+        },
+      ],
+    };
+
+    expect(validateRoster(roster, normalizedPool)).toEqual([]);
+  });
+
   it("rejects unknown candidate IDs and every candidate that is not assigned exactly once", () => {
     const roster: StoryMapRosterCandidate = {
       characters: [

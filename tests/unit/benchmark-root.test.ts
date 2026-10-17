@@ -19,12 +19,16 @@ import {
 } from "@/evals/benchmark-root";
 
 let temporaryDirectory: string;
+let outsideDirectory: string;
 let publicRoot: string;
 let privateRoot: string;
 
 beforeEach(async () => {
   temporaryDirectory = await mkdtemp(
     path.join(tmpdir(), "novelripple-benchmark-root-"),
+  );
+  outsideDirectory = await mkdtemp(
+    path.join(tmpdir(), "novelripple-benchmark-outside-"),
   );
   publicRoot = path.join(temporaryDirectory, "benchmarks", "m1", "public");
   privateRoot = path.join(temporaryDirectory, "benchmarks", "private");
@@ -34,6 +38,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(temporaryDirectory, { recursive: true, force: true });
+  await rm(outsideDirectory, { recursive: true, force: true });
 });
 
 async function createStory(root: string, id: string) {
@@ -154,6 +159,76 @@ describe("M1 benchmark root selection", () => {
 
     expect(error).toBeInstanceOf(BenchmarkRootError);
     expect(error).toMatchObject({ code: "benchmark_root_not_directory" });
+  });
+
+  it("rejects the filesystem root as the extra private root", async () => {
+    const story = await createStory(publicRoot, "m1-public-root");
+
+    await expect(
+      resolveBenchmarkRoot({
+        manifestPath: story.manifestPath,
+        publicRoot,
+        privateRoot,
+        extraPrivateRoot: path.parse(temporaryDirectory).root,
+        repositoryRoot: temporaryDirectory,
+      }),
+    ).rejects.toMatchObject({
+      name: "BenchmarkRootError",
+      code: "benchmark_root_is_filesystem_root",
+    });
+  });
+
+  it("rejects the repository root and tracked descendants as the extra private root", async () => {
+    const story = await createStory(publicRoot, "m1-public-repo");
+    const docs = path.join(temporaryDirectory, "docs");
+    await mkdir(docs, { recursive: true });
+
+    for (const extraPrivateRoot of [temporaryDirectory, docs]) {
+      const error = await resolveBenchmarkRoot({
+        manifestPath: story.manifestPath,
+        publicRoot,
+        privateRoot,
+        extraPrivateRoot,
+        repositoryRoot: temporaryDirectory,
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(BenchmarkRootError);
+      expect(error).toMatchObject({ code: "benchmark_root_inside_repository" });
+    }
+  });
+
+  it("allows the git-ignored benchmarks/private directory inside the repository", async () => {
+    const story = await createStory(privateRoot, "m1-private-inside-repo");
+
+    await expect(
+      resolveBenchmarkRoot({
+        manifestPath: story.manifestPath,
+        publicRoot,
+        privateRoot,
+        extraPrivateRoot: story.directory,
+        repositoryRoot: temporaryDirectory,
+      }),
+    ).resolves.toEqual({
+      root: await realpath(privateRoot),
+      visibility: "private",
+    });
+  });
+
+  it("allows an extra private root outside the repository", async () => {
+    const story = await createStory(outsideDirectory, "m1-private-outside");
+
+    await expect(
+      resolveBenchmarkRoot({
+        manifestPath: story.manifestPath,
+        publicRoot,
+        privateRoot,
+        extraPrivateRoot: outsideDirectory,
+        repositoryRoot: temporaryDirectory,
+      }),
+    ).resolves.toEqual({
+      root: await realpath(outsideDirectory),
+      visibility: "private",
+    });
   });
 
   it("returns null for a manifest outside every configured root", async () => {

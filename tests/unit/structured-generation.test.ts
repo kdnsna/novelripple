@@ -111,6 +111,38 @@ describe("structured generation", () => {
     expect(provider.requests[1]?.signal).toBe(controller.signal);
   });
 
+  it("throws the abort reason instead of sending a repair request", async () => {
+    const project = createProject({ title: "修复前中止" });
+    const controller = new AbortController();
+    const abortReason = new Error("aborted after first pass");
+    const provider = new MockAIProvider([
+      '{"answer":"trigger abort"}',
+      '{"answer":"must not run"}',
+    ]);
+
+    await expect(
+      generateStructured(
+        {
+          ...createInput(project.id),
+          signal: controller.signal,
+          validate: () => {
+            controller.abort(abortReason);
+            return [{ path: "answer", message: "首轮不合法" }];
+          },
+        },
+        provider,
+      ),
+    ).rejects.toBe(abortReason);
+
+    expect(provider.requests).toHaveLength(1);
+    const run = listProjectGenerationRuns(project.id)[0];
+    expect(run).toMatchObject({
+      status: "failed",
+      error: "aborted after first pass",
+    });
+    expect(JSON.parse(run?.rawOutput ?? "").attempts).toHaveLength(1);
+  });
+
   it("invokes the attempt hook before every real attempt including repair", async () => {
     const project = createProject({ title: "调用计数" });
     const attempts: number[] = [];

@@ -23,10 +23,12 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 - 新增 `story-map-merge.v2`：除跨块重复外，还合并相邻块把同一场景拆得更细的事件，并用 `duplicateEndingGroups` 合并在同一人物/故事主线上得到同一结果的结局候选；不同人物的命运即使相似也不算重复。New merge v2 also folds finer-grained adjacent scene events and duplicate ending candidates for the same character or storyline; different characters' fates are never duplicates.
 - 新增 `story-map-endings.v2`：只产出 1 个故事级结局；对每个结尾命运已定或被明确留白的角色（含已离场配角与主角/叙述者本人）各产出 1 个人物结局，不重复同一结果。New endings v2 emits one story-level ending and one ending for every character whose fate is resolved or explicitly left open, including departed supporting characters and the protagonist/narrator.
 - 最终候选在 Evidence 解析前清理 ID：去掉块冲突产生的 `__c<chunk>` 后缀，碰撞时保留裸 ID 并按 `-2`、`-3` 顺延，同时重写全部引用。Final candidate IDs drop `__c<chunk>` suffixes before Evidence resolution, with deterministic `-2`/`-3` collision handling and reference rewrites.
+- `NOVELRIPPLE_BENCH_ROOT` 在 realpath 后拒绝文件系统根和仓库内路径，只放行仓库外目录或 Git 忽略的 `<repo>/benchmarks/private`。`NOVELRIPPLE_BENCH_ROOT` now rejects the filesystem root and repository-internal paths after realpath, allowing only outside directories or the git-ignored `<repo>/benchmarks/private`.
 
 ### Changed / 变更
 
 - 评测门禁改为非阻塞的质量仪表盘（ADR 0005）。Evaluation gate became a non-blocking quality dashboard (ADR 0005).
+- M1 仪表盘遇到任一篇 private manifest（或来自 `NOVELRIPPLE_BENCH_ROOT`）时不再写入 `docs/evals/runs/`：报告默认与 `metrics.json` 同落在 `.data/evals/`，拒绝指向仓库 `docs/` 的 `--report-dir`，并把私有 benchmark ID 脱敏为 `private:<storyClass>`。Private M1 dashboard runs no longer write into `docs/evals/runs/`: the report stays next to `metrics.json` under `.data/evals/`, `--report-dir` under `docs/` is rejected, and private benchmark IDs are redacted as `private:<storyClass>`.
 - 四条硬规则仍然阻塞：原文与分歧前历史不被覆盖、证据可溯源、世界线隔离、坏输出被拒绝。Four hard rules still block.
 - 真人观察改为可选，缺失只记为 `not_measured`。Real-user observation is optional.
 - 作者自评是有效的人工评分。Author self-review is valid.
@@ -35,6 +37,10 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 ### Fixed / 修复
 
 - 人名归并增加错并防护：`mergedFrom` 候选名必须等于合并后人物的 `name` 或出现在 `aliases` 中，否则 repair 一次后 fail closed。Wrong-merge guard for the roster pass: every merged candidate name must match the merged name or an alias, otherwise one repair then fail closed.
+- 错并比较先做 NFKC、转小写、去首尾空白并折叠内部空白，全角/半角与大小写变体不再误判。The roster guard normalizes names with NFKC, lowercasing and whitespace folding so full-width/case variants compare equal.
+- 分块按整块 core 文本控制在 `CHUNK_MAX_CHARS` 内：下一段会超限时即使当前块未到最小长度也换块；单段超长仍独占一块，短尾回并只在结果不超限时发生。Chunking now caps the whole chunk core at `CHUNK_MAX_CHARS`, starts a new chunk before an overflow even below the minimum, lets a single oversized paragraph stand alone, and only folds a short tail when the result stays within the max.
+- 结构化输出首轮不合法且调用方已中止时，不再发送 repair 请求，直接抛出 abort reason 并结束 Generation Run。When the caller has already aborted after an invalid first pass, the structured-output path throws the abort reason instead of sending a repair request.
+- 显式传入的 Story Map `limits` 与环境变量走同一正整数校验；NaN、0、负数、小数和 Infinity 都在任何模型调用前失败。Explicit Story Map `limits` now share the env-var positive-integer validation and fail before any model call.
 - 分块并发第一处失败即停止调度并中止在途请求；新增 `STORY_MAP_MAX_MODEL_CALLS`（默认 120）与 `STORY_MAP_MAX_CHUNKS`（默认 50）预算，调用前检查、运行中按真实尝试（含 repair）计数，并在达到 20 块时打印一次粗略输入量预警。Fail-fast chunk scheduling with in-flight abort, plus model-call/chunk budgets and a large-input warning.
 - 去重因果边和结局时合并全部证据 Unit（保持顺序），包括经 `duplicateEventGroups` 归并的边。Deduplicated edges and endings now merge all evidence Unit IDs, including edges collapsed through `duplicateEventGroups`.
 - 因果边按 `(from, to)` 去重并保留第一条的类型/说明；故事级结局只在目标事件与规范化后的 `requirement` 文本都相同时折叠，人物结局按人物名去重；事件合并后端点相同的边直接丢弃。Edges collapse by `(from, to)` keeping the first type/label; story endings collapse only when both the target event and normalized requirement text match, character endings collapse by character name, and edges whose endpoints merged into one event are dropped.

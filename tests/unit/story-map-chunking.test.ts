@@ -90,6 +90,42 @@ describe("Evidence Unit chunking", () => {
     expect(chunks).toHaveLength(1);
   });
 
+  it("starts a new chunk when the next paragraph would push core past the max", () => {
+    const units = syntheticUnits([2_999, 12_000]);
+    const chunks = deriveEvidenceUnitChunks(units);
+
+    expect(chunks.map((chunk) => chunk.coreUnitIds)).toEqual([
+      [units[0]!.id],
+      [units[1]!.id],
+    ]);
+  });
+
+  it("does not fold a short tail when the merged core would exceed the max", () => {
+    const units = syntheticUnits([8_999, 500]);
+    const chunks = deriveEvidenceUnitChunks(units);
+
+    expect(chunks.map((chunk) => chunk.coreUnitIds)).toEqual([
+      [units[0]!.id],
+      [units[1]!.id],
+    ]);
+  });
+
+  it("keeps every multi-paragraph chunk core within the max", () => {
+    const units = syntheticUnits([2_999, 12_000, 4_000, 4_000, 2_000]);
+    const chunks = deriveEvidenceUnitChunks(units);
+    const byId = new Map(units.map((unit) => [unit.id, unit]));
+
+    for (const chunk of chunks) {
+      const coreLength = chunk.coreUnitIds
+        .map((id) => byId.get(id)!.text.length)
+        .reduce((total, length) => total + length, 0);
+      if (chunk.coreUnitIds.length > 1) {
+        expect(coreLength).toBeLessThanOrEqual(CHUNK_MAX_CHARS);
+      }
+    }
+    expect(chunks).toHaveLength(4);
+  });
+
   it("splits the public fixture into more than one chunk", async () => {
     const fixture = await loadRippleFixture();
     const chunks = deriveEvidenceUnitChunks(deriveEvidenceUnits(fixture.source));

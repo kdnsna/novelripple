@@ -120,6 +120,8 @@ Golden 没有穷举全文所有合理事件。因此，有合法 Source Evidence
 
 M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三篇作品必须分别运行并单独报告，不允许只用聚合结果掩盖单篇失败；至少一篇必须满足真正未见作品条件。公共作品可提交脱敏报告，私人作品的正文、manifest、原始输出和本地报告只保存在被 Git 忽略的 `benchmarks/private/` 或 `.data/evals/`。
 
+`NOVELRIPPLE_BENCH_ROOT` 的 realpath 只能是仓库外目录，或 Git 忽略的 `<repo>/benchmarks/private` 及其子目录；文件系统根和仓库内其它路径（如 `docs/`、`src/`）会在运行前被拒绝。
+
 完成报告使用 [`M1 人工评测模板`](evals/m1-review-template.md)。每次运行创建新报告，不覆盖旧报告；报告只记录稳定 ID、计数、比例、评分和简短理由。
 
 `npm run eval:m1:baseline -- --manifest <A> --manifest <B> --manifest <C>` 是 M1 的显式、非 CI baseline 入口。它必须使用 Story A/B/C、至少一篇经 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置，直接运行当前生产 Story Map 管线。每次新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`；Gold 只在 candidate 完整生成后评分。自动报告中的 Event recall、Ending Candidate recall 和 Edge 队列在独立人工复核前保持 `null` / pending，不得把字符串近似或被测模型自评冒充人工事实。
@@ -229,6 +231,8 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - `.data/evals/m1-eval/<run-id>/metrics.json`（`kind: "m1_dashboard"`，被 Git 忽略）；
 - `docs/evals/runs/m1-dashboard-<timestamp>-<random>-<sha>.md`（脱敏，可提交）；
 - 指定 `--report-dir <dir>` 时，Markdown 改写到 `<dir>/<run-id>/report.md`，与 `metrics.json` 同目录。
+
+任一篇 manifest 为 `visibility: "private"`，或来自 `NOVELRIPPLE_BENCH_ROOT` / `benchmarks/private` 时，整次运行按 private 处理：不再写入 `docs/evals/runs/`，Markdown 默认与 `metrics.json` 同目录，私有 benchmark ID 脱敏为 `private:<storyClass>`；此时 `--report-dir` 指向仓库 `docs/` 会被拒绝。
 
 `<run-id>` 精确到毫秒并带随机后缀，重复运行不会互相覆盖。人工评分文件缺失记为 `not_measured`；文件存在但 JSON 非法或对应 Story 未通过 Schema 校验时命令报错并以非零退出。manifest 必须提供正整数 `characterCount`（或 `characterCountByClass` / `scale.characters`），否则同样报错，避免静默套用错误的修正成本档位。
 

@@ -571,6 +571,27 @@ describe("chunked Story Map recall pipeline", () => {
     }
   });
 
+  it("validates explicitly passed limits before any model call", async () => {
+    const { project, source } = await createContext();
+    const invalidValues = [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY];
+
+    for (const value of invalidValues) {
+      for (const key of ["maxChunks", "maxModelCalls"] as const) {
+        const provider = new MockAIProvider([]);
+        await expect(
+          generateStoryMap({
+            projectId: project.id,
+            sourceId: source.id,
+            provider,
+            modelConfig,
+            limits: { [key]: value },
+          }),
+        ).rejects.toThrow(`limits.${key} 必须是正整数`);
+        expect(provider.requests).toHaveLength(0);
+      }
+    }
+  });
+
   it("creates a new versioned Artifact when the same Source is rerun", async () => {
     const { project, source, responses } = await createContext();
     const provider = new MockAIProvider([...responses, ...responses]);

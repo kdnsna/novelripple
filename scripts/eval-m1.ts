@@ -1,5 +1,11 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
@@ -28,6 +34,10 @@ import {
   type M1StoryMapHuman,
   type M1UserObservation,
 } from "../src/evals/m1-eval";
+import {
+  redactM1BenchmarkId,
+  resolveM1ReportRouting,
+} from "../src/evals/m1-report-routing";
 
 const repositoryRoot = process.cwd();
 const storyClasses = ["A", "B", "C"] as const;
@@ -71,6 +81,8 @@ function parseArguments(): {
 
 type ManifestMeta = {
   id: string;
+  visibility: string | undefined;
+  manifestPath: string;
   rightsMode: string;
   characterCount: number;
   unseenByPromptAuthors: boolean;
@@ -97,6 +109,9 @@ async function readManifestMeta(manifestPath: string): Promise<ManifestMeta> {
   }
   return {
     id,
+    visibility:
+      typeof raw.visibility === "string" ? raw.visibility : undefined,
+    manifestPath,
     rightsMode:
       typeof rights === "string"
         ? rights
@@ -104,6 +119,16 @@ async function readManifestMeta(manifestPath: string): Promise<ManifestMeta> {
     characterCount,
     unseenByPromptAuthors: Boolean(raw.unseenByPromptAuthors),
   };
+}
+
+async function readExtraPrivateRoot(): Promise<string | undefined> {
+  const value = process.env.NOVELRIPPLE_BENCH_ROOT?.trim();
+  if (!value) return undefined;
+  try {
+    return await realpath(path.resolve(value));
+  } catch {
+    throw new Error("NOVELRIPPLE_BENCH_ROOT 不存在或不可访问");
+  }
 }
 
 async function readHumanFile<T>(
@@ -224,9 +249,27 @@ async function main() {
   ).stdout.trim();
 
   // 1. manifest 元数据（三篇按 storyClass 排序）
-  const manifests = await Promise.all(
-    args.manifestPaths.map((p) => readManifestMeta(p)),
+  const extraPrivateRoot = await readExtraPrivateRoot();
+  const manifestPaths = await Promise.all(
+    args.manifestPaths.map((manifestPath) =>
+      realpath(path.resolve(manifestPath)),
+    ),
   );
+  const manifests = await Promise.all(
+    manifestPaths.map((manifestPath) => readManifestMeta(manifestPath)),
+  );
+  const routing = resolveM1ReportRouting({
+    repositoryRoot: await realpath(repositoryRoot),
+    stories: manifests.map((manifest, index) => ({
+      storyClass: storyClasses[index]!,
+      benchmarkId: manifest.id,
+      manifestPath: manifest.manifestPath,
+      ...(manifest.visibility ? { visibility: manifest.visibility } : {}),
+    })),
+    reportDir: args.reportDir,
+    reportDirProvided: args.reportDirProvided,
+    ...(extraPrivateRoot ? { extraPrivateRoot } : {}),
+  });
 
   // 2. 人工输入（缺失 = null，计入 missingData）
   const storyMaps: Record<StoryClass, M1StoryMapHuman | null> = {
@@ -389,24 +432,49 @@ async function main() {
     },
   });
 
+  // 私有运行不写入受版本控制的 docs/：报告与 metrics 同目录，并脱敏私有 ID。
+  const privateStoryClasses = new Set(routing.privateStoryClasses);
+  const outputReport = routing.redactPrivateBenchmarkIds
+    ? {
+        ...report,
+        stories: report.stories.map((story) =>
+          privateStoryClasses.has(story.storyClass)
+            ? {
+                ...story,
+                identity: {
+                  ...story.identity,
+                  benchmarkId: redactM1BenchmarkId(story.storyClass),
+                },
+              }
+            : story,
+        ),
+      }
+    : report;
+
   await mkdir(args.reportDir, { recursive: true });
   const runDirectory = path.join(args.reportDir, runId);
   await mkdir(runDirectory, { recursive: true });
   const metricsPath = path.join(runDirectory, "metrics.json");
-  await writeFile(metricsPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await writeFile(
+    metricsPath,
+    `${JSON.stringify(outputReport, null, 2)}\n`,
+    "utf8",
+  );
 
-  // 5. 脱敏仪表盘报告：--report-dir 时与 metrics.json 同目录，否则写入 docs/evals/runs。
-  const reportPath = args.reportDirProvided
-    ? path.join(runDirectory, "report.md")
-    : path.join(
-        repositoryRoot,
-        "docs",
-        "evals",
-        "runs",
-        `m1-dashboard-${timestamp}-${randomSuffix}-${commitSha.slice(0, 7)}.md`,
-      );
+  // 5. 脱敏仪表盘报告：private 运行或 --report-dir 时与 metrics.json 同目录，
+  //    否则写入 docs/evals/runs。
+  const reportPath =
+    routing.reportTarget === "run-directory"
+      ? path.join(runDirectory, "report.md")
+      : path.join(
+          repositoryRoot,
+          "docs",
+          "evals",
+          "runs",
+          `m1-dashboard-${timestamp}-${randomSuffix}-${commitSha.slice(0, 7)}.md`,
+        );
   await mkdir(path.dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, buildM1DashboardMarkdown(report), "utf8");
+  await writeFile(reportPath, buildM1DashboardMarkdown(outputReport), "utf8");
 
   console.log("NovelRipple M1 质量仪表盘");
   console.log(`Run: ${runId}`);

@@ -298,9 +298,9 @@ export function validateRoster(
           message: `mergedFrom 引用了未知人物候选：${candidateId}`,
         });
       } else {
-        const candidateName = candidate.name.trim();
-        const mergedName = character.name.trim();
-        const aliases = character.aliases.map((alias) => alias.trim());
+        const candidateName = normalizeRosterName(candidate.name);
+        const mergedName = normalizeRosterName(character.name);
+        const aliases = character.aliases.map(normalizeRosterName);
         if (candidateName !== mergedName && !aliases.includes(candidateName)) {
           issues.push({
             path: `characters.${index}.mergedFrom.${mergedIndex}`,
@@ -708,6 +708,11 @@ function assignFinalIds(ids: readonly string[]): Map<string, string> {
     mapping.set(id, candidate);
   }
   return mapping;
+}
+
+/** 人名比较键：NFKC 统一全/半角，忽略大小写与多余空白。 */
+function normalizeRosterName(value: string): string {
+  return value.normalize("NFKC").toLowerCase().trim().replace(/\s+/gu, " ");
 }
 
 function duplicates(values: string[]): string[] {

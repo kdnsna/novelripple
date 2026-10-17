@@ -184,6 +184,16 @@ export async function generateStructured<T>(
   }
 
   let repairResponse: AIProviderResponse;
+  // 首轮不合法时若调用方已中止（例如分块并发第一处失败），不再发 repair 请求。
+  if (input.signal?.aborted) {
+    const reason = abortReason(input.signal);
+    failGenerationRun({
+      id: run.id,
+      rawOutput: serializeAttempts(attempts),
+      error: errorMessage(reason),
+    });
+    throw reason;
+  }
   try {
     repairResponse = await callProvider({
       prompt: metadata.prompt,
@@ -284,6 +294,11 @@ function serializeAttempts(attempts: Attempt[]): string {
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown provider error";
   return message.slice(0, 2_000);
+}
+
+/** 抛出调用方给的 abort reason；没有 reason 时给一个明确错误。 */
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("Structured generation aborted");
 }
 
 /** 空响应错误：provider 返回了无文本内容的完成（模型瞬时故障，可安全重试一次）。 */

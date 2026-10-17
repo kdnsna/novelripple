@@ -60,10 +60,11 @@ export function deriveEvidenceUnitChunks(
   let currentLength = 0;
   for (const unit of units) {
     const length = unit.text.length;
+    // 超过 max 时即使当前块还没到 min 也必须换块；单个超长自然段随后独占一块。
     const shouldStartNext =
       current.length > 0 &&
-      currentLength >= min &&
-      (currentLength >= target || currentLength + length > max);
+      (currentLength + length > max ||
+        (currentLength >= min && currentLength >= target));
     if (shouldStartNext) {
       groups.push(current);
       current = [];
