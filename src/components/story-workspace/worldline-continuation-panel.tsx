@@ -236,7 +236,9 @@ export function WorldlineContinuationPanel({
         <li>
           <span>当前 Worldline</span>
           <strong>{worldline.id}</strong>
-          <small>{plan.mode === "strict" ? "严格模式" : "开放模式"}</small>
+          <small>
+            {plan.mode === "strict" ? "保留原结局" : "让故事自由发展"}
+          </small>
         </li>
       </ol>
 

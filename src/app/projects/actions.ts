@@ -36,6 +36,7 @@ import {
 import {
   confirmStoryMapArtifact,
   createStoryMapRevision,
+  quickConfirmStoryMapArtifact,
 } from "@/server/repositories/story-map-artifact-repository";
 import { acceptImpactPlan } from "@/server/repositories/ripple-repository";
 
@@ -201,6 +202,32 @@ export async function confirmStoryMapAction(input: unknown): Promise<StoryMapAct
   try {
     // 同上：确认后的页面刷新由工作区的 replaceState → ACTION_RESTORE 完成。
     const artifact = confirmStoryMapArtifact(parsed.data);
+    return { ok: true, artifact };
+  } catch (error) {
+    return { ok: false, error: storyMapRevisionErrorMessage(error) };
+  }
+}
+
+export async function quickStartRippleAction(
+  input: unknown,
+): Promise<StoryMapActionResult> {
+  const parsed = z
+    .object({
+      projectId: ProjectIdSchema,
+      artifactId: z.string().min(1),
+    })
+    .strict()
+    .safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "快速开始数据无效：项目或 Artifact 标识缺失。",
+    };
+  }
+
+  try {
+    // 与 confirm 相同：页面刷新由工作区的 replaceState → ACTION_RESTORE 完成。
+    const artifact = quickConfirmStoryMapArtifact(parsed.data);
     return { ok: true, artifact };
   } catch (error) {
     return { ok: false, error: storyMapRevisionErrorMessage(error) };

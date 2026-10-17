@@ -23,6 +23,8 @@ type StoryMapCanvasProps = {
   selectedEventId: string;
   onSelectEvent: (event: Event) => void;
   characterId?: string | null;
+  needsReviewEventIds?: string[];
+  needsReviewEdgeIds?: string[];
 };
 
 const nodeWidth = 184;
@@ -61,8 +63,18 @@ export function StoryMapCanvas({
   selectedEventId,
   onSelectEvent,
   characterId = null,
+  needsReviewEventIds = [],
+  needsReviewEdgeIds = [],
 }: StoryMapCanvasProps) {
   const [lastDraggedNodeId, setLastDraggedNodeId] = useState("");
+  const needsReviewEvents = useMemo(
+    () => new Set(needsReviewEventIds),
+    [needsReviewEventIds],
+  );
+  const needsReviewEdges = useMemo(
+    () => new Set(needsReviewEdgeIds),
+    [needsReviewEdgeIds],
+  );
   const visibleEvents = useMemo(
     () =>
       characterId
@@ -121,7 +133,12 @@ export function StoryMapCanvas({
             >
               <div className="map-node-kicker">
                 <span>{String(event.sequence).padStart(2, "0")}</span>
-                <span>{event.evidenceKind === "inference" ? "推断" : "事实"}</span>
+                <span>
+                  {event.evidenceKind === "inference" ? "推断" : "事实"}
+                  {needsReviewEvents.has(event.id) ? (
+                    <em className="review-badge">待核对</em>
+                  ) : null}
+                </span>
               </div>
               <strong>{event.title}</strong>
               <small>{event.participants.length} 位人物 · 可追溯</small>
@@ -135,7 +152,7 @@ export function StoryMapCanvas({
         targetPosition: Position.Left,
       };
     });
-  }, [visibleEvents, visibleStoryEdges]);
+  }, [needsReviewEvents, visibleEvents, visibleStoryEdges]);
   const [nodes, setNodes, onNodesChange] = useNodesState(computedNodes);
 
   // 图结构签名：只有事件集合或边关系真正变化时才重新 fitView / 重排。
@@ -187,12 +204,13 @@ export function StoryMapCanvas({
         target: edge.to,
         type: "smoothstep",
         animated: edge.from === selectedEventId,
-        label:
+        label: `${
           edge.type === "causes"
             ? "导致"
             : edge.type === "enables"
               ? "使能"
-              : "伏笔",
+              : "伏笔"
+        }${needsReviewEdges.has(edge.id) ? " · 待核对" : ""}`,
         style: {
           stroke: edgeColors[edge.type],
           strokeWidth: edge.from === selectedEventId ? 2.4 : 1.25,
@@ -207,7 +225,7 @@ export function StoryMapCanvas({
           height: 14,
         },
       })),
-    [selectedEventId, visibleStoryEdges],
+    [needsReviewEdges, selectedEventId, visibleStoryEdges],
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(computedEdges);
 

@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useTransition, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+  type FormEvent,
+} from "react";
 
 import {
   acceptImpactPlanAction,
@@ -22,6 +28,8 @@ type RippleSimulatorPanelProps = {
   projectId: string;
   artifact: StoryMapArtifact;
   selectedEvent: Event;
+  initialSuggestions: RippleSuggestionsArtifact | null;
+  needsReviewEndingIds?: string[];
   onClose: () => void;
   onAccepted: (
     worldline: Worldline,
@@ -63,6 +71,8 @@ export function RippleSimulatorPanel({
   projectId,
   artifact,
   selectedEvent,
+  initialSuggestions,
+  needsReviewEndingIds = [],
   onClose,
   onAccepted,
   onEnterWorldline,
@@ -76,7 +86,10 @@ export function RippleSimulatorPanel({
   const [endingCandidateIds, setEndingCandidateIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<ImpactPlanArtifact | null>(null);
   const [suggestions, setSuggestions] =
-    useState<RippleSuggestionsArtifact | null>(null);
+    useState<RippleSuggestionsArtifact | null>(initialSuggestions);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
+  const suggestionsRequested = useRef(false);
   const [feedback, setFeedback] = useState("");
   const [acceptedWorldline, setAcceptedWorldline] = useState<Worldline | null>(
     null,
@@ -138,20 +151,31 @@ export function RippleSimulatorPanel({
     });
   }
 
-  function generateSuggestions(): void {
-    setError(null);
-    startTransition(async () => {
-      const result = await generateRippleSuggestionsAction({
-        projectId,
-        storyMapArtifactId: artifact.id,
-      });
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      setSuggestions(result.artifact);
+  async function requestSuggestions(): Promise<void> {
+    if (suggestionsLoading) return;
+    setSuggestionsLoading(true);
+    setSuggestionsError(null);
+    const result = await generateRippleSuggestionsAction({
+      projectId,
+      storyMapArtifactId: artifact.id,
     });
+    setSuggestionsLoading(false);
+    if (!result.ok) {
+      setSuggestionsError(result.error);
+      return;
+    }
+    setSuggestions(result.artifact);
   }
+
+  // 当前 revision 还没有建议时自动生成一次；ref 防止 StrictMode/重渲染重复调用。
+  // 失败只显示在建议区，提供显式重试，不影响用户继续自己选事件。
+  useEffect(() => {
+    if (suggestions || suggestionsRequested.current) return;
+    suggestionsRequested.current = true;
+    void requestSuggestions();
+    // 每个 revision 面板按 artifact/event 重挂载，只请求一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function applySuggestion(
     suggestion: RippleSuggestionsArtifact["suggestions"][number],
@@ -224,21 +248,35 @@ export function RippleSimulatorPanel({
 
       {!plan ? (
         <>
-          <section className="ripple-suggestions" aria-label="推荐分叉点">
+          <section className="ripple-suggestions" aria-label="3 个值得改变的瞬间">
             <div className="ripple-suggestions-heading">
               <div>
-                <span className="panel-kicker">不知道从哪里改？</span>
-                <h3>先看三个值得改变的节点</h3>
+                <span className="panel-kicker">读者入口</span>
+                <h3>3 个值得改变的瞬间</h3>
+                <p>选一个瞬间，直接看它会怎样改变故事。</p>
               </div>
-              <button
-                className="secondary-button"
-                disabled={pending}
-                onClick={generateSuggestions}
-                type="button"
-              >
-                {pending ? "正在生成…" : "生成 3 个推荐分叉点"}
-              </button>
             </div>
+
+            {suggestionsLoading ? (
+              <p className="ripple-suggestions-status" role="status">
+                正在寻找值得改变的瞬间…
+              </p>
+            ) : null}
+
+            {suggestionsError ? (
+              <div className="ripple-suggestions-error" role="alert">
+                <p>{suggestionsError}</p>
+                <button
+                  className="secondary-button compact-button"
+                  disabled={suggestionsLoading}
+                  onClick={() => void requestSuggestions()}
+                  type="button"
+                >
+                  重试
+                </button>
+              </div>
+            ) : null}
+
             {suggestions ? (
               <div className="ripple-suggestion-list">
                 {suggestions.suggestions.map((suggestion) => {
@@ -255,22 +293,37 @@ export function RippleSimulatorPanel({
                         <small>Anchor 风险：{suggestion.anchorRisk}</small>
                       </div>
                       <h4>{event?.title ?? suggestion.eventId}</h4>
-                      <strong>{suggestion.instruction}</strong>
-                      <p>{suggestion.whyInteresting}</p>
+                      <p>
+                        <b>为什么值得改变：</b>
+                        {suggestion.whyInteresting}
+                      </p>
+                      <strong>
+                        <b>建议改动：</b>
+                        {suggestion.instruction}
+                      </strong>
                       <button
                         className="secondary-button compact-button"
                         onClick={() => applySuggestion(suggestion)}
                         type="button"
                       >
-                        使用这个建议
+                        从这里改变
                       </button>
                     </article>
                   );
                 })}
               </div>
-            ) : (
+            ) : null}
+
+            {!suggestions && !suggestionsLoading && !suggestionsError ? (
               <p>推荐只是候选；生成后不会自动推演或创建 Worldline。</p>
-            )}
+            ) : null}
+
+            <p className="ripple-suggestions-secondary">
+              或者，
+              <button className="text-button" onClick={onClose} type="button">
+                从时间线上自己选一个事件
+              </button>
+            </p>
           </section>
 
         <form className="ripple-form" onSubmit={generatePreview}>
@@ -305,7 +358,7 @@ export function RippleSimulatorPanel({
           />
 
           <fieldset className="ripple-mode-fieldset">
-            <legend>推演模式</legend>
+            <legend>故事会怎样收尾？</legend>
             <label>
               <input
                 checked={mode === "strict"}
@@ -313,7 +366,10 @@ export function RippleSimulatorPanel({
                 onChange={() => changeMode("strict")}
                 type="radio"
               />
-              严格模式
+              <span>
+                <strong>保留原结局</strong>
+                <small>选择要保住的结局；新剧情会绕路回到这些结局</small>
+              </span>
             </label>
             <label>
               <input
@@ -322,13 +378,16 @@ export function RippleSimulatorPanel({
                 onChange={() => changeMode("open")}
                 type="radio"
               />
-              完全开放模式
+              <span>
+                <strong>让故事自由发展</strong>
+                <small>不锁定结局，涟漪可以改写结尾</small>
+              </span>
             </label>
           </fieldset>
 
           {mode === "strict" ? (
             <fieldset className="anchor-choice-fieldset">
-              <legend>选择一个或多个结局 Anchor</legend>
+              <legend>选择要保住的结局</legend>
               {storyMap.endingCandidates.map((ending) => (
                 <label key={ending.id}>
                   <input
@@ -336,12 +395,19 @@ export function RippleSimulatorPanel({
                     onChange={() => toggleEndingCandidate(ending.id)}
                     type="checkbox"
                   />
-                  <span>{ending.requirement}</span>
+                  <span>
+                    {ending.requirement}
+                    {needsReviewEndingIds.includes(ending.id) ? (
+                      <em className="review-badge">待核对</em>
+                    ) : null}
+                  </span>
                 </label>
               ))}
             </fieldset>
           ) : (
-            <p className="open-mode-note">开放模式 · 无结局 Anchor</p>
+            <p className="open-mode-note">
+              让故事自由发展 · 不锁定结局 Anchor
+            </p>
           )}
 
           <button
@@ -365,7 +431,7 @@ export function RippleSimulatorPanel({
               <h3>涟漪影响预览</h3>
             </div>
             <span className={`mode-badge mode-${plan.mode}`}>
-              {plan.mode === "strict" ? "严格模式" : "开放模式 · 无结局 Anchor"}
+              {plan.mode === "strict" ? "保留原结局" : "让故事自由发展"}
             </span>
           </div>
 
@@ -529,7 +595,7 @@ export function RippleSimulatorPanel({
 
           {incompatible ? (
             <div className="blocked-message">
-              该分歧与硬 Anchor 不兼容。严格模式不会强行圆回原结局。
+              该分歧与要保留的结局不兼容。保留原结局模式不会强行圆回原结局。
             </div>
           ) : (
             <p className="preview-write-boundary">接受前不会创建 Worldline</p>

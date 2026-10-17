@@ -177,6 +177,23 @@ export function confirmStoryMapArtifact(input: {
   });
 }
 
+/**
+ * 读者优先入口：不要求 readiness，直接从最新 draft 创建 confirmed revision。
+ * review confirmations 保持原样，因此该 revision 可派生为“未精修”；
+ * operation type 记录它是如何被确认的。已经 confirmed 时幂等返回同一行。
+ */
+export function quickConfirmStoryMapArtifact(input: {
+  projectId: string;
+  artifactId: string;
+}): StoryMapArtifact {
+  return createRevisionFromLatest({
+    ...input,
+    operationType: "quick_confirm_story_map",
+    returnIfAlreadyConfirmed: true,
+    update: () => "confirmed",
+  });
+}
+
 function createRevisionFromLatest(input: {
   projectId: string;
   artifactId: string;

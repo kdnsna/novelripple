@@ -107,7 +107,12 @@ function QueueItems({
           type="button"
         >
           <span>{categoryLabels[item.category]}</span>
-          <strong>{item.title}</strong>
+          <strong>
+            {item.title}
+            {item.status === "pending" ? (
+              <em className="review-badge">待核对</em>
+            ) : null}
+          </strong>
           <small>{item.reason}</small>
         </button>
       ))}

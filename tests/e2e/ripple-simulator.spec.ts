@@ -40,7 +40,7 @@ test("generates a strict rerouted preview and creates one child only after accep
   await page
     .getByLabel("改变内容")
     .fill("许澄没有把红色账簿交给周岚");
-  await page.getByLabel("严格模式").check();
+  await page.getByLabel("保留原结局").check();
   await page
     .getByLabel("白鸥号沉船事故的系统性真相最终进入公共记录")
     .check();
@@ -146,7 +146,7 @@ test("shows incompatible and blocks strict acceptance", async ({ page }) => {
   await page
     .getByLabel("改变内容")
     .fill("许澄当场烧毁红色账簿，并拒绝保留任何副本");
-  await page.getByLabel("严格模式").check();
+  await page.getByLabel("保留原结局").check();
   await page.getByLabel("红色账簿原件最终进入市档案馆").check();
   await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
 
@@ -169,11 +169,11 @@ test("generates and accepts an open-mode preview without ending Anchors", async 
   await page
     .getByLabel("改变内容")
     .fill("许澄仍启动旧东闸，但闸门只抬起一半便彻底卡死");
-  await page.getByLabel("完全开放模式").check();
+  await page.getByLabel("让故事自由发展").check();
   await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
 
   await expect(page.getByTestId("ripple-preview")).toBeVisible();
-  await expect(page.getByText("开放模式 · 无结局 Anchor")).toBeVisible();
+  await expect(page.locator(".mode-badge")).toHaveText("让故事自由发展");
   await expect(
     page.locator(".impact-item").getByText("旧东闸的实际泄洪能力低于原路径"),
   ).toBeVisible();
@@ -188,13 +188,14 @@ test("uses suggestions as candidates and regenerates one immutable feedback line
 }) => {
   await createConfirmedFixtureProject(page, `Ripple guidance ${Date.now()}`);
 
-  await page.getByRole("button", { name: "生成 3 个推荐分叉点" }).click();
-  await expect(page.locator(".ripple-suggestion-card")).toHaveCount(3);
+  await expect(page.locator(".ripple-suggestion-card")).toHaveCount(3, {
+    timeout: 15_000,
+  });
   await expect(page.getByText("尚未创建子 Worldline")).toBeVisible();
   await page
     .locator(".ripple-suggestion-card")
     .filter({ hasText: "许澄没有把红色账簿交给周岚" })
-    .getByRole("button", { name: "使用这个建议" })
+    .getByRole("button", { name: "从这里改变" })
     .click();
 
   await expect(page.getByLabel("分歧类型")).toHaveValue("prevent");
@@ -203,7 +204,7 @@ test("uses suggestions as candidates and regenerates one immutable feedback line
   );
   await expect(page.getByTestId("ripple-preview")).toHaveCount(0);
 
-  await page.getByLabel("严格模式").check();
+  await page.getByLabel("保留原结局").check();
   await page
     .getByLabel("白鸥号沉船事故的系统性真相最终进入公共记录")
     .check();

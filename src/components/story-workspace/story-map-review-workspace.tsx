@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 import {
   confirmStoryMapAction,
+  quickStartRippleAction,
   reviseStoryMapAction,
   type StoryMapActionResult,
 } from "@/app/projects/actions";
@@ -18,10 +19,12 @@ import {
   type DerivedStoryMapReview,
   type StoryMapReviewQueueItem,
 } from "@/domain/review/derive-story-map-review";
+import { deriveStoryMapRefinementState } from "@/domain/review/derive-story-map-refinement";
 import {
   sourceReferenceKey,
   type Event,
   type ImpactPlanArtifact,
+  type RippleSuggestionsArtifact,
   type Source,
   type SourceReference,
   type StoryMapArtifact,
@@ -48,6 +51,7 @@ type StoryMapReviewWorkspaceProps = {
   evidenceOptions: EvidencePickerOption[];
   initialWorldlines: Worldline[];
   initialImpactPlanArtifacts: ImpactPlanArtifact[];
+  initialRippleSuggestions: RippleSuggestionsArtifact | null;
   initialContinuationTrees: ContinuationTreeView[];
 };
 
@@ -59,6 +63,7 @@ export function StoryMapReviewWorkspace({
   evidenceOptions,
   initialWorldlines,
   initialImpactPlanArtifacts,
+  initialRippleSuggestions,
   initialContinuationTrees,
 }: StoryMapReviewWorkspaceProps) {
   const router = useRouter();
@@ -69,6 +74,10 @@ export function StoryMapReviewWorkspace({
   const derivedReview = useMemo(
     () => deriveStoryMapReview(artifact, source),
     [artifact, source],
+  );
+  const refinementState = useMemo(
+    () => deriveStoryMapRefinementState(artifact, derivedReview),
+    [artifact, derivedReview],
   );
   const defaultSelection = selectDefaultReviewItem(derivedReview);
   const [selection, setSelection] = useState<ReviewEditorSelection>(defaultSelection);
@@ -301,6 +310,24 @@ export function StoryMapReviewWorkspace({
     });
   }
 
+  function quickStart(): void {
+    setResult(null);
+    startTransition(async () => {
+      const response = await quickStartRippleAction({
+        projectId,
+        artifactId: artifact.id,
+      });
+      setResult(response);
+      if (response.ok) {
+        adoptArtifact(response.artifact);
+        setViewMode("graph");
+        setActiveWorldlineId(null);
+        setRippleOpen(true);
+        router.replace(artifactUrl(response.artifact.id, true), { scroll: false });
+      }
+    });
+  }
+
   return (
     <section className="review-workspace" aria-label="Story Workspace">
       <div className="review-workspace-toolbar guided-review-toolbar">
@@ -364,17 +391,46 @@ export function StoryMapReviewWorkspace({
               </button>
             </>
           ) : (
-            <button
-              className="primary-button compact-button"
-              disabled={pending || !derivedReview.readiness.readyForRipple}
-              onClick={confirm}
-              type="button"
-            >
-              {pending ? "正在保存…" : "确认 Story Map 并进入 Ripple"}
-            </button>
+            <>
+              <button
+                className="secondary-button compact-button"
+                disabled={pending}
+                onClick={quickStart}
+                type="button"
+              >
+                {pending ? "正在开始…" : "直接开始涟漪"}
+              </button>
+              <button
+                className="primary-button compact-button"
+                disabled={pending || !derivedReview.readiness.readyForRipple}
+                onClick={confirm}
+                type="button"
+              >
+                {pending ? "正在保存…" : "确认 Story Map 并进入 Ripple"}
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {refinementState.needsRefinement ? (
+        <section className="refinement-banner" aria-label="未精修提示">
+          <div>
+            <strong>未精修 · 可随时进入精修模式</strong>
+            <p>
+              这份 Story Map 尚未完成必要核对；带“待核对”角标的节点与结局可能影响涟漪质量。
+              之后的每一次修正都会创建新的不可变 revision。
+            </p>
+          </div>
+          <button
+            className="secondary-button compact-button"
+            onClick={() => setViewMode("review")}
+            type="button"
+          >
+            进入精修模式
+          </button>
+        </section>
+      ) : null}
 
       {storyMap.status === "draft" ? (
         <StoryMapReadiness readiness={derivedReview.readiness} />
@@ -449,6 +505,8 @@ export function StoryMapReviewWorkspace({
             </div>
             <StoryMapCanvas
               characterId={characterFilter || null}
+              needsReviewEdgeIds={refinementState.edgeIds}
+              needsReviewEventIds={refinementState.eventIds}
               onSelectEvent={selectEvent}
               selectedEventId={selectedEvent.id}
               storyMap={storyMap}
@@ -477,6 +535,8 @@ export function StoryMapReviewWorkspace({
             <RippleSimulatorPanel
               key={`${artifact.id}:${selectedEvent.id}:ripple`}
               artifact={artifact}
+              initialSuggestions={initialRippleSuggestions}
+              needsReviewEndingIds={refinementState.endingIds}
               onAccepted={(worldline, acceptedArtifact) => {
                 setWorldlines((current) => [
                   worldline,
@@ -499,6 +559,8 @@ export function StoryMapReviewWorkspace({
             <StoryMapDetails
               key={`${artifact.id}:${selectedEvent.id}`}
               artifact={artifact}
+              needsReviewEdgeIds={refinementState.edgeIds}
+              needsReviewEventIds={refinementState.eventIds}
               normalizedText={source.normalizedText}
               onLocateEvidence={setActiveEvidence}
               onRevise={revise}

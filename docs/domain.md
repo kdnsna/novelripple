@@ -51,7 +51,15 @@ rename / aliases / role、人物 merge、Event 更新/删除/有 Evidence 新增
 
 新增 Event 和 Edge 必须先从不可变 Source 派生的自然段 Evidence Unit 选择 Evidence；服务端仍只保存现有 `SourceReference[]` 并执行 offset/hash 与引用校验。不存在无 Evidence 新增 Canon Event 的路径。Edge 类型仍只有 `causes`、`enables`、`foreshadows`。
 
-Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending Candidate 已核对、无非法引用、无悬空 Edge，以及 inference / 低置信度 Event 与低置信度 Edge 的重要 Evidence 已核对。服务端基于最新 revision 重新计算；未 ready 或 stale 的确认请求 fail closed。历史 confirmed Artifact 不迁移或覆盖，新的 draft 必须通过该门才能创建 confirmed revision。
+Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending Candidate 已核对、无非法引用、无悬空 Edge，以及 inference / 低置信度 Event 与低置信度 Edge 的重要 Evidence 已核对。服务端基于最新 revision 重新计算；未 ready 或 stale 的普通确认请求 fail closed。历史 confirmed Artifact 不迁移或覆盖。读者优先流程允许不经过该门直接确认，见下方“快速确认”；它仍受 Source、Evidence、Schema 与不可变性约束。
+
+### 快速确认与“未精修”
+
+`quick_confirm_story_map` 是 Story Map review operation 之一，只服务读者优先入口。它从最新 draft 通过与其它 revision 相同的 `createRevisionFromLatest` 路径创建**新的** confirmed revision：仍执行 Source、Evidence、Story Map Schema 和 review metadata 校验，旧 revision 与旧确认保持不变；区别只是不检查 readiness，也不改写 review confirmations。因此该 revision 的 operation 记录“它是被快速确认的”，而 confirmations 记录“它还没有经过精修”。已经 confirmed 的 revision 重复快速确认幂等返回同一行；普通 `confirm_story_map` 仍需 readiness 通过，语义不变。
+
+Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `status === "confirmed"` 的不可变 Story Map revision。快速确认不会放宽这些仓库与生成器的 confirmed 检查，也不会自动创建 Worldline。
+
+“未精修”是纯派生的 UI 状态：当前 confirmed revision 的 operation 为 `quick_confirm_story_map`，且 readiness 尚未满足。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
 
 ### Story Map 生成管线（Phase 1 分块召回）
 

@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,6 +28,7 @@ import {
   createStoryMapRevision,
   getStoryMapArtifact,
   listStoryMapArtifactsForSource,
+  quickConfirmStoryMapArtifact,
 } from "@/server/repositories/story-map-artifact-repository";
 
 let temporaryDirectory: string;
@@ -900,5 +902,97 @@ describe("immutable Story Map review revisions", () => {
     });
     expect(repeated).toEqual(confirmed);
     expect(getStoryMapArtifact(artifact.id)?.storyMap.status).toBe("draft");
+  });
+});
+
+describe("reader-first quick confirmation", () => {
+  it("creates a new confirmed revision from an unreviewed draft, preserves the old row, and is idempotent", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const original = structuredClone(artifact);
+
+    expect(() =>
+      confirmStoryMapArtifact({
+        projectId: project.id,
+        artifactId: artifact.id,
+      }),
+    ).toThrow("Story Map 尚未完成必要核对");
+
+    const quickConfirmed = quickConfirmStoryMapArtifact({
+      projectId: project.id,
+      artifactId: artifact.id,
+    });
+
+    expect(quickConfirmed).toMatchObject({
+      projectId: project.id,
+      sourceId: source.id,
+      kind: "story_map_revision",
+      version: artifact.version + 1,
+      basedOnArtifactId: artifact.id,
+      generationRunId: null,
+      storyMap: {
+        version: artifact.version + 1,
+        status: "confirmed",
+      },
+      review: {
+        evidenceConfirmations: [],
+        edgeEvidenceConfirmations: [],
+        characterConfirmations: [],
+        endingCandidateConfirmations: [],
+        operation: {
+          type: "quick_confirm_story_map",
+          storyMapVersion: artifact.version + 1,
+        },
+      },
+    });
+    expect(deriveStoryMapReview(quickConfirmed, source).readiness.readyForRipple).toBe(
+      false,
+    );
+    expect(quickConfirmed.id).not.toBe(artifact.id);
+    expect(getStoryMapArtifact(artifact.id)).toEqual(original);
+
+    const repeated = quickConfirmStoryMapArtifact({
+      projectId: project.id,
+      artifactId: quickConfirmed.id,
+    });
+    expect(repeated).toEqual(quickConfirmed);
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([
+      quickConfirmed,
+      artifact,
+    ]);
+  });
+
+  it("fails closed for a different project without writing a revision", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const otherProject = createProject({ title: "Other project" });
+
+    expect(() =>
+      quickConfirmStoryMapArtifact({
+        projectId: otherProject.id,
+        artifactId: artifact.id,
+      }),
+    ).toThrow("找不到指定的 Story Map Artifact");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([
+      artifact,
+    ]);
+    expect(listStoryMapArtifactsForSource(otherProject.id, source.id)).toEqual(
+      [],
+    );
+  });
+
+  it("still fails closed on invalid evidence and leaves no confirmed revision", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const corrupted = structuredClone(artifact.storyMap);
+    corrupted.events[0]!.evidence[0]!.excerptHash = `sha256:${"0".repeat(64)}`;
+    getDatabase().run(
+      sql`UPDATE artifacts SET data_json = ${JSON.stringify(corrupted)} WHERE id = ${artifact.id}`,
+    );
+
+    expect(() =>
+      quickConfirmStoryMapArtifact({
+        projectId: project.id,
+        artifactId: artifact.id,
+      }),
+    ).toThrow("Story Map 校验失败");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toHaveLength(1);
   });
 });

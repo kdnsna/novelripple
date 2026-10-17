@@ -38,6 +38,7 @@ export const StoryMapReviewOperationTypeSchema = z.enum([
   "confirm_edge_evidence",
   "confirm_ending_candidate",
   "confirm_story_map",
+  "quick_confirm_story_map",
 ]);
 
 export const StoryMapReviewOperationSchema = z

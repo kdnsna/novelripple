@@ -24,6 +24,7 @@ import {
   getStoryMapArtifact,
   listStoryMapArtifactsForSource,
 } from "@/server/repositories/story-map-artifact-repository";
+import { listRippleSuggestionsArtifactsForStoryMap } from "@/server/repositories/ripple-suggestions-repository";
 import {
   listImpactPlanArtifactsForStoryMap,
   listProjectWorldlines,
@@ -87,6 +88,12 @@ export default async function ProjectPage({
   const selectedImpactPlanArtifacts = selectedArtifact
     ? listImpactPlanArtifactsForStoryMap(project.id, selectedArtifact.id)
     : [];
+  const initialRippleSuggestions = selectedArtifact
+    ? listRippleSuggestionsArtifactsForStoryMap(
+        project.id,
+        selectedArtifact.id,
+      )[0] ?? null
+    : null;
   const selectedContinuationTrees = selectedWorldlines.map((worldline) => {
     const artifacts = listContinuationArtifactsForWorldline(worldline.id);
     return buildContinuationTreeView(worldline.id, [
@@ -183,6 +190,7 @@ export default async function ProjectPage({
             }))}
             initialContinuationTrees={selectedContinuationTrees}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
+            initialRippleSuggestions={initialRippleSuggestions}
             initialWorldlines={selectedWorldlines}
             projectId={project.id}
             source={selectedSource}

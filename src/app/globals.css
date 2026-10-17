@@ -996,6 +996,55 @@ input:focus-visible,
   content: "◇";
 }
 
+/* 未精修 / 待核对：只表达“需要人工看一眼”，不形成分数。 */
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border: 1px solid #e0b7a8;
+  border-radius: 999px;
+  background: #f8e5dd;
+  color: var(--rust-dark);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.refinement-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border: 1px solid #e1b8a6;
+  border-bottom: 0;
+  background: #faf0e9;
+  gap: 18px;
+}
+
+.refinement-banner strong {
+  color: var(--rust-dark);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.refinement-banner p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.map-node-kicker .review-badge {
+  margin-left: 4px;
+  padding: 1px 5px;
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
 .chapter-list {
   display: grid;
   margin: 22px 0;
@@ -2526,6 +2575,40 @@ input:focus-visible,
   margin: 0;
 }
 
+.ripple-suggestions-status {
+  padding: 10px;
+  border: 1px dashed var(--line);
+  color: var(--ink-soft);
+}
+
+.ripple-suggestions-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid #e0b7a8;
+  background: #faf0e9;
+  gap: 12px;
+}
+
+.ripple-suggestions-error p {
+  color: var(--rust-dark);
+}
+
+.ripple-suggestions-secondary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--ink-soft);
+  font-size: 11px;
+  gap: 4px;
+}
+
+.ripple-suggestions-secondary .text-button {
+  padding: 0;
+  font-size: 11px;
+}
+
 .candidate-lineage {
   padding: 0.65rem 0.8rem;
   border-left: 3px solid var(--accent);
@@ -2640,6 +2723,29 @@ input:focus-visible,
   flex: 0 0 auto;
   margin-top: 2px;
   accent-color: var(--rust);
+}
+
+.ripple-mode-fieldset label > span {
+  display: grid;
+  gap: 2px;
+}
+
+.ripple-mode-fieldset label strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ripple-mode-fieldset label small {
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.anchor-choice-fieldset label > span {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .open-mode-note {

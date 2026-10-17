@@ -16,6 +16,8 @@ type StoryMapDetailsProps = {
   normalizedText: string;
   selectedEvent: Event;
   pending: boolean;
+  needsReviewEventIds?: string[];
+  needsReviewEdgeIds?: string[];
   onLocateEvidence: (evidence: SourceReference) => void;
   onRevise: (change: StoryMapRevisionChange) => void;
 };
@@ -25,6 +27,8 @@ export function StoryMapDetails({
   normalizedText,
   selectedEvent,
   pending,
+  needsReviewEventIds = [],
+  needsReviewEdgeIds = [],
   onLocateEvidence,
   onRevise,
 }: StoryMapDetailsProps) {
@@ -69,6 +73,9 @@ export function StoryMapDetails({
             ? `${Math.round((selectedEvent.confidence ?? 0) * 100)}%`
             : "Fact"}
         </span>
+        {needsReviewEventIds.includes(selectedEvent.id) ? (
+          <em className="review-badge">待核对</em>
+        ) : null}
       </div>
 
       <p className="event-summary">{selectedEvent.summary}</p>
@@ -112,6 +119,9 @@ export function StoryMapDetails({
           {relatedEdges.map((edge) => (
             <article key={edge.id}>
               <strong>{edge.type}</strong>
+              {needsReviewEdgeIds.includes(edge.id) ? (
+                <em className="review-badge">待核对</em>
+              ) : null}
               <p>{edge.explanation}</p>
               {deleteArmedEdgeId === edge.id ? (
                 <>
