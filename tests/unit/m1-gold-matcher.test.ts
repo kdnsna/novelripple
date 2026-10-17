@@ -16,6 +16,8 @@ import {
   sha256,
 } from "@/domain/source/normalize-source";
 import {
+  GOLD_ALIGNED_TRUNCATION_FACTORS,
+  M1GoldMatchSchema,
   STRICT_CONTENT_PRECISION_FLOOR,
   STRICT_CONTENT_RECALL,
   UNIT_WINDOW,
@@ -752,6 +754,164 @@ describe("M1 gold matcher", () => {
     expect(Number.isFinite(
       result.chanceBaseline.goldAlignedCopy.strict.endings.f1,
     )).toBe(true);
+  });
+
+  it("builds truncated gold-aligned copy baselines at 2x and 4x label length", () => {
+    const gold = createGold({
+      characters: [
+        { id: "hero", name: "甲" },
+        { id: "ally", name: "乙" },
+      ],
+      events: [
+        {
+          id: "g1",
+          characterIds: ["hero"],
+          evidenceUnits: [3],
+          label: "甲",
+        },
+        {
+          id: "g2",
+          characterIds: ["ally"],
+          evidenceUnits: [5],
+          label: "甲把信交给乙",
+        },
+      ],
+      causalLinks: [
+        { id: "link_1", from: "g1", to: "g2", strength: "hard" },
+      ],
+      endings: [
+        {
+          id: "end_1",
+          characterIds: ["hero"],
+          evidenceUnits: [7, 8],
+          label: "乙",
+        },
+      ],
+    });
+    const baselines = buildM1ChanceBaselines({ gold, units });
+    const whole = baselines.goldAlignedCopy;
+    const copy2x = baselines.goldAlignedTruncatedCopy2x;
+    const copy4x = baselines.goldAlignedTruncatedCopy4x;
+    const firstText = units[2]!.text;
+    const secondText = units[4]!.text;
+    const endingText = `${units[6]!.text}${units[7]!.text}`;
+    const firstLabelLength = [...gold.events[0]!.label].length;
+    const endingLabelLength = [...gold.endings[0]!.label].length;
+
+    expect(GOLD_ALIGNED_TRUNCATION_FACTORS).toEqual([2, 4]);
+    expect([...firstText].length).toBeGreaterThan(4);
+    expect(copy2x.events[0]?.summary).toBe(
+      [...firstText].slice(0, 2 * firstLabelLength).join(""),
+    );
+    expect(copy4x.events[0]?.summary).toBe(
+      [...firstText].slice(0, 4 * firstLabelLength).join(""),
+    );
+    expect(copy2x.events[0]?.title).toBe(copy2x.events[0]?.summary);
+    expect(copy4x.events[0]?.title).toBe(copy4x.events[0]?.summary);
+    // 第二个 label 足够长，2x / 4x 都截不到全文以外。
+    expect(copy2x.events[1]?.summary).toBe(secondText);
+    expect(copy4x.events[1]?.summary).toBe(secondText);
+    expect(copy2x.endingCandidates[0]?.requirement).toBe(
+      [...endingText].slice(0, 2 * endingLabelLength).join(""),
+    );
+    expect(copy4x.endingCandidates[0]?.requirement).toBe(
+      [...endingText].slice(0, 4 * endingLabelLength).join(""),
+    );
+    // goldAlignedCopy 继续复制完整原文。
+    expect(whole.id).toBe("chance_gold_aligned_copy");
+    expect(whole.events.map((event) => event.id)).toEqual([
+      "gold_aligned_copy_event_1",
+      "gold_aligned_copy_event_2",
+    ]);
+    expect(whole.edges[0]?.id).toBe("gold_aligned_copy_edge_1");
+    expect(whole.endingCandidates[0]?.id).toBe("gold_aligned_copy_ending_1");
+    expect(whole.events[0]?.summary).toBe(firstText);
+    expect(whole.events[1]?.summary).toBe(secondText);
+    expect(whole.endingCandidates[0]?.requirement).toBe(endingText);
+
+    const edgePositions = (storyMap: StoryMap) =>
+      storyMap.edges.map((edge) => ({
+        from: storyMap.events.findIndex((event) => event.id === edge.from),
+        to: storyMap.events.findIndex((event) => event.id === edge.to),
+        evidence: edge.evidence,
+      }));
+    for (const copy of [copy2x, copy4x]) {
+      expect(copy.events.map((event) => event.evidence)).toEqual(
+        whole.events.map((event) => event.evidence),
+      );
+      expect(copy.events.map((event) => event.participants)).toEqual(
+        whole.events.map((event) => event.participants),
+      );
+      expect(edgePositions(copy)).toEqual(edgePositions(whole));
+      expect(copy.endingCandidates.map((ending) => ending.evidence)).toEqual(
+        whole.endingCandidates.map((ending) => ending.evidence),
+      );
+      expect(copy.endingCandidates[0]?.targetEventId).toBe(
+        copy.events.at(-1)?.id,
+      );
+    }
+
+    const result = matchM1Gold({
+      gold,
+      source,
+      storyMap: baselines.goldAlignedTruncatedCopy4x,
+    });
+    for (const name of [
+      "goldAlignedTruncatedCopy2x",
+      "goldAlignedTruncatedCopy4x",
+    ] as const) {
+      const score = result.chanceBaseline[name];
+      expect(score).toBeDefined();
+      for (const mode of [score!.loose, score!.strict]) {
+        for (const metrics of [mode.events, mode.edges, mode.endings]) {
+          expect(Number.isFinite(metrics.f1)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("parses an old gold match report without truncated copy baselines", () => {
+    const gold = createGold({
+      characters: [{ id: "hero", name: "甲" }],
+      events: [
+        { id: "g1", characterIds: ["hero"], evidenceUnits: [3], label: "甲" },
+      ],
+      endings: [],
+    });
+    const storyMap = createStoryMap({
+      characters: [{ id: "cand_hero", name: "甲" }],
+      events: [
+        {
+          id: "event_c1",
+          participants: ["cand_hero"],
+          evidenceUnits: [3],
+        },
+      ],
+      endings: [
+        {
+          id: "ending_c1",
+          targetEventId: "event_c1",
+          requirement: "结局。",
+          evidenceUnits: [3],
+        },
+      ],
+    });
+    const current = matchM1Gold({ gold, source, storyMap });
+    const oldChance = {
+      matched: current.chanceBaseline.matched,
+      dense: current.chanceBaseline.dense,
+      stuffing: current.chanceBaseline.stuffing,
+      sourceCopy: current.chanceBaseline.sourceCopy,
+      goldAlignedCopy: current.chanceBaseline.goldAlignedCopy,
+    };
+
+    const parsed = M1GoldMatchSchema.parse({
+      ...current,
+      chanceBaseline: oldChance,
+    });
+
+    expect(parsed.chanceBaseline.goldAlignedTruncatedCopy2x).toBeUndefined();
+    expect(parsed.chanceBaseline.goldAlignedTruncatedCopy4x).toBeUndefined();
   });
 
   it("strictly matches an ending only with exact units and label content", () => {

@@ -24,6 +24,10 @@ export const STRICT_CONTENT_RECALL = 0.2;
 export const STRICT_CONTENT_PRECISION_FLOOR = 0.08;
 /** dense chance baseline：每 3 个 Unit 放一个内容无关事件。 */
 export const DENSE_BASELINE_EVENT_STRIDE = 3;
+/** truncated gold-aligned copy baseline 的截断倍数：gold label 字符数的 2x / 4x。 */
+export const GOLD_ALIGNED_TRUNCATION_FACTORS = [2, 4] as const;
+const GOLD_ALIGNED_TRUNCATION_FACTOR_2X = GOLD_ALIGNED_TRUNCATION_FACTORS[0];
+const GOLD_ALIGNED_TRUNCATION_FACTOR_4X = GOLD_ALIGNED_TRUNCATION_FACTORS[1];
 
 /**
  * 中文高频虚词 / 填充 bigram。strict 内容重合会先剔除这些 token，
@@ -149,6 +153,9 @@ const ChanceBaselineSchema = z
     stuffing: ChanceMapScoreSchema,
     sourceCopy: ChanceMapScoreSchema,
     goldAlignedCopy: ChanceMapScoreSchema,
+    // 旧报告没有截断复制基线；新报告始终写入。
+    goldAlignedTruncatedCopy2x: ChanceMapScoreSchema.optional(),
+    goldAlignedTruncatedCopy4x: ChanceMapScoreSchema.optional(),
   })
   .strict();
 
@@ -324,6 +331,12 @@ export function matchM1Gold(input: {
     stuffing: scoreChanceMap(chanceMaps.stuffing),
     sourceCopy: scoreChanceMap(chanceMaps.sourceCopy),
     goldAlignedCopy: scoreChanceMap(chanceMaps.goldAlignedCopy),
+    goldAlignedTruncatedCopy2x: scoreChanceMap(
+      chanceMaps.goldAlignedTruncatedCopy2x,
+    ),
+    goldAlignedTruncatedCopy4x: scoreChanceMap(
+      chanceMaps.goldAlignedTruncatedCopy4x,
+    ),
   };
   const lenientIdentity = scoreLenientIdentity({
     expectedCharacters: input.expectedCharacters ?? input.gold.characters,
@@ -570,11 +583,15 @@ function isCjkBigram(value: string): boolean {
  * - stuffing：与 matched 相同布局，但标题/摘要/结局要求都填入源文最高频的 30 个
  *   非停用 bigram；
  * - sourceCopy：与 matched 相同布局，但直接复制证据 Unit 的原文；
- * - goldAlignedCopy：oracle-position 复制基线。事件与结局直接使用 gold 的证据
- *   Unit 位置（gold 事件 / 结局自身的 Unit，按顺序去重），标题/摘要/结局要求
- *   复制这些 Unit 的原文。它使用 gold 位置，预期高于其它基线，用来衡量“在正确
- *   位置纯抄原文”能拿到多少分。
- * 五者都使用全部 gold 人物作为参与者，并分别用 loose / strict 评分。
+ * - goldAlignedCopy：whole-unit gold-aligned copy 基线。事件与结局直接使用 gold 的
+ *   证据 Unit 位置（gold 事件 / 结局自身的 Unit，按顺序去重），标题 / 摘要 / 结局
+ *   要求复制这些 Unit 的完整原文；
+ * - goldAlignedTruncatedCopy2x / goldAlignedTruncatedCopy4x：truncated gold-aligned
+ *   copy 基线。位置、participants、edges 与 goldAlignedCopy 相同，但复制文本截断为
+ *   `factor × gold label 字符数` 个 Unicode code point 的前缀（至少 1 个字符，最多
+ *   全文），factor 分别为 2 / 4。
+ * 这些基线都使用全部 gold 人物作为参与者，并分别用 loose / strict 评分。
+ * goldAlignedCopy 与两条 truncated 基线都不是“复制能拿到多少分”的上界。
  */
 export function buildM1ChanceBaselines(input: {
   gold: M1Gold;
@@ -585,6 +602,8 @@ export function buildM1ChanceBaselines(input: {
   stuffing: StoryMap;
   sourceCopy: StoryMap;
   goldAlignedCopy: StoryMap;
+  goldAlignedTruncatedCopy2x: StoryMap;
+  goldAlignedTruncatedCopy4x: StoryMap;
 } {
   const stuffingText = mostFrequentContentBigrams(
     input.units,
@@ -632,6 +651,16 @@ export function buildM1ChanceBaselines(input: {
       },
     }),
     goldAlignedCopy: buildGoldAlignedCopyBaseline(input.gold, input.units),
+    goldAlignedTruncatedCopy2x: buildGoldAlignedCopyBaseline(
+      input.gold,
+      input.units,
+      GOLD_ALIGNED_TRUNCATION_FACTOR_2X,
+    ),
+    goldAlignedTruncatedCopy4x: buildGoldAlignedCopyBaseline(
+      input.gold,
+      input.units,
+      GOLD_ALIGNED_TRUNCATION_FACTOR_4X,
+    ),
   };
 }
 
@@ -742,23 +771,31 @@ function goldUnitsInOrder(
 }
 
 /**
- * oracle-position 复制基线：直接使用 gold 的事件 / 结局证据 Unit 位置，
- * 复制这些 Unit 的原文。它预期高于其它基线，只衡量“位置正确时纯抄原文”的得分。
+ * whole-unit gold-aligned copy 基线：直接使用 gold 的事件 / 结局证据 Unit 位置并复制
+ * 完整原文。传入 `truncateFactor` 时生成 truncated gold-aligned copy：复制文本截断为
+ * `factor × gold label code point 数` 个字符的前缀（至少 1 个、最多全文）。
+ * 两者都使用 gold 位置，但都不是复制得分的上界。
  */
 function buildGoldAlignedCopyBaseline(
   gold: M1Gold,
   units: readonly EvidenceUnit[],
+  truncateFactor?: number,
 ): StoryMap {
+  const config = goldAlignedCopyConfig(truncateFactor);
   const characters = chanceCharacters(gold);
   const participants = characters.map((character) => character.id);
   const eventUnits = gold.events.map((event) =>
     goldUnitsInOrder(event.evidence, units),
   );
-  const events = gold.events.map((_goldEvent, index) => {
+  const events = gold.events.map((goldEvent, index) => {
     const copiedUnits = eventUnits[index]!;
-    const text = copiedUnits.map((unit) => unit.text).join("");
+    const text = truncateGoldAlignedCopyText(
+      copiedUnits.map((unit) => unit.text).join(""),
+      goldEvent.label,
+      truncateFactor,
+    );
     return {
-      id: `gold_aligned_copy_event_${index + 1}`,
+      id: `${config.idPrefix}_event_${index + 1}`,
       title: firstCharacters(text, 20),
       summary: text,
       sequence: index + 1,
@@ -773,7 +810,7 @@ function buildGoldAlignedCopyBaseline(
     Math.max(0, events.length - 1),
   );
   const edges = Array.from({ length: edgeCount }, (_, index) => ({
-    id: `gold_aligned_copy_edge_${index + 1}`,
+    id: `${config.idPrefix}_edge_${index + 1}`,
     from: events[index]!.id,
     to: events[index + 1]!.id,
     type: "causes" as const,
@@ -790,24 +827,67 @@ function buildGoldAlignedCopyBaseline(
     ? gold.endings.map((ending, index) => {
         const copiedUnits = goldUnitsInOrder(ending.evidence, units);
         return {
-          id: `gold_aligned_copy_ending_${index + 1}`,
+          id: `${config.idPrefix}_ending_${index + 1}`,
           targetEventId: targetEvent.id,
-          requirement: copiedUnits.map((unit) => unit.text).join(""),
+          requirement: truncateGoldAlignedCopyText(
+            copiedUnits.map((unit) => unit.text).join(""),
+            ending.label,
+            truncateFactor,
+          ),
           evidence: copiedUnits.map(sourceReferenceForUnit),
         };
       })
     : [];
 
   return chanceStoryMap({
-    id: "chance_gold_aligned_copy",
-    title: "Gold 对齐复制基线",
-    logline: "使用 gold 位置直接复制证据 Unit 原文的 oracle 基线",
+    id: config.mapId,
+    title: config.title,
+    logline: config.logline,
     sourceId: units[0]?.sourceId ?? "chance_source",
     characters,
     events,
     edges,
     endingCandidates,
   });
+}
+
+type GoldAlignedCopyConfig = {
+  idPrefix: string;
+  mapId: string;
+  title: string;
+  logline: string;
+};
+
+function goldAlignedCopyConfig(truncateFactor?: number): GoldAlignedCopyConfig {
+  if (truncateFactor === undefined) {
+    return {
+      idPrefix: "gold_aligned_copy",
+      mapId: "chance_gold_aligned_copy",
+      title: "Gold 对齐复制基线",
+      logline: "使用 gold 位置直接复制证据 Unit 原文的 oracle 基线",
+    };
+  }
+  return {
+    idPrefix: `gold_aligned_truncated_copy_${truncateFactor}x`,
+    mapId: `chance_gold_aligned_truncated_copy_${truncateFactor}x`,
+    title: `Gold 对齐截断复制基线 ${truncateFactor}x`,
+    logline: `使用 gold 位置按 ${truncateFactor} 倍 label 长度截断复制证据 Unit 原文的基线`,
+  };
+}
+
+/** 按 code point 截断；至少 1 个字符，但永远不会超过全文。 */
+function truncateGoldAlignedCopyText(
+  text: string,
+  label: string,
+  truncateFactor: number | undefined,
+): string {
+  if (truncateFactor === undefined) return text;
+  const characters = [...text];
+  const limit = Math.min(
+    characters.length,
+    Math.max(1, truncateFactor * [...label].length),
+  );
+  return characters.slice(0, limit).join("");
 }
 
 function buildDenseChanceBaseline(
