@@ -47,6 +47,13 @@ export const generationRuns = sqliteTable(
     worldlineId: text("worldline_id").references(
       (): AnySQLiteColumn => worldlines.id,
     ),
+    /**
+     * 本次生成绑定的 Story Map revision。Ripple Suggestions 用它把成功、
+     * 失败与 pending 尝试按 revision 计数；其它生成可以不绑定。
+     */
+    storyMapArtifactId: text("story_map_artifact_id").references(
+      (): AnySQLiteColumn => artifacts.id,
+    ),
     kind: text("kind").notNull(),
     provider: text("provider").notNull(),
     model: text("model").notNull(),
@@ -59,7 +66,14 @@ export const generationRuns = sqliteTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     completedAt: text("completed_at"),
   },
-  (table) => [index("generation_runs_project_kind_idx").on(table.projectId, table.kind)],
+  (table) => [
+    index("generation_runs_project_kind_idx").on(table.projectId, table.kind),
+    index("generation_runs_story_map_kind_idx").on(
+      table.projectId,
+      table.storyMapArtifactId,
+      table.kind,
+    ),
+  ],
 );
 
 export const jobs = sqliteTable(

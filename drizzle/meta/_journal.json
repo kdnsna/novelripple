@@ -71,6 +71,13 @@
       "when": 1786483600000,
       "tag": "0009_story_map_checkpoint_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786486400000,
+      "tag": "0010_generation_run_story_map_binding",
+      "breakpoints": true
     }
   ]
 }

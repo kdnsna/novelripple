@@ -15,6 +15,7 @@ import { closeDatabase, getDatabase } from "@/server/db/client";
 import { artifacts } from "@/server/db/schema";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import {
+  countRippleSuggestionGenerationRunsForStoryMap,
   createGenerationRun,
   listProjectGenerationRuns,
   succeedGenerationRun,
@@ -31,6 +32,7 @@ import {
   listRippleSuggestionsBatchesForStoryMap,
 } from "@/server/repositories/ripple-suggestions-repository";
 import { generateRippleSuggestions } from "@/server/ripple/generate-ripple-suggestions";
+import { rippleSuggestionAttemptLimit } from "@/server/ripple/ripple-suggestion-limits";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
@@ -86,6 +88,17 @@ class SlowAIProvider implements AIProvider {
     this.requests.push(request);
     await new Promise((resolve) => setTimeout(resolve, 25));
     return { rawOutput: this.#output };
+  }
+}
+
+/** 每次调用都失败的 provider：用于验证失败尝试也被计入上限。 */
+class FailingAIProvider implements AIProvider {
+  readonly providerName = "failing-mock";
+  readonly requests: AIProviderRequest[] = [];
+
+  async generate(request: AIProviderRequest): Promise<AIProviderResponse> {
+    this.requests.push(request);
+    throw new Error("provider unavailable");
   }
 }
 
@@ -450,6 +463,87 @@ describe("Ripple Suggestions generation", () => {
         (run) => run.kind === "ripple_suggestions",
       ),
     ).toHaveLength(runsBefore);
+    expect(
+      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+    ).toBe(2);
+  });
+
+  it("counts failed refresh attempts toward the attempt cap before any model call", async () => {
+    const { project, artifact } = await createContext();
+    const maxBatches = 2;
+    await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      maxBatches,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+
+    // 首批成功已占 1 次尝试；其余预算全部消耗在失败的换批上。
+    const attemptLimit = rippleSuggestionAttemptLimit(maxBatches);
+    const failingProviders: FailingAIProvider[] = [];
+    for (let attempt = 1; attempt < attemptLimit; attempt += 1) {
+      const provider = new FailingAIProvider();
+      failingProviders.push(provider);
+      await expect(
+        generateRippleSuggestions({
+          projectId: project.id,
+          storyMapArtifactId: artifact.id,
+          idempotencyKey: `failed-refresh-${attempt}`,
+          maxBatches,
+          provider,
+          modelConfig,
+        }),
+      ).rejects.toThrow("provider unavailable");
+    }
+
+    const failedCalls = failingProviders.reduce(
+      (total, provider) => total + provider.requests.length,
+      0,
+    );
+    expect(failedCalls).toBe(attemptLimit - 1);
+    expect(
+      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+    ).toBe(attemptLimit);
+    expect(
+      listProjectGenerationRuns(project.id)
+        .filter((run) => run.kind === "ripple_suggestions")
+        .map((run) => ({
+          status: run.status,
+          storyMapArtifactId: run.storyMapArtifactId,
+        })),
+    ).toEqual(
+      expect.arrayContaining([
+        { status: "succeeded", storyMapArtifactId: artifact.id },
+        ...Array.from({ length: attemptLimit - 1 }, () => ({
+          status: "failed",
+          storyMapArtifactId: artifact.id,
+        })),
+      ]),
+    );
+
+    // 达到尝试上限后，即使 provider 本可返回合法结果也不会再被调用。
+    const blockedProvider = new MockAIProvider([
+      JSON.stringify(validSuggestions),
+    ]);
+    await expect(
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        idempotencyKey: "over-attempt-cap",
+        maxBatches,
+        provider: blockedProvider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("生成尝试次数已达");
+
+    expect(blockedProvider.requests).toHaveLength(0);
+    expect(
+      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+    ).toBe(attemptLimit);
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(1);
   });
 
   it("fails closed on an invalid batch cap env before any model call", async () => {

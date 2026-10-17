@@ -34,6 +34,7 @@ export function createRippleSuggestionsArtifact(input: {
     !run ||
     run.projectId !== input.projectId ||
     run.worldlineId !== null ||
+    run.storyMapArtifactId !== input.storyMapArtifact.id ||
     run.kind !== "ripple_suggestions" ||
     run.status !== "succeeded"
   ) {

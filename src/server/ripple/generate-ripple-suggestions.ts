@@ -15,6 +15,7 @@ import type {
   ModelConfig,
   StructuredValidationIssue,
 } from "@/server/ai/types";
+import { countRippleSuggestionGenerationRunsForStoryMap } from "@/server/repositories/generation-run-repository";
 import {
   createRippleSuggestionsArtifact,
   findRippleSuggestionsArtifactByIdempotencyKey,
@@ -23,7 +24,10 @@ import {
   stableRippleSuggestionsArtifactId,
 } from "@/server/repositories/ripple-suggestions-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
-import { resolveRippleSuggestionMaxBatches } from "@/server/ripple/ripple-suggestion-limits";
+import {
+  resolveRippleSuggestionMaxBatches,
+  rippleSuggestionAttemptLimit,
+} from "@/server/ripple/ripple-suggestion-limits";
 
 const promptVersion = "ripple-suggestions.v4";
 
@@ -125,7 +129,10 @@ async function generateRippleSuggestionsBatch(input: {
     );
     if (raced) return { artifact: raced, generation: null };
 
-    // 按 revision 串行分配 batchIndex：不同幂等键的并发点击也不会写入同一批次。
+    // 真实并发语义：同一 revision 的 in-flight 锁只执行第一个进入的 task，
+    // 其余并发请求（即使幂等键不同）await 同一个 Promise 并收到该批次，
+    // 因此一次突发只分配一个 batchIndex、只发生一次模型调用。锁释放后
+    // 到达的新键请求才会重新读取已持久化批次，串行分配下一个 batchIndex。
     return runWithInFlightLock(
       `ripple_suggestions_batches:${input.storyMapArtifact.id}`,
       async () => {
@@ -173,11 +180,24 @@ async function generateBatch(input: {
   idempotencyKey: string | null;
   previousBatches: RippleSuggestionsArtifact[];
 }) {
-  // 批次上限在任何 Prompt 读取与模型调用之前检查。
+  // 批次与尝试上限都在任何 Prompt 读取与模型调用之前检查。
   const maxBatches = resolveRippleSuggestionMaxBatches(input.input.maxBatches);
   if (input.batchIndex >= maxBatches) {
     throw new Error(
       `Ripple Suggestions 已达到本 Story Map revision 的换一批上限（${maxBatches} 批）`,
+    );
+  }
+  // 失败调用不会留下批次 Artifact，只数批次会让失败重试无限调用模型。
+  // Generation Run 在首次 provider 调用前创建并保留失败行，因此按 revision
+  // 统计 pending / succeeded / failed 尝试，成功与失败共享 2 倍预算。
+  const attemptLimit = rippleSuggestionAttemptLimit(maxBatches);
+  const attempts = countRippleSuggestionGenerationRunsForStoryMap(
+    input.input.projectId,
+    input.storyMapArtifact.id,
+  );
+  if (attempts >= attemptLimit) {
+    throw new Error(
+      `Ripple Suggestions 生成尝试次数已达本 Story Map revision 的上限（含失败重试，最多 ${attemptLimit} 次，对应换一批上限 ${maxBatches} 批）`,
     );
   }
 
@@ -243,6 +263,7 @@ async function generateBatch(input: {
     {
       projectId: input.input.projectId,
       worldlineId: null,
+      storyMapArtifactId: input.storyMapArtifact.id,
       kind: "ripple_suggestions",
       promptVersion,
       prompt,
