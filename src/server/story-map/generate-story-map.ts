@@ -39,6 +39,10 @@ import {
   type StoryMapPool,
 } from "@/domain/story-map/assemble-story-map-candidate";
 import { generateStructured } from "@/server/ai/generate-structured";
+import {
+  resolveStoryMapLimits,
+  type StoryMapLimits,
+} from "@/server/story-map/story-map-limits";
 import type {
   AIProvider,
   ModelConfig,
@@ -74,22 +78,47 @@ const ENDING_TAIL_RATIO = 0.2;
 const ENDING_TAIL_MIN_UNITS = 3;
 /** 同时进行的分块请求数。 */
 const CHUNK_CONCURRENCY = 4;
+/** 达到该分块数时，在模型调用前打印一次规模与成本预警。 */
+export const STORY_MAP_WARN_CHUNK_COUNT = 20;
 
 export async function generateStoryMap(input: {
   projectId: string;
   sourceId: string;
   provider: AIProvider;
   modelConfig: ModelConfig;
+  limits?: Partial<StoryMapLimits>;
 }) {
   const source = getProjectSource(input.projectId, input.sourceId);
   if (!source) throw new Error("找不到指定的 Source");
 
   const templates = await loadTemplates();
+  const limits = resolveStoryMapLimits(input.limits);
   const units = deriveEvidenceUnits(source);
   const unitsById = new Map(units.map((unit) => [unit.id, unit]));
   const unitOrder = new Map(units.map((unit, index) => [unit.id, index]));
   const chunks = deriveEvidenceUnitChunks(units);
+  const estimatedBaseCalls = 2 * chunks.length + 3;
+  if (chunks.length > limits.maxChunks) {
+    throw new Error(
+      `Story Map 分块数 ${chunks.length} 超过上限 ${limits.maxChunks}（STORY_MAP_MAX_CHUNKS）；未调用模型`,
+    );
+  }
+  if (estimatedBaseCalls > limits.maxModelCalls) {
+    throw new Error(
+      `Story Map 预计基础模型调用 ${estimatedBaseCalls} 次超过上限 ${limits.maxModelCalls}（STORY_MAP_MAX_MODEL_CALLS）；未调用模型`,
+    );
+  }
+
   const nameHints = deriveNameCandidates(units);
+  let modelCalls = 0;
+  const countModelAttempt = () => {
+    modelCalls += 1;
+    if (modelCalls > limits.maxModelCalls) {
+      throw new Error(
+        `Story Map 模型调用次数超过上限 ${limits.maxModelCalls}（STORY_MAP_MAX_MODEL_CALLS）`,
+      );
+    }
+  };
   const structured = <T>(
     stage: {
       kind: string;
@@ -99,6 +128,7 @@ export async function generateStoryMap(input: {
     },
     prompt: string,
     validate: (value: T) => StructuredValidationIssue[],
+    signal?: AbortSignal,
   ) =>
     generateStructured<T>(
       {
@@ -111,6 +141,8 @@ export async function generateStoryMap(input: {
         schema: stage.schema,
         modelConfig: input.modelConfig,
         validate,
+        onAttempt: countModelAttempt,
+        ...(signal ? { signal } : {}),
       },
       input.provider,
     );
@@ -123,7 +155,21 @@ export async function generateStoryMap(input: {
     const hints = nameHints.filter((hint) => coreText.includes(hint.name));
     return { chunk, allowed, packet, hints };
   });
-  const extractions = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, (context) =>
+  const extractionPrompts = chunkContexts.map((context) =>
+    buildExtractionPrompt(templates.extract, context),
+  );
+  if (chunks.length >= STORY_MAP_WARN_CHUNK_COUNT) {
+    // 粗略下限：按抽取 prompt 长度 × 2 估算抽取 + 补抽；不含 names / endings / merge 与模型输出。
+    const estimatedInputChars = extractionPrompts.reduce(
+      (total, prompt) => total + prompt.length * 2,
+      0,
+    );
+    console.warn(
+      `[story-map] 分块数 ${chunks.length}；预计基础模型调用 ${estimatedBaseCalls} 次，最坏 ${estimatedBaseCalls * 2} 次；` +
+        `预计输入约 ${estimatedInputChars} 字符（约 ${estimatedInputChars} tokens，按 prompt 字符粗略估算）`,
+    );
+  }
+  const extractions = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, (context, index, signal) =>
     structured(
       {
         kind: "story_map_extract",
@@ -131,13 +177,14 @@ export async function generateStoryMap(input: {
         schemaName: "story_map_extraction",
         schema: StoryMapExtractionCandidateSchema,
       },
-      [templates.extract, formatNameHints("name_hints", context.hints), context.packet].join("\n\n"),
+      extractionPrompts[index]!,
       (value) => validateChunkExtraction(value, context.allowed),
+      signal,
     ),
   );
 
   // 2. 每块补抽一轮
-  const gleanings = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, (context, index) => {
+  const gleanings = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, (context, index, signal) => {
     const extraction = extractions[index]!.value;
     return structured(
       {
@@ -155,6 +202,7 @@ export async function generateStoryMap(input: {
         "</previous_extraction>",
       ].join("\n\n"),
       (value) => validateChunkGleaning(value, extraction, context.allowed),
+      signal,
     );
   });
 
@@ -299,6 +347,13 @@ function validateCandidate(
   return validateStoryMap(storyMap.data, source);
 }
 
+function buildExtractionPrompt(
+  template: string,
+  context: { packet: string; hints: NameCandidate[] },
+): string {
+  return [template, formatNameHints("name_hints", context.hints), context.packet].join("\n\n");
+}
+
 function buildChunkPacket(
   source: Source,
   chunk: EvidenceUnitChunk,
@@ -352,21 +407,39 @@ function uncoveredHints(
   );
 }
 
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
-  run: (item: T, index: number) => Promise<R>,
+  run: (item: T, index: number, signal: AbortSignal) => Promise<R>,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
+  const controller = new AbortController();
   let next = 0;
+  let failed = false;
+  let rejectFailure: (error: unknown) => void = () => {};
+  const firstFailure = new Promise<never>((_, reject) => {
+    rejectFailure = reject;
+  });
+
   async function worker() {
-    while (next < items.length) {
+    while (!failed && next < items.length) {
       const index = next++;
-      results[index] = await run(items[index]!, index);
+      try {
+        results[index] = await run(items[index]!, index, controller.signal);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          controller.abort(error);
+          rejectFailure(error);
+        }
+        return;
+      }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  // 第一处失败立即 reject；不再调度新任务，并通过 signal 中止在途请求。
+  return Promise.race([Promise.all(workers).then(() => results), firstFailure]);
 }
 
 async function loadTemplates() {

@@ -8,6 +8,12 @@ import { promisify } from "node:util";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 
 import {
+  BenchmarkRootError,
+  isPathInside,
+  resolveBenchmarkRoot,
+  type BenchmarkRootSelection,
+} from "../src/evals/benchmark-root";
+import {
   InstrumentedAIProvider,
   M1BaselineStoryReportSchema,
   M1BaselineSuiteReportSchema,
@@ -43,6 +49,7 @@ const execFileAsync = promisify(execFile);
 const repositoryRoot = process.cwd();
 const publicBenchmarkRoot = path.join(repositoryRoot, "benchmarks", "m1", "public");
 const privateBenchmarkRoot = path.join(repositoryRoot, "benchmarks", "private");
+const extraPrivateBenchmarkRoot = process.env.NOVELRIPPLE_BENCH_ROOT;
 const manifestSchemaPath = path.join(
   repositoryRoot,
   "benchmarks",
@@ -66,7 +73,9 @@ try {
   const jsonSchema = JSON.parse(await readFile(manifestSchemaPath, "utf8")) as unknown;
   const benchmarks: LoadedBenchmark[] = [];
   for (const manifestPath of manifestPaths) {
-    benchmarks.push(await loadBenchmark(manifestPath, jsonSchema));
+    benchmarks.push(
+      await loadBenchmark(manifestPath, jsonSchema, extraPrivateBenchmarkRoot),
+    );
   }
   assertM1BaselineSuite(benchmarks.map((item) => item.manifest));
 
@@ -137,11 +146,29 @@ if (report && reportDirectory) {
 async function loadBenchmark(
   suppliedManifestPath: string,
   jsonSchema: unknown,
+  extraPrivateRoot: string | undefined,
 ): Promise<LoadedBenchmark> {
   const manifestPath = await realpath(path.resolve(suppliedManifestPath));
-  const benchmarkRoot = await resolveBenchmarkRoot(manifestPath);
+  let selection: BenchmarkRootSelection | null;
+  try {
+    selection = await resolveBenchmarkRoot({
+      manifestPath,
+      publicRoot: publicBenchmarkRoot,
+      privateRoot: privateBenchmarkRoot,
+      ...(extraPrivateRoot ? { extraPrivateRoot } : {}),
+    });
+  } catch (error) {
+    if (error instanceof BenchmarkRootError) {
+      throw new BaselineSetupError(error.code);
+    }
+    throw error;
+  }
+  if (!selection) {
+    throw new BaselineSetupError("manifest_outside_benchmark_root");
+  }
+  const benchmarkRoot = selection.root;
   const storyDirectory = path.dirname(manifestPath);
-  if (!isInside(benchmarkRoot, storyDirectory)) {
+  if (!isPathInside(benchmarkRoot, storyDirectory)) {
     throw new BaselineSetupError("manifest_outside_benchmark_root");
   }
 
@@ -159,8 +186,11 @@ async function loadBenchmark(
     throw new BaselineSetupError("manifest_invalid");
   }
   const sourcePath = await realpath(path.resolve(storyDirectory, sourcePathValue));
-  if (!isInside(storyDirectory, sourcePath)) {
+  if (!isPathInside(storyDirectory, sourcePath)) {
     throw new BaselineSetupError("source_outside_story_directory");
+  }
+  if (!isPathInside(benchmarkRoot, sourcePath)) {
+    throw new BaselineSetupError("source_outside_benchmark_root");
   }
   const sourceBytes = await readFile(sourcePath);
   let sourceText: string;
@@ -179,10 +209,7 @@ async function loadBenchmark(
   } catch {
     throw new BaselineSetupError("manifest_contract_failed");
   }
-  const expectedVisibility = benchmarkRoot === publicBenchmarkRoot
-    ? "public"
-    : "private";
-  if (manifest.visibility !== expectedVisibility) {
+  if (manifest.visibility !== selection.visibility) {
     throw new BaselineSetupError("manifest_visibility_mismatch");
   }
   return {
@@ -190,18 +217,6 @@ async function loadBenchmark(
     sourceBytes,
     fileName: path.basename(sourcePath),
   };
-}
-
-async function resolveBenchmarkRoot(manifestPath: string): Promise<string> {
-  const resolvedPublicRoot = await realpath(publicBenchmarkRoot);
-  if (isInside(resolvedPublicRoot, manifestPath)) return publicBenchmarkRoot;
-  try {
-    const resolvedPrivateRoot = await realpath(privateBenchmarkRoot);
-    if (isInside(resolvedPrivateRoot, manifestPath)) return privateBenchmarkRoot;
-  } catch {
-    // A missing private directory is a valid repository state.
-  }
-  throw new BaselineSetupError("manifest_outside_benchmark_root");
 }
 
 async function runStoryMapBaseline(
@@ -355,11 +370,6 @@ async function readCommitSha(): Promise<string> {
 function createRunId(evaluatedAt: string, commitSha: string): string {
   const timestamp = evaluatedAt.replace(/[-:.TZ]/g, "");
   return `${timestamp}-${commitSha.slice(0, 7)}-${randomUUID().slice(0, 8)}`;
-}
-
-function isInside(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function elapsedMilliseconds(startedAt: number): number {

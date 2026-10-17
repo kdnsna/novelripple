@@ -235,14 +235,28 @@ export function validateRoster(
     issues.push({ path: "characters", message: `重复人物 ID：${duplicate}` });
   }
   const poolIds = new Set(pool.characters.map((item) => item.id));
+  const poolById = new Map(pool.characters.map((item) => [item.id, item]));
   const assigned = new Map<string, number>();
   roster.characters.forEach((character, index) => {
     character.mergedFrom.forEach((candidateId, mergedIndex) => {
-      if (!poolIds.has(candidateId)) {
+      const candidate = poolById.get(candidateId);
+      if (!candidate) {
         issues.push({
           path: `characters.${index}.mergedFrom.${mergedIndex}`,
           message: `mergedFrom 引用了未知人物候选：${candidateId}`,
         });
+      } else {
+        const candidateName = candidate.name.trim();
+        const mergedName = character.name.trim();
+        const aliases = character.aliases.map((alias) => alias.trim());
+        if (candidateName !== mergedName && !aliases.includes(candidateName)) {
+          issues.push({
+            path: `characters.${index}.mergedFrom.${mergedIndex}`,
+            message:
+              `合并候选取名不一致：${candidateId} 的 name 是“${candidate.name}”，` +
+              `合并后人物是“${character.name}”；候选名必须等于 name 或出现在 aliases 中`,
+          });
+        }
       }
       assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
     });
@@ -377,6 +391,12 @@ export function applyMerge(
   | { success: true; candidate: StoryMapContentCandidate }
   | { success: false; issues: AssemblyIssue[] } {
   const issues: AssemblyIssue[] = [];
+  // 合并轮只能引用它本轮看到的事件、已有边和结局的证据 Unit；全书存在不算数。
+  const allowedUnitIds = new Set([
+    ...pool.events.flatMap((event) => event.evidenceUnitIds),
+    ...pool.edges.flatMap((edge) => edge.evidenceUnitIds),
+    ...endings.flatMap((ending) => ending.evidenceUnitIds),
+  ]);
   const eventIds = new Set(pool.events.map((item) => item.id));
   const duplicateOf = new Map<string, string>();
   const keepers = new Set<string>();
@@ -407,6 +427,7 @@ export function applyMerge(
     if (!eventIds.has(edge.from) || !eventIds.has(edge.to)) {
       issues.push({ path: `edges.${index}`, message: `因果边包含悬空引用：${edge.from} → ${edge.to}` });
     }
+    issues.push(...checkUnits(edge.evidenceUnitIds, allowedUnitIds, `edges.${index}.evidenceUnitIds`));
   });
   for (const duplicate of duplicates(merge.edges.map((item) => item.id))) {
     issues.push({ path: "edges", message: `重复边 ID：${duplicate}` });
@@ -447,26 +468,37 @@ export function applyMerge(
     return { ...event, sequence: index + 1 };
   });
 
-  const seenEdges = new Set<string>();
+  const seenEdges = new Map<string, StoryMapCandidateEdge>();
   const edges: StoryMapCandidateEdge[] = [];
   for (const edge of [...pool.edges, ...merge.edges]) {
     const from = resolve(edge.from);
     const to = resolve(edge.to);
+    if (from === to) continue;
     const key = `${from}|${to}|${edge.type}`;
-    if (from === to || seenEdges.has(key)) continue;
-    seenEdges.add(key);
-    edges.push({ ...edge, from, to });
+    const existing = seenEdges.get(key);
+    if (existing) {
+      // 同一 from|to|type 的边（含经 duplicateEventGroups 归并的边）合并证据，不只是留第一条。
+      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
+      continue;
+    }
+    const kept = { ...edge, from, to };
+    seenEdges.set(key, kept);
+    edges.push(kept);
   }
 
-  const seenEndings = new Set<string>();
-  const endingCandidates = endings
-    .map((ending) => ({ ...ending, targetEventId: resolve(ending.targetEventId) }))
-    .filter((ending) => {
-      const key = `${ending.targetEventId}|${ending.requirement}`;
-      if (seenEndings.has(key)) return false;
-      seenEndings.add(key);
-      return true;
-    });
+  const endingByKey = new Map<string, StoryMapCandidateEnding>();
+  const endingCandidates: StoryMapCandidateEnding[] = [];
+  for (const ending of endings) {
+    const resolved = { ...ending, targetEventId: resolve(ending.targetEventId) };
+    const key = `${resolved.targetEventId}|${resolved.requirement}`;
+    const existing = endingByKey.get(key);
+    if (existing) {
+      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...resolved.evidenceUnitIds]);
+      continue;
+    }
+    endingByKey.set(key, resolved);
+    endingCandidates.push(resolved);
+  }
 
   return {
     success: true,

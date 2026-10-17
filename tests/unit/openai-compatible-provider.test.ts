@@ -135,6 +135,23 @@ describe("OpenAI-compatible provider", () => {
     expect(requestOptions).toEqual([{ timeout: 120_000 }]);
   });
 
+  it("passes the optional abort signal to the upstream request", async () => {
+    const { client, requestOptions } = createFakeClient();
+    const provider = new OpenAICompatibleProvider({
+      providerName: "abort-compatible",
+      apiKey: "test-key",
+      client,
+    });
+    const controller = new AbortController();
+    const abortable = { ...request("json_schema"), signal: controller.signal };
+
+    await provider.generate(abortable);
+
+    expect(requestOptions).toEqual([
+      { timeout: 120_000, signal: controller.signal },
+    ]);
+  });
+
   it("passes explicit repair context to the next provider request", async () => {
     const { client, calls } = createFakeClient('{"answer":"fixed"}');
     const provider = new OpenAICompatibleProvider({

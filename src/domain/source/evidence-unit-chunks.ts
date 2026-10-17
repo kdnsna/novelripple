@@ -13,6 +13,8 @@ import type { EvidenceUnit } from "@/domain/source/evidence-units";
 export const CHUNK_TARGET_CHARS = 6_000;
 export const CHUNK_MIN_CHARS = 3_000;
 export const CHUNK_MAX_CHARS = 9_000;
+/** 单个自然段的硬上限：超过即 fail closed，不切分自然段（Unit ID 必须稳定）。 */
+export const CHUNK_HARD_MAX_CHARS = 2 * CHUNK_MAX_CHARS;
 /** 每块前面附带的只读上下文自然段数（可以引用，但不负责抽取）。 */
 export const CHUNK_CONTEXT_UNITS = 2;
 
@@ -31,16 +33,26 @@ export function deriveEvidenceUnitChunks(
     targetChars?: number;
     minChars?: number;
     maxChars?: number;
+    hardMaxChars?: number;
     contextUnits?: number;
   } = {},
 ): EvidenceUnitChunk[] {
   const target = options.targetChars ?? CHUNK_TARGET_CHARS;
   const min = options.minChars ?? CHUNK_MIN_CHARS;
   const max = options.maxChars ?? CHUNK_MAX_CHARS;
+  const hardMax = options.hardMaxChars ?? CHUNK_HARD_MAX_CHARS;
   const contextCount = options.contextUnits ?? CHUNK_CONTEXT_UNITS;
   if (units.length === 0) throw new Error("Evidence Unit 不能为空");
   if (!(min > 0 && min <= target && target <= max)) {
     throw new Error("分块长度参数无效");
+  }
+  if (hardMax < max) throw new Error("分块硬上限不能小于最大长度");
+  const oversized = units.find((unit) => unit.text.length > hardMax);
+  if (oversized) {
+    throw new Error(
+      `Evidence Unit 超出硬上限：${oversized.id} 为 ${oversized.text.length} 字符，硬上限 ${hardMax}；` +
+        "不切分自然段以保持 Unit ID 稳定",
+    );
   }
 
   const groups: EvidenceUnit[][] = [];
@@ -66,8 +78,15 @@ export function deriveEvidenceUnitChunks(
   const sourceId = units[0]!.sourceId;
   let consumed = 0;
   return groups.map((group, index) => {
-    const context = units.slice(Math.max(0, consumed - contextCount), consumed);
+    let context = units.slice(Math.max(0, consumed - contextCount), consumed);
+    const coreLength = textLength(group);
     consumed += group.length;
+    // 先丢最旧的上下文，保证 core + context 尽量不超过 max；core 自身超长时只能清空上下文。
+    let totalLength = coreLength + textLength(context);
+    while (context.length > 0 && totalLength > max) {
+      totalLength -= context[0]!.text.length;
+      context = context.slice(1);
+    }
     return {
       id: `chunk:${sourceId}:${String(index + 1).padStart(4, "0")}`,
       index,

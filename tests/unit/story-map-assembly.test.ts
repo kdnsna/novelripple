@@ -86,6 +86,14 @@ describe("roster pass", () => {
   });
 
   it("keeps identities separate when the roster is not certain they are the same person", () => {
+    const separatePool: StoryMapPool = {
+      characters: [character("char_lin", "林舟"), character("char_lin__c2", "林周")],
+      events: [
+        { ...event("event_meet", "u1", ["char_lin"]), chunkIndex: 0 },
+        { ...event("event_talk", "u2", ["char_lin__c2"]), chunkIndex: 1 },
+      ],
+      edges: [],
+    };
     const roster: StoryMapRosterCandidate = {
       characters: [
         {
@@ -107,8 +115,8 @@ describe("roster pass", () => {
       ],
     };
 
-    expect(validateRoster(roster, pool)).toEqual([]);
-    const applied = applyRoster(pool, roster);
+    expect(validateRoster(roster, separatePool)).toEqual([]);
+    const applied = applyRoster(separatePool, roster);
 
     expect(applied.characters.map((item) => [item.id, item.name])).toEqual([
       ["char_lin", "林舟"],
@@ -118,6 +126,41 @@ describe("roster pass", () => {
       ["char_lin"],
       ["char_lin__c2"],
     ]);
+  });
+
+  it("rejects a wrong merge when a candidate name is neither the merged name nor an alias", () => {
+    const wrongPool: StoryMapPool = {
+      characters: [
+        character("char_lin", "林舟"),
+        character("char_lin__c2", " 林周 "),
+      ],
+      events: [],
+      edges: [],
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_lin",
+          name: "林舟",
+          aliases: ["阿舟"],
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_lin", "char_lin__c2"],
+        },
+      ],
+    };
+
+    expect(validateRoster(roster, wrongPool)).toEqual([
+      {
+        path: "characters.0.mergedFrom.1",
+        message:
+          "合并候选取名不一致：char_lin__c2 的 name 是“ 林周 ”，合并后人物是“林舟”；" +
+          "候选名必须等于 name 或出现在 aliases 中",
+      },
+    ]);
+
+    roster.characters[0]!.aliases = [" 阿舟 ", " 林周 "];
+    expect(validateRoster(roster, wrongPool)).toEqual([]);
   });
 
   it("rejects unknown candidate IDs and every candidate that is not assigned exactly once", () => {

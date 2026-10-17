@@ -49,7 +49,7 @@ export type OpenAICompatibleClient = {
     completions: {
       create(
         request: ChatCompletionRequest,
-        options?: { timeout: number },
+        options?: { timeout: number; signal?: AbortSignal },
       ): Promise<ChatCompletionResponse>;
     };
   };
@@ -136,7 +136,7 @@ export class OpenAICompatibleProvider implements AIProvider {
           ? { max_tokens: modelConfig.maxTokens }
           : {}),
       },
-      { timeout: requestTimeoutMs },
+      { timeout: requestTimeoutMs, ...(request.signal ? { signal: request.signal } : {}) },
     );
     const content = completion.choices[0]?.message.content;
 
