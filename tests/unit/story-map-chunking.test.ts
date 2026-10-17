@@ -219,11 +219,11 @@ describe("chunk candidate assembly", () => {
       ["e1__c2", ["a__c2"]],
     ]);
 
-    const incomplete = { characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s", mergedFrom: ["a"] }] };
+    const incomplete = { characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s", mergedFrom: ["a"] }], rejectedCandidateIds: [] };
     expect(validateRoster(incomplete, pool).map((issue) => issue.message)).toEqual([
       "人物候选没有归入任何人物：a__c2",
     ]);
-    const roster = { characters: [{ ...incomplete.characters[0]!, mergedFrom: ["a", "a__c2"] }] };
+    const roster = { characters: [{ ...incomplete.characters[0]!, mergedFrom: ["a", "a__c2"] }], rejectedCandidateIds: [] };
     expect(validateRoster(roster, pool)).toEqual([]);
     const merged = applyRoster(pool, roster);
     expect(merged.events.map((e) => e.participants)).toEqual([["a"], ["a"]]);

@@ -138,7 +138,7 @@ describe("chunked Story Map recall pipeline", () => {
   });
 
   it("creates a valid ripple-001 draft Artifact through every stage with traceable runs", async () => {
-    const { fixture, project, source, chunks, responses } = await createContext();
+    const { fixture, project, source, units, chunks, responses } = await createContext();
     const sourceBefore = structuredClone(source);
     const provider = new MockAIProvider(responses);
 
@@ -191,6 +191,19 @@ describe("chunked Story Map recall pipeline", () => {
     expect(provider.requests[stage.names]?.prompt).not.toContain("<story_chunk");
     expect(provider.requests[stage.endings]?.prompt).toContain("<story_ending_text");
     expect(provider.requests[stage.merge]?.prompt).toContain("duplicateEventGroups");
+    const unitTextById = new Map(units.map((unit) => [unit.id, unit.text]));
+    const totalCoreChars = chunks.reduce(
+      (total, chunk) =>
+        total +
+        chunk.coreUnitIds.reduce((sum, id) => sum + unitTextById.get(id)!.length, 0),
+      0,
+    );
+    const lowerTarget = Math.max(3, Math.round(totalCoreChars / 1000));
+    const upperTarget = Math.max(lowerTarget, Math.round(totalCoreChars / 600));
+    const mergePrompt = provider.requests[stage.merge]?.prompt;
+    expect(mergePrompt).toContain("<granularity_hint>");
+    expect(mergePrompt).toContain(`"coreTextChars":${totalCoreChars}`);
+    expect(mergePrompt).toContain(`"targetEventRange":[${lowerTarget},${upperTarget}]`);
 
     const runs = listProjectGenerationRuns(project.id);
     const describeRun = (run: { kind: string; promptVersion: string; status: string }) =>

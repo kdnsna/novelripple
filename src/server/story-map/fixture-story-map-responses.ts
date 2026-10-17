@@ -79,6 +79,7 @@ export function buildFixtureStoryMapResponses(
     characters: storyMap.characters
       .filter((character) => mergedFrom.has(character.id))
       .map((character) => ({ ...character, mergedFrom: mergedFrom.get(character.id)! })),
+    rejectedCandidateIds: [],
   });
   const endings = StoryMapEndingPassCandidateSchema.parse({
     additionalEvents: [],

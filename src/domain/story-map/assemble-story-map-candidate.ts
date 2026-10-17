@@ -247,20 +247,20 @@ export function isGroupCharacter(
 }
 
 /**
- * 在人名归并前丢弃群体候选，并从事件参与者中移除。
- * 最小例外：某事件只剩群体参与者时，保留第一个群体，避免事件失去全部参与者。
+ * 从池中丢弃指定人物候选，并从事件参与者中移除。
+ * 最小例外：某事件只剩被丢弃的参与者时，保留第一个，避免事件失去全部参与者。
  */
-export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
-  const groupIds = new Set(
-    pool.characters.filter(isGroupCharacter).map((character) => character.id),
-  );
-  if (groupIds.size === 0) return pool;
-  const keptGroupIds = new Set<string>();
+export function dropCandidates(
+  pool: StoryMapPool,
+  droppedIds: ReadonlySet<string>,
+): StoryMapPool {
+  if (droppedIds.size === 0) return pool;
+  const keptIds = new Set<string>();
   const events = pool.events.map((event) => {
-    const participants = event.participants.filter((id) => !groupIds.has(id));
+    const participants = event.participants.filter((id) => !droppedIds.has(id));
     if (participants.length === 0 && event.participants.length > 0) {
       const kept = event.participants[0]!;
-      keptGroupIds.add(kept);
+      keptIds.add(kept);
       return { ...event, participants: [kept] };
     }
     return participants.length === event.participants.length
@@ -270,10 +270,21 @@ export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
   return {
     ...pool,
     characters: pool.characters.filter(
-      (character) => !groupIds.has(character.id) || keptGroupIds.has(character.id),
+      (character) => !droppedIds.has(character.id) || keptIds.has(character.id),
     ),
     events,
   };
+}
+
+/**
+ * 在人名归并前丢弃群体候选，并从事件参与者中移除。
+ * 最小例外：某事件只剩群体参与者时，保留第一个群体，避免事件失去全部参与者。
+ */
+export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
+  return dropCandidates(
+    pool,
+    new Set(pool.characters.filter(isGroupCharacter).map((character) => character.id)),
+  );
 }
 
 // ── 人名轮次 ──
@@ -313,6 +324,15 @@ export function validateRoster(
       assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
     });
   });
+  roster.rejectedCandidateIds.forEach((candidateId, index) => {
+    if (!poolById.has(candidateId)) {
+      issues.push({
+        path: `rejectedCandidateIds.${index}`,
+        message: `rejectedCandidateIds 引用了未知人物候选：${candidateId}`,
+      });
+    }
+    assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
+  });
   for (const id of poolIds) {
     const count = assigned.get(id) ?? 0;
     if (count !== 1) {
@@ -336,15 +356,27 @@ export function applyRoster(
   for (const character of roster.characters) {
     for (const candidateId of character.mergedFrom) mapping.set(candidateId, character.id);
   }
+  const rejectedIds = new Set(roster.rejectedCandidateIds);
+  // 被拒候选从人物和事件参与者中移除；只剩被拒参与者的事件按最小例外保留第一个。
+  const withoutRejected = dropCandidates(pool, rejectedIds);
+  const keptRejected = withoutRejected.characters
+    .filter((character) => rejectedIds.has(character.id))
+    .map(({ kind: _kind, ...character }) => {
+      void _kind;
+      return character;
+    });
   return {
-    characters: roster.characters.map((character) => ({
-      id: character.id,
-      name: character.name,
-      aliases: character.aliases,
-      role: character.role,
-      initialState: character.initialState,
-    })),
-    events: pool.events.map((event) => ({
+    characters: [
+      ...roster.characters.map((character) => ({
+        id: character.id,
+        name: character.name,
+        aliases: character.aliases,
+        role: character.role,
+        initialState: character.initialState,
+      })),
+      ...keptRejected,
+    ],
+    events: withoutRejected.events.map((event) => ({
       ...event,
       participants: unique(event.participants.map((id) => mapping.get(id) ?? id)),
     })),

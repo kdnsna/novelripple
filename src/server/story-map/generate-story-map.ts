@@ -269,6 +269,12 @@ export async function generateStoryMap(input: {
   const withEndings = applyEndingPass(withRoster, endingPass.value);
 
   // 5. 全书合并（Artifact 绑定这一 Run）
+  const totalCoreChars = chunks.reduce(
+    (total, chunk) =>
+      total +
+      chunk.coreUnitIds.reduce((sum, id) => sum + unitsById.get(id)!.text.length, 0),
+    0,
+  );
   let finalCandidate: StoryMapContentCandidate | undefined;
   const merge = await structured(
     {
@@ -279,6 +285,7 @@ export async function generateStoryMap(input: {
     },
     [
       templates.merge,
+      formatGranularityHint(totalCoreChars),
       "<events>",
       JSON.stringify(compactEvents(withEndings.pool)),
       "</events>",
@@ -395,6 +402,17 @@ function compactEvents(pool: StoryMapPool) {
 
 function formatNameHints(tag: string, hints: NameCandidate[]): string {
   return `<${tag}>${JSON.stringify(hints.map(({ name, count }) => ({ name, count })))}</${tag}>`;
+}
+
+/** 最终合并轮的事件预算提示：按核心文本字符数给出目标事件范围（下限 3）。 */
+function formatGranularityHint(coreTextChars: number): string {
+  const lower = Math.max(3, Math.round(coreTextChars / 1000));
+  const upper = Math.max(lower, Math.round(coreTextChars / 600));
+  return [
+    "<granularity_hint>",
+    JSON.stringify({ coreTextChars, targetEventRange: [lower, upper] }),
+    "</granularity_hint>",
+  ].join("\n");
 }
 
 /** 人名轮只看到“尚未覆盖、且不像群体”的规则候选，避免把群体名当成别名。 */

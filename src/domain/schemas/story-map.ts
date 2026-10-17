@@ -154,7 +154,10 @@ export const StoryMapGleaningCandidateSchema = z
   })
   .strict();
 
-/** 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物。 */
+/**
+ * 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物，
+ * 或明确列入 `rejectedCandidateIds`（只被提及/回忆、群体、只评论的叙事者等）。
+ */
 export const StoryMapRosterCandidateSchema = z
   .object({
     characters: z
@@ -164,6 +167,7 @@ export const StoryMapRosterCandidateSchema = z
         }).strict(),
       )
       .min(1),
+    rejectedCandidateIds: z.array(z.string().min(1)),
   })
   .strict();
 
