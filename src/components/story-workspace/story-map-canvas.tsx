@@ -25,6 +25,7 @@ type StoryMapCanvasProps = {
   characterId?: string | null;
   needsReviewEventIds?: string[];
   needsReviewEdgeIds?: string[];
+  uncertainEdgeIds?: string[];
 };
 
 const nodeWidth = 184;
@@ -65,6 +66,7 @@ export function StoryMapCanvas({
   characterId = null,
   needsReviewEventIds = [],
   needsReviewEdgeIds = [],
+  uncertainEdgeIds = [],
 }: StoryMapCanvasProps) {
   const [lastDraggedNodeId, setLastDraggedNodeId] = useState("");
   const needsReviewEvents = useMemo(
@@ -74,6 +76,10 @@ export function StoryMapCanvas({
   const needsReviewEdges = useMemo(
     () => new Set(needsReviewEdgeIds),
     [needsReviewEdgeIds],
+  );
+  const uncertainEdges = useMemo(
+    () => new Set(uncertainEdgeIds),
+    [uncertainEdgeIds],
   );
   const visibleEvents = useMemo(
     () =>
@@ -210,7 +216,9 @@ export function StoryMapCanvas({
             : edge.type === "enables"
               ? "使能"
               : "伏笔"
-        }${needsReviewEdges.has(edge.id) ? " · 待核对" : ""}`,
+        }${uncertainEdges.has(edge.id) ? " · 不确定" : ""}${
+          needsReviewEdges.has(edge.id) ? " · 待核对" : ""
+        }`,
         style: {
           stroke: edgeColors[edge.type],
           strokeWidth: edge.from === selectedEventId ? 2.4 : 1.25,
@@ -225,7 +233,7 @@ export function StoryMapCanvas({
           height: 14,
         },
       })),
-    [needsReviewEdges, selectedEventId, visibleStoryEdges],
+    [needsReviewEdges, selectedEventId, uncertainEdges, visibleStoryEdges],
   );
   const [edges, setEdges, onEdgesChange] = useEdgesState(computedEdges);
 

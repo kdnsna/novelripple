@@ -474,6 +474,7 @@ export function validateStoryMapReview(
   const endingCandidateIds = new Set(
     storyMap.endingCandidates.map((ending) => ending.id),
   );
+  const edgeIds = new Set(storyMap.edges.map((edge) => edge.id));
 
   review.evidenceConfirmations.forEach((confirmation, index) => {
     const event = storyMap.events.find(
@@ -563,6 +564,21 @@ export function validateStoryMapReview(
       issues.push({
         path: `endingCandidateConfirmations.${index}`,
         message: `Ending 确认引用了未知 Candidate：${endingId}`,
+      });
+    }
+  });
+
+  for (const duplicate of duplicateValues(review.uncertainEdgeIds)) {
+    issues.push({
+      path: "uncertainEdgeIds",
+      message: `Edge 不确定标记重复：${duplicate}`,
+    });
+  }
+  review.uncertainEdgeIds.forEach((edgeId, index) => {
+    if (!edgeIds.has(edgeId)) {
+      issues.push({
+        path: `uncertainEdgeIds.${index}`,
+        message: `Edge 不确定标记引用了未知 Edge：${edgeId}`,
       });
     }
   });

@@ -159,6 +159,7 @@ describe("Story Map Artifact persistence", () => {
         edgeEvidenceConfirmations: [],
         characterConfirmations: [],
         endingCandidateConfirmations: [],
+        uncertainEdgeIds: [],
         operation: null,
       },
       storyMap: {
@@ -484,6 +485,134 @@ describe("immutable Story Map review revisions", () => {
       false,
     );
     expect(getStoryMapArtifact(added.id)?.storyMap.edges).toContainEqual(edge);
+  });
+
+
+  it("marks and clears Edge uncertainty through idempotent immutable revisions", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const edge = artifact.storyMap.edges[0]!;
+    const original = structuredClone(artifact);
+
+    const marked = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "mark_edge_uncertain", edgeId: edge.id },
+    });
+
+    expect(marked).toMatchObject({
+      kind: "story_map_revision",
+      version: artifact.version + 1,
+      basedOnArtifactId: artifact.id,
+      review: {
+        uncertainEdgeIds: [edge.id],
+        operation: {
+          type: "mark_edge_uncertain",
+          storyMapVersion: artifact.version + 1,
+        },
+      },
+    });
+    expect(getStoryMapArtifact(artifact.id)).toEqual(original);
+
+    const repeatedMark = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: marked.id,
+      change: { type: "mark_edge_uncertain", edgeId: edge.id },
+    });
+    expect(repeatedMark).toEqual(marked);
+    expect(listStoryMapArtifactsForSource(project.id, artifact.sourceId)).toHaveLength(2);
+
+    const cleared = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: marked.id,
+      change: { type: "clear_edge_uncertain", edgeId: edge.id },
+    });
+    expect(cleared.review.uncertainEdgeIds).toEqual([]);
+    expect(cleared.review.operation?.type).toBe("clear_edge_uncertain");
+
+    const repeatedClear = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: cleared.id,
+      change: { type: "clear_edge_uncertain", edgeId: edge.id },
+    });
+    expect(repeatedClear).toEqual(cleared);
+    expect(
+      listStoryMapArtifactsForSource(project.id, artifact.sourceId),
+    ).toHaveLength(3);
+  });
+
+  it("removes uncertainty when the marked Edge or its Event is deleted", async () => {
+    const { project, artifact } = await createInitialArtifact();
+    const edge = artifact.storyMap.edges[0]!;
+
+    const marked = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "mark_edge_uncertain", edgeId: edge.id },
+    });
+    const deletedEdge = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: marked.id,
+      change: { type: "delete_edge", edgeId: edge.id },
+    });
+    expect(deletedEdge.review.uncertainEdgeIds).toEqual([]);
+
+    const eventEdge = artifact.storyMap.edges[1]!;
+    const markedEventEdge = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: deletedEdge.id,
+      change: { type: "mark_edge_uncertain", edgeId: eventEdge.id },
+    });
+    const deletedEvent = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: markedEventEdge.id,
+      change: { type: "delete_event", eventId: eventEdge.from },
+    });
+    expect(deletedEvent.review.uncertainEdgeIds).toEqual([]);
+  });
+
+  it("replaces Event Evidence while invalidating its confirmations and preserving the old row", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+    const event = artifact.storyMap.events[0]!;
+    const unit = deriveEvidenceUnits(source)[2]!;
+    const evidence = sourceReferenceForUnit(unit);
+    const confirmed = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: {
+        type: "confirm_evidence",
+        eventId: event.id,
+        evidence: event.evidence[0],
+      },
+    });
+    const original = structuredClone(confirmed);
+
+    const revised = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: confirmed.id,
+      change: { type: "update_event", eventId: event.id, evidence: [evidence] },
+    });
+
+    expect(
+      revised.storyMap.events.find((candidate) => candidate.id === event.id)
+        ?.evidence,
+    ).toEqual([evidence]);
+    expect(revised.review.evidenceConfirmations).toEqual([]);
+    expect(getStoryMapArtifact(confirmed.id)).toEqual(original);
+  });
+
+  it("fails closed for uncertainty on an unknown Edge without writing a revision", async () => {
+    const { project, source, artifact } = await createInitialArtifact();
+
+    expect(() =>
+      createStoryMapRevision({
+        projectId: project.id,
+        artifactId: artifact.id,
+        change: { type: "mark_edge_uncertain", edgeId: "edge_missing" },
+      }),
+    ).toThrow("找不到指定的 Story Edge");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([
+      artifact,
+    ]);
   });
 
   it("adds a missing Event only with valid selected Source Evidence", async () => {
@@ -938,6 +1067,7 @@ describe("reader-first quick confirmation", () => {
         edgeEvidenceConfirmations: [],
         characterConfirmations: [],
         endingCandidateConfirmations: [],
+        uncertainEdgeIds: [],
         operation: {
           type: "quick_confirm_story_map",
           storyMapVersion: artifact.version + 1,

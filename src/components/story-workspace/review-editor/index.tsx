@@ -46,6 +46,7 @@ export function StoryMapReviewEditor({
       <EventEditor
         artifact={artifact}
         eventId={selection.eventId}
+        evidenceOptions={evidenceOptions}
         normalizedText={normalizedText}
         onLocateEvidence={onLocateEvidence}
         onRevise={onRevise}
@@ -131,6 +132,7 @@ export function StoryMapReviewEditor({
     <EventEditor
       artifact={artifact}
       eventId={item.targetId}
+      evidenceOptions={evidenceOptions}
       normalizedText={normalizedText}
       onLocateEvidence={onLocateEvidence}
       onRevise={onRevise}

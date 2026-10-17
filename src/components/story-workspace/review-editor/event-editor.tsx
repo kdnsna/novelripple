@@ -19,6 +19,7 @@ import { MissingTarget } from "./missing-target";
 type EventEditorProps = {
   artifact: StoryMapArtifact;
   eventId: string;
+  evidenceOptions: EvidencePickerOption[];
   normalizedText: string;
   onLocateEvidence: (evidence: SourceReference) => void;
   onRevise: (change: StoryMapRevisionChange) => void;
@@ -28,12 +29,15 @@ type EventEditorProps = {
 export function EventEditor({
   artifact,
   eventId,
+  evidenceOptions,
   normalizedText,
   onLocateEvidence,
   onRevise,
   pending,
 }: EventEditorProps) {
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [replacementEvidence, setReplacementEvidence] =
+    useState<SourceReference | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const event = artifact.storyMap.events.find(
     (candidate) => candidate.id === eventId,
@@ -63,6 +67,7 @@ export function EventEditor({
         .filter(Boolean),
       evidenceKind: String(data.get("evidenceKind")) as Event["evidenceKind"],
       ...(confidenceValue ? { confidence: Number(confidenceValue) } : {}),
+      ...(replacementEvidence ? { evidence: [replacementEvidence] } : {}),
     });
   }
 
@@ -146,6 +151,13 @@ export function EventEditor({
               </label>
             ))}
           </fieldset>
+          <EvidenceUnitPicker
+            artifact={artifact}
+            onSelect={setReplacementEvidence}
+            options={evidenceOptions}
+            ranking={{ kind: "event", eventId: event.id }}
+            selected={replacementEvidence}
+          />
           {formError ? (
             <p className="form-error" role="alert">
               {formError}

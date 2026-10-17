@@ -139,6 +139,51 @@ describe("derived Story Map review", () => {
     });
   });
 
+
+  it("defaults uncertainEdgeIds for old review rows and treats an uncertain Edge as reviewed", async () => {
+    const fixture = await loadRippleFixture();
+    const artifact = await createArtifact();
+    const parsedOldRow = StoryMapArtifactSchema.parse({
+      ...artifact,
+      review: { evidenceConfirmations: [] },
+    });
+    expect(parsedOldRow.review.uncertainEdgeIds).toEqual([]);
+
+    const edge = artifact.storyMap.edges[0]!;
+    edge.confidence = 0.6;
+    for (const requirement of deriveStoryMapReview(artifact, fixture.source)
+      .importantEvidence) {
+      if (requirement.targetKind !== "event") continue;
+      artifact.review.evidenceConfirmations.push({
+        eventId: requirement.targetId,
+        evidence: requirement.evidence,
+      });
+    }
+    const before = deriveStoryMapReview(artifact, fixture.source);
+    expect(before.readiness.importantEvidenceReviewed).toBe(false);
+    expect(
+      before.queue.find((item) => item.id === `low_confidence_edge:${edge.id}`)
+        ?.status,
+    ).toBe("pending");
+
+    artifact.review.uncertainEdgeIds = [edge.id];
+    const after = deriveStoryMapReview(artifact, fixture.source);
+
+    expect(after.readiness.importantEvidenceReviewed).toBe(true);
+    expect(
+      after.queue.find((item) => item.id === `low_confidence_edge:${edge.id}`)
+        ?.status,
+    ).toBe("reviewed");
+    expect(
+      after.queue.find((item) => item.id === `uncertain_edge:${edge.id}`),
+    ).toMatchObject({
+      category: "uncertain_edge",
+      targetKind: "edge",
+      targetId: edge.id,
+      status: "pending",
+    });
+  });
+
   it("does not treat dangling or illegal references as reviewable warnings", async () => {
     const fixture = await loadRippleFixture();
     const artifact = await createArtifact();

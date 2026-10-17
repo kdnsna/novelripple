@@ -14,6 +14,7 @@ const categoryLabels: Record<StoryMapReviewQueueItem["category"], string> = {
   inference_event: "推断 Event",
   low_confidence_event: "低置信度 Event",
   low_confidence_edge: "低置信度 Edge",
+  uncertain_edge: "不确定 Edge",
   alias_rich_character: "多别名人物",
   identity_merge_risk: "Identity 风险",
   ending_candidate: "Ending Candidate",
@@ -109,6 +110,9 @@ function QueueItems({
           <span>{categoryLabels[item.category]}</span>
           <strong>
             {item.title}
+            {item.category === "uncertain_edge" ? (
+              <em className="review-badge">不确定</em>
+            ) : null}
             {item.status === "pending" ? (
               <em className="review-badge">待核对</em>
             ) : null}

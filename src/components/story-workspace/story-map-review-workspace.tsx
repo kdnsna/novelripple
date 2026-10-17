@@ -699,6 +699,7 @@ export function StoryMapReviewWorkspace({
               needsReviewEdgeIds={refinementState.edgeIds}
               needsReviewEventIds={refinementState.eventIds}
               onSelectEvent={selectEvent}
+              uncertainEdgeIds={artifact.review.uncertainEdgeIds}
               selectedEventId={selectedEvent.id}
               storyMap={storyMap}
             />

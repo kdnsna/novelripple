@@ -119,6 +119,9 @@ export function StoryMapDetails({
           {relatedEdges.map((edge) => (
             <article key={edge.id}>
               <strong>{edge.type}</strong>
+              {artifact.review.uncertainEdgeIds.includes(edge.id) ? (
+                <em className="review-badge">不确定</em>
+              ) : null}
               {needsReviewEdgeIds.includes(edge.id) ? (
                 <em className="review-badge">待核对</em>
               ) : null}

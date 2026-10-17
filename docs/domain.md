@@ -61,6 +61,14 @@ Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `
 
 “未精修”是纯派生的 UI 状态：当前 confirmed revision 的 operation 为 `quick_confirm_story_map`，且 readiness 尚未满足。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
 
+### Edge 的“不确定”标记
+
+Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。下游 Ripple、Impact Plan、Worldline 与 Continuation 忽略该标记。
+
+`mark_edge_uncertain` / `clear_edge_uncertain` 走既有 `createRevisionFromLatest` 路径：实际改变状态时创建新的不可变 draft revision 并记录 operation；重复标记或重复清除幂等返回当前 Artifact，不新增 revision。删除 Edge（或通过删除 Event 级联删除 Edge）时同步清理对应标记。`uncertainEdgeIds` 必须唯一且引用当前版本存在的 Edge，否则 fail closed。
+
+不确定 Edge 仍显示在 Review Queue 中并保持 pending，同时显示“不确定”角标；它不阻塞 `quick_confirm_story_map`（快速开始本来就不检查 readiness）。普通 `confirm_story_map` 的 readiness 将该标记视为“人工已经看过”：不再要求该 Edge 的重要 Evidence confirmation，因此可以正常确认；这不会伪造 Evidence confirmation，移除标记后旧要求重新生效。Evidence 选择器对 Edge 按到两个端点 Event 现有 Evidence Unit 的最小距离排序，对 Event 先按到当前 Evidence 的距离、再按参与人物姓名/别名的文本命中排序；排序是纯函数、确定性且不调用模型。
+
 ### Story Map 生成管线（Phase 1 分块召回）
 
 Story Map 由一条确定性的分块召回管线生成，取代此前“全书 Extractor → 全书 Reconciler”的两步式生成：
