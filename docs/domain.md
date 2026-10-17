@@ -63,7 +63,7 @@ Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `
 
 ### Edge 的“不确定”标记
 
-Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。下游 Ripple、Impact Plan、Worldline 与 Continuation 忽略该标记。
+Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。Ripple Suggestions、Worldline 与 Continuation 忽略该标记；Impact Plan 读取它来区分确定与不确定的因果关系，但仍只把它当作可能性，不写入 Canon 或分支状态。
 
 `mark_edge_uncertain` / `clear_edge_uncertain` 走既有 `createRevisionFromLatest` 路径：实际改变状态时创建新的不可变 draft revision 并记录 operation；重复标记或重复清除幂等返回当前 Artifact，不新增 revision。删除 Edge（或通过删除 Event 级联删除 Edge）时同步清理对应标记。`uncertainEdgeIds` 必须唯一且引用当前版本存在的 Edge，否则 fail closed。
 
@@ -150,6 +150,10 @@ Anchor 评估状态：
 - 不确定项。
 
 ImpactPlan 是提案，不是 Worldline 中已经成立的事实。模型只输出影响与评估；ID、Story Map 版本、Divergence、模式、Anchor 和状态由服务端绑定。严格与开放计划不得通过改标签互换；开放模式必须没有 Anchor 和 Anchor evaluation。
+
+生成 Impact Plan 时，服务端用纯函数把 confirmed Story Map 的 Edge 分成 `established` 与 `uncertain`：`uncertain` 是 `review.uncertainEdgeIds` 中的 Edge，或低于 `LOW_CONFIDENCE_THRESHOLD` 且 Evidence 尚未人工确认的 Edge（复用 `derive-story-map-review` 的常量与确认 helper），原因分别为 `marked_uncertain` / `unreviewed_low_confidence`。Prompt 只把 `established` Edge 放进 `confirmedStoryMap.edges`，把 `uncertain` 关系单独放进 `<uncertain_relations>` 并带原因；模型只能把后者写成可能性，不得作为 `direct` Impact 的唯一依据，并应将这些关系写入 `uncertainties`。`impact-plan.v4` / `impact-plan-feedback.v3` 承担该契约，旧 Prompt 版本保留。
+
+服务端不信任模型：新 Impact Plan 用可选字段 `uncertainEdgeIds` 记录本次上下文中的不确定 Edge，用 `uncertainImpactIds` 记录 `reasonPath` 全程只由不确定 Edge 支撑的 Impact；旧 Artifact 没有这两个字段仍可解析。预览摘要显示「含 N 条未精修/不确定关系」，完整详情给这些 Impact 加「可能」标记并单列不确定关系。该处理只影响本次推演的呈现，不改变 Edge 存储、readiness、Worldline 创建或 Continuation。
 
 `reasonPath` 是当前 confirmed Story Map 中 Event ID 组成的有序因果路径，不是相关事件或替代前提的无序列表。每条路径必须满足：
 

@@ -460,6 +460,18 @@ describe("core domain schemas", () => {
     });
 
     expect(result.success).toBe(true);
+    if (!result.success) throw new Error("ImpactPlan 应通过 Schema");
+    expect(result.data.uncertainEdgeIds).toBeUndefined();
+    expect(result.data.uncertainImpactIds).toBeUndefined();
+
+    const annotated = schemas.ImpactPlanSchema.safeParse({
+      ...result.data,
+      uncertainEdgeIds: ["edge_1_2"],
+      uncertainImpactIds: ["impact_downstream"],
+    });
+    expect(annotated.success).toBe(true);
+    expect(annotated.data?.uncertainEdgeIds).toEqual(["edge_1_2"]);
+    expect(annotated.data?.uncertainImpactIds).toEqual(["impact_downstream"]);
   });
 
   it("requires explicit strict/open mode semantics", () => {

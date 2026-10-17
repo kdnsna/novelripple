@@ -2306,6 +2306,18 @@ input:focus-visible,
   border-top: 1px solid var(--line);
 }
 
+.impact-uncertainty-note {
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px dashed #cebda7;
+  border-radius: 9px;
+  background: #f8f0e4;
+  color: #86643c;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .impact-details {
   margin-top: 12px;
   padding: 10px 12px;
@@ -2388,6 +2400,36 @@ input:focus-visible,
 .impact-item small {
   color: var(--rust);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.impact-item.impact-uncertain {
+  padding-left: 7px;
+  border-left: 3px solid #cebda7;
+}
+
+.impact-item strong .review-badge {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.impact-item .impact-uncertain-path-note {
+  display: block;
+  margin-top: 3px;
+  color: #86643c;
+  font-family: inherit;
+  font-weight: 650;
+}
+
+.impact-uncertain-relations li {
+  margin: 6px 0;
+  line-height: 1.55;
+}
+
+.impact-uncertain-relations small {
+  display: block;
+  color: #86643c;
   font-size: 11px;
 }
 

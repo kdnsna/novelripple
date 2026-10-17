@@ -62,13 +62,28 @@ const impactScopeLabels = {
 
 type ImpactScope = keyof typeof impactScopeLabels;
 
+/** 旧 Artifact 没有 `uncertainEdgeIds`，数量按 0 处理，界面不显示提示。 */
+export function countUncertainRelations(plan: ImpactPlan): number {
+  return plan.uncertainEdgeIds?.length ?? 0;
+}
+
+export function isUncertainImpact(
+  plan: ImpactPlan,
+  impactId: string,
+): boolean {
+  return plan.uncertainImpactIds?.includes(impactId) ?? false;
+}
+
 export function summarizeImpactScope(
   plan: ImpactPlan,
   scope: ImpactScope,
 ): string {
   const impacts = plan.impacts.filter((impact) => impact.scope === scope);
   if (impacts.length === 0) return "无";
-  const first = impacts[0]!.summary;
+  const firstImpact = impacts[0]!;
+  const first = isUncertainImpact(plan, firstImpact.id)
+    ? `可能：${firstImpact.summary}`
+    : firstImpact.summary;
   return impacts.length > 1 ? `${first}（另有 ${impacts.length - 1} 项）` : first;
 }
 
@@ -137,6 +152,11 @@ export function RippleSimulatorPanel({
     storyMap.events.find((event) => event.id === rippleEventId) ?? selectedEvent;
   const plan = preview?.impactPlan ?? null;
   const comparison = plan ? deriveImpactPlanComparison(storyMap, plan) : null;
+  const uncertainRelationCount = plan ? countUncertainRelations(plan) : 0;
+  const uncertainEdgeIds = new Set(plan?.uncertainEdgeIds ?? []);
+  const uncertainRelations = storyMap.edges.filter((edge) =>
+    uncertainEdgeIds.has(edge.id),
+  );
   const characterNames = Object.fromEntries(
     storyMap.characters.map((character) => [character.id, character.name]),
   );
@@ -457,6 +477,15 @@ export function RippleSimulatorPanel({
               </div>
             ))}
 
+            {uncertainRelationCount > 0 ? (
+              <p
+                className="impact-uncertainty-note"
+                data-testid="impact-uncertainty-note"
+              >
+                含 {uncertainRelationCount} 条未精修/不确定关系
+              </p>
+            ) : null}
+
             <div className="impact-summary-row impact-summary-anchor">
               <span>{plan.mode === "strict" ? "原结局" : "故事走向"}</span>
               <strong>
@@ -548,28 +577,62 @@ export function RippleSimulatorPanel({
                   <h4>{impactScopeLabels[scope]}</h4>
                   {plan.impacts
                     .filter((impact) => impact.scope === scope)
-                    .map((impact) => (
-                      <article className="impact-item" key={impact.id}>
-                        <span className={`change change-${impact.changeType}`}>
-                          {impact.changeType === "removed"
-                            ? "−"
-                            : impact.changeType === "added"
-                              ? "+"
-                              : "~"}
-                        </span>
-                        <div>
-                          <strong>{impact.summary}</strong>
-                          <p><b>为什么：</b>{impact.explanation}</p>
-                          <small>
-                            因果路径：{formatReasonPath(impact.reasonPath)}
-                            {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
-                            {" · "}置信度：{Math.round(impact.confidence * 100)}%
-                          </small>
-                        </div>
-                      </article>
-                    ))}
+                    .map((impact) => {
+                      const uncertain = isUncertainImpact(plan, impact.id);
+                      return (
+                        <article
+                          className={`impact-item${uncertain ? " impact-uncertain" : ""}`}
+                          key={impact.id}
+                        >
+                          <span className={`change change-${impact.changeType}`}>
+                            {impact.changeType === "removed"
+                              ? "−"
+                              : impact.changeType === "added"
+                                ? "+"
+                                : "~"}
+                          </span>
+                          <div>
+                            <strong>
+                              {impact.summary}
+                              {uncertain ? (
+                                <em className="review-badge">可能</em>
+                              ) : null}
+                            </strong>
+                            <p><b>为什么：</b>{impact.explanation}</p>
+                            <small>
+                              因果路径：{formatReasonPath(impact.reasonPath)}
+                              {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
+                              {" · "}置信度：{Math.round(impact.confidence * 100)}%
+                            </small>
+                            {uncertain ? (
+                              <small className="impact-uncertain-path-note">
+                                该路径只由未精修/不确定关系支撑，只能作为可能。
+                              </small>
+                            ) : null}
+                          </div>
+                        </article>
+                      );
+                    })}
                 </section>
               ))}
+
+              {uncertainRelations.length > 0 ? (
+                <section
+                  className="impact-group impact-uncertain-relations"
+                  data-testid="impact-uncertain-relations"
+                >
+                  <h4>不确定关系（{uncertainRelations.length}）</h4>
+                  <ul>
+                    {uncertainRelations.map((edge) => (
+                      <li key={edge.id}>
+                        <strong>可能：</strong>
+                        {edge.explanation}
+                        <small>（未精修/不确定关系，不作为已确认因果）</small>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               {mapAnchorEvaluationRows(plan).map((evaluation) => (
                 <section

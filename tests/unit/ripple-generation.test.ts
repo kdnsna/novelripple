@@ -23,6 +23,10 @@ import {
   createProject,
   importProjectSource,
 } from "@/server/repositories/project-repository";
+import {
+  confirmStoryMapArtifact,
+  createStoryMapRevision,
+} from "@/server/repositories/story-map-artifact-repository";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
@@ -171,9 +175,54 @@ describe("Ripple Simulator generation", () => {
     );
     expect(impactRuns).toHaveLength(3);
     expect(impactRuns.every((run) => run.worldlineId === null)).toBe(true);
-    expect(impactRuns.every((run) => run.promptVersion === "impact-plan.v3")).toBe(
+    expect(impactRuns.every((run) => run.promptVersion === "impact-plan.v4")).toBe(
       true,
     );
+  });
+
+  it("separates marked uncertain edges and marks impacts that rely only on them", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const marked = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "mark_edge_uncertain", edgeId: "edge_07_08" },
+    });
+    const confirmed = confirmStoryMapArtifact({
+      projectId: project.id,
+      artifactId: marked.id,
+    });
+    const provider = new MockAIProvider([
+      JSON.stringify(toModelOutput(fixture.impactPlans[0])),
+    ]);
+
+    const result = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: confirmed.id,
+      divergence: fixture.divergences[0],
+      mode: "strict",
+      endingCandidateIds: ["ending_truth_public"],
+      provider,
+      modelConfig,
+    });
+
+    const prompt = provider.requests[0]?.prompt ?? "";
+    expect(prompt).toContain("<uncertain_relations>");
+    expect(prompt).toContain("marked_uncertain");
+    expect(prompt).toContain("edge_07_08");
+    const rippleContext = prompt.slice(
+      prompt.indexOf("<ripple_context>"),
+      prompt.indexOf("</ripple_context>"),
+    );
+    expect(rippleContext).not.toContain('"id":"edge_07_08"');
+    expect(result.artifact.impactPlan.uncertainEdgeIds).toEqual(["edge_07_08"]);
+    expect(result.artifact.impactPlan.uncertainImpactIds).toEqual([
+      "impact_02",
+    ]);
+    expect(
+      listProjectGenerationRuns(project.id).find(
+        (run) => run.id === result.generation.runId,
+      )?.promptVersion,
+    ).toBe("impact-plan.v4");
   });
 
   it("uses one repair for a deterministic ImpactPlan failure", async () => {
@@ -369,6 +418,7 @@ describe("Ripple Simulator generation", () => {
       "人物看过照片，因此不应退出调查。",
     );
     expect(provider.requests[0]?.prompt).toContain('"priorCandidate"');
+    expect(provider.requests[0]?.prompt).toContain("<uncertain_relations>");
     expect(provider.requests[0]?.prompt).toContain(
       '"fromEventId":"event_divergence"',
     );
@@ -447,7 +497,7 @@ describe("Ripple Simulator generation", () => {
     expect(listProjectWorldlines(project.id)).toEqual([]);
     expect(
       listProjectGenerationRuns(project.id).find(
-        (run) => run.promptVersion === "impact-plan-feedback.v2",
+        (run) => run.promptVersion === "impact-plan-feedback.v3",
       ),
     ).toMatchObject({ status: "failed" });
   });

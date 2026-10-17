@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { validateImpactPlan } from "@/domain/invariants/validate-story-map";
+import { classifyStoryMapEdges } from "@/domain/ripple/classify-causal-edges";
+import { deriveUncertainImpactIds } from "@/domain/ripple/derive-uncertain-impact-ids";
 import {
   DivergenceSchema,
   ImpactPlanModelOutputSchema,
@@ -10,6 +12,7 @@ import {
   type Anchor,
   type ImpactPlan,
   type ImpactPlanModelOutput,
+  type StoryMapArtifact,
 } from "@/domain/schemas";
 import { z } from "zod";
 import { createCanonicalWorldline } from "@/domain/services/create-worldline";
@@ -25,7 +28,7 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const promptVersion = "impact-plan.v3";
+const promptVersion = "impact-plan.v4";
 
 export async function generateImpactPlan(input: {
   projectId: string;
@@ -60,6 +63,7 @@ export async function generateImpactPlan(input: {
     baseStoryMapArtifact: storyMapArtifact,
     createdAt: storyMapArtifact.createdAt,
   });
+  const causalContext = buildCausalContext(storyMapArtifact);
   const template = await readFile(
     path.join(process.cwd(), "prompts", `${promptVersion}.md`),
     "utf8",
@@ -68,7 +72,7 @@ export async function generateImpactPlan(input: {
     template,
     "<ripple_context>",
     JSON.stringify({
-      confirmedStoryMap: storyMapArtifact.storyMap,
+      confirmedStoryMap: causalContext.confirmedStoryMap,
       selectedEvent,
       divergence,
       currentWorldline,
@@ -76,6 +80,9 @@ export async function generateImpactPlan(input: {
       mode: input.mode,
     }),
     "</ripple_context>",
+    "<uncertain_relations>",
+    JSON.stringify(causalContext.uncertainRelations),
+    "</uncertain_relations>",
   ].join("\n\n");
 
   const generation = await generateStructured(
@@ -108,6 +115,11 @@ export async function generateImpactPlan(input: {
     divergence,
     anchors,
     ...generation.value,
+    ...annotateUncertainty({
+      modelOutput: generation.value,
+      storyMapArtifact,
+      uncertainEdgeIds: causalContext.uncertainEdgeIds,
+    }),
     status: "candidate",
   });
   const artifact = createImpactPlanArtifact({
@@ -148,7 +160,8 @@ export async function regenerateImpactPlanFromFeedback(input: {
     throw new Error("反馈候选未绑定 confirmed Story Map Artifact");
   }
 
-  const promptVersion = "impact-plan-feedback.v2";
+  const promptVersion = "impact-plan-feedback.v3";
+  const causalContext = buildCausalContext(storyMapArtifact);
   const template = await readFile(
     path.join(process.cwd(), "prompts", `${promptVersion}.md`),
     "utf8",
@@ -157,7 +170,7 @@ export async function regenerateImpactPlanFromFeedback(input: {
     template,
     "<feedback_context>",
     JSON.stringify({
-      confirmedStoryMap: storyMapArtifact.storyMap,
+      confirmedStoryMap: causalContext.confirmedStoryMap,
       priorCandidate: priorCandidate.impactPlan,
       feedback,
       frozenContract: {
@@ -168,6 +181,9 @@ export async function regenerateImpactPlanFromFeedback(input: {
       },
     }),
     "</feedback_context>",
+    "<uncertain_relations>",
+    JSON.stringify(causalContext.uncertainRelations),
+    "</uncertain_relations>",
   ].join("\n\n");
   const generation = await generateStructured(
     {
@@ -198,6 +214,11 @@ export async function regenerateImpactPlanFromFeedback(input: {
     divergence: priorCandidate.impactPlan.divergence,
     anchors: priorCandidate.impactPlan.anchors,
     ...generation.value,
+    ...annotateUncertainty({
+      modelOutput: generation.value,
+      storyMapArtifact,
+      uncertainEdgeIds: causalContext.uncertainEdgeIds,
+    }),
     status: "candidate",
   });
   const artifact = createImpactPlanArtifact({
@@ -272,4 +293,50 @@ function validateModelOutput(input: {
     }));
   }
   return validateImpactPlan(parsed.data, input.storyMap);
+}
+
+/**
+ * 把 confirmed Story Map 的边拆成两份上下文：已建立的因果关系放进
+ * `confirmedStoryMap`，不确定关系单独放进 `<uncertain_relations>`。
+ * 每条边只出现一次，模型无法把不确定关系当作已确认事实读取。
+ */
+function buildCausalContext(storyMapArtifact: StoryMapArtifact) {
+  const classification = classifyStoryMapEdges(storyMapArtifact);
+  const establishedIds = new Set(
+    classification.established.map((edge) => edge.id),
+  );
+  return {
+    confirmedStoryMap: {
+      ...storyMapArtifact.storyMap,
+      edges: storyMapArtifact.storyMap.edges.filter((edge) =>
+        establishedIds.has(edge.id),
+      ),
+    },
+    uncertainRelations: classification.uncertain.map(({ edge, reason }) => ({
+      id: edge.id,
+      from: edge.from,
+      to: edge.to,
+      type: edge.type,
+      explanation: edge.explanation,
+      confidence: edge.confidence,
+      reason,
+    })),
+    uncertainEdgeIds: classification.uncertain.map(({ edge }) => edge.id),
+  };
+}
+
+/** 服务端确定性记录不确定上下文，并标记只由不确定路径支撑的 Impact。 */
+function annotateUncertainty(input: {
+  modelOutput: ImpactPlanModelOutput;
+  storyMapArtifact: StoryMapArtifact;
+  uncertainEdgeIds: string[];
+}): Pick<ImpactPlan, "uncertainEdgeIds" | "uncertainImpactIds"> {
+  return {
+    uncertainEdgeIds: input.uncertainEdgeIds,
+    uncertainImpactIds: deriveUncertainImpactIds({
+      impacts: input.modelOutput.impacts,
+      edges: input.storyMapArtifact.storyMap.edges,
+      uncertainEdgeIds: input.uncertainEdgeIds,
+    }),
+  };
 }

@@ -253,6 +253,27 @@ test("ranks evidence, previews context, and marks an Edge uncertain", async ({
   // 不确定 Edge 留在待核队列，但不阻塞直接开始涟漪。
   await page.getByRole("button", { name: "直接开始涟漪" }).click();
   await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
+
+  // 带着不确定标记进入 Impact Plan：摘要显示数量，完整详情列出该关系。
+  await page.getByTestId("event-node-event_07").click();
+  await page.getByRole("button", { name: "为所选事件创建 Ripple" }).click();
+  await page.getByLabel("分歧类型").selectOption("prevent");
+  await page
+    .getByLabel("改变内容")
+    .fill("许澄没有把红色账簿交给周岚");
+  await page.getByLabel("保留原结局").check();
+  await page
+    .getByLabel("白鸥号沉船事故的系统性真相最终进入公共记录")
+    .check();
+  await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
+
+  await expect(page.getByTestId("impact-uncertainty-note")).toContainText(
+    "含 1 条未精修/不确定关系",
+  );
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
+  await expect(page.getByTestId("impact-uncertain-relations")).toContainText(
+    "用于验证排序与不确定标记的关系",
+  );
 });
 
 async function createFixtureStoryMap(page: Page, projectTitle: string) {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  countUncertainRelations,
+  isUncertainImpact,
   mapAnchorEvaluationRows,
   summarizeImpactScope,
   summarizePlainAnchorStatus,
@@ -52,5 +54,22 @@ describe("Ripple Preview Anchor presentation", () => {
         ],
       }),
     ).toBe("2 个结局 · 原结局无法保留");
+  });
+
+  it("keeps uncertainty annotations optional and presents flagged impacts as possibilities", async () => {
+    const { impactPlans } = await loadRippleFixture();
+    const plan = impactPlans[0]!;
+
+    expect(countUncertainRelations(plan)).toBe(0);
+    expect(isUncertainImpact(plan, plan.impacts[0]!.id)).toBe(false);
+
+    const annotated = {
+      ...plan,
+      uncertainEdgeIds: ["edge_07_08"],
+      uncertainImpactIds: [plan.impacts[0]!.id],
+    };
+    expect(countUncertainRelations(annotated)).toBe(1);
+    expect(isUncertainImpact(annotated, plan.impacts[0]!.id)).toBe(true);
+    expect(summarizeImpactScope(annotated, "direct")).toContain("可能：");
   });
 });

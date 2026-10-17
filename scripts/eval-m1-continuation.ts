@@ -464,13 +464,13 @@ async function evaluateStory(
       impactPlanArtifact = result.artifact;
       impactPlanStage = successfulStage(
         result.generation,
-        "impact-plan.v3",
+        "impact-plan.v4",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
       );
     } catch (error) {
       impactPlanStage = failedStage(
-        "impact-plan.v3",
+        "impact-plan.v4",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
         error,
@@ -1052,7 +1052,7 @@ function failedStory(
       suggestionCount: null,
       selectedSuggestionIndex: null,
     },
-    impactPlan: notRunStage("impact-plan.v3"),
+    impactPlan: notRunStage("impact-plan.v4"),
     worldline: {
       status: "not_run",
       mode: null,
