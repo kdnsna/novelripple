@@ -125,7 +125,7 @@ function extraction(partial: Partial<StoryMapExtractionCandidate>): StoryMapExtr
   return {
     title: "t",
     logline: "l",
-    characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s" }],
+    characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s", kind: "individual" }],
     events: [event("e1", "u1")],
     edges: [],
     ...partial,
@@ -137,8 +137,8 @@ describe("chunk candidate assembly", () => {
     const issues = validateChunkExtraction(
       extraction({
         characters: [
-          { id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s" },
-          { id: "b", name: "乙", aliases: [], role: "supporting", initialState: "s" },
+          { id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s", kind: "individual" as const },
+          { id: "b", name: "乙", aliases: [], role: "supporting", initialState: "s", kind: "individual" as const },
         ],
         events: [event("e1", "u9")],
       }),

@@ -143,6 +143,25 @@ describe("Story Map model candidates", () => {
     });
   });
 
+  it("requires kind on extraction candidates but keeps the final content schema unchanged", async () => {
+    const { source, storyMap } = await loadRippleFixture();
+    const units = deriveEvidenceUnits(source);
+    const content = candidateFromStoryMap(storyMap, units);
+
+    expect(StoryMapContentCandidateSchema.parse(content).characters).toHaveLength(
+      storyMap.characters.length,
+    );
+    expect(() =>
+      StoryMapExtractionCandidateSchema.parse({
+        title: content.title,
+        logline: content.logline,
+        characters: content.characters,
+        events: content.events,
+        edges: content.edges,
+      }),
+    ).toThrow();
+  });
+
   it("rejects quote claims because model candidates only accept Unit IDs", async () => {
     const { storyMap } = await loadRippleFixture();
     const event = storyMap.events[0]!;
@@ -151,7 +170,10 @@ describe("Story Map model candidates", () => {
       StoryMapExtractionCandidateSchema.parse({
         title: storyMap.title,
         logline: storyMap.logline,
-        characters: storyMap.characters,
+        characters: storyMap.characters.map((character) => ({
+          ...character,
+          kind: "individual",
+        })),
         events: [
           {
             ...event,
@@ -172,7 +194,10 @@ describe("Story Map model candidates", () => {
     const validExtraction = StoryMapExtractionCandidateSchema.parse({
       title: content.title,
       logline: content.logline,
-      characters: content.characters,
+      characters: content.characters.map((character) => ({
+        ...character,
+        kind: "individual",
+      })),
       events: content.events,
       edges: content.edges,
     });

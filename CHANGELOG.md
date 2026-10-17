@@ -16,6 +16,9 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 - M1 baseline runner 支持可选的 `NOVELRIPPLE_BENCH_ROOT`：该目录的 realpath 作为额外 private 根，manifest 必须为 `visibility: private` 且 Source 留在该根内；未设置或为空时行为不变。Optional `NOVELRIPPLE_BENCH_ROOT` adds an extra private benchmark root; manifests must be private and sources must stay inside it.
 - M1 baseline 新增可选私有 `gold.json` 自动匹配 Event / Causal Edge / Ending / lenient identity，Unit 窗口为 2；只报告 ID、计数与比例，且仅作近似调参指标、绝不作为门禁。Optional private `gold.json` adds approximate automatic matching for events, causal edges, endings and lenient identity with a 2-unit window; IDs/counts/rates only and never a gate.
 - `eval:m1:baseline` 新增 `--tuning`：允许 1—2 篇，跳过正式 baseline 的 A/B/C、unseen 断言，报告 `kind: "m1_tuning"`。New `--tuning` mode allows 1–2 manifests, skips the formal A/B/C/unseen suite assertion, and reports `kind: "m1_tuning"`.
+- 人物提取改为模型主导：`story-map-chunk.v2` 不再接收规则人名提示；`story-map-glean.v2` 只把过滤后的人名候选当作“可能漏名”提示逐个核对；`story-map-names.v2` 强调给定名/昵称只有原文确认才是别名，禁止错并。Model-first names: chunk v2 receives no rule-based hints; glean v2 uses filtered hints as “possible misses”; names v2 treats given-name/nickname forms as aliases only when the text confirms them.
+- 抽取/补抽候选新增 `kind: "individual" | "group"`；组装时确定性丢弃群体、家族、机构候选并从事件参与者中移除，仅当事件只剩群体时保留一个群体作为最小例外。Candidate characters now carry `kind`; assembly deterministically drops groups, households and institutions from the pool and event participants, keeping one group only when an event would otherwise have no participant.
+- 人名候选新增确定性垃圾过滤（多数出现后接 了/着/过/地/得、姓氏后虚词碎片、常见非人名 STOP_WORDS）和非姓氏昵称规则（`阿/小/老` + 单字或 ASCII 字母，出现 ≥2 次）。Deterministic junk filtering and a non-surname nickname rule were added to name hints.
 
 ### Changed / 变更
 

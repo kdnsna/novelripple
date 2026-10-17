@@ -1,5 +1,6 @@
 import type {
   Character,
+  StoryMapCandidateCharacter,
   StoryMapCandidateEdge,
   StoryMapCandidateEnding,
   StoryMapCandidateEvent,
@@ -10,6 +11,7 @@ import type {
   StoryMapMergeCandidate,
   StoryMapRosterCandidate,
 } from "@/domain/schemas";
+import { isCollectiveName } from "@/domain/source/name-candidates";
 
 /**
  * 分块 Story Map 管线的确定性组装与校验。
@@ -32,14 +34,21 @@ export type ChunkCandidate = {
 
 export type PooledEvent = StoryMapCandidateEvent & { chunkIndex: number };
 
+/**
+ * 池中人物：抽取/补抽候选带 kind，人名归并后变为最终 Character（不再带 kind）。
+ */
+export type PooledCharacter = Character & {
+  kind?: StoryMapCandidateCharacter["kind"];
+};
+
 export type StoryMapPool = {
-  characters: Character[];
+  characters: PooledCharacter[];
   events: PooledEvent[];
   edges: StoryMapCandidateEdge[];
 };
 
 type LocalGraph = {
-  characters: Character[];
+  characters: PooledCharacter[];
   events: StoryMapCandidateEvent[];
   edges: StoryMapCandidateEdge[];
 };
@@ -80,10 +89,11 @@ export function validateChunkGleaning(
     edges: [...extraction.edges, ...gleaning.edges],
   };
   issues.push(...validateLocalGraph(gleaning, combined, allowedUnitIds));
-  // 补抽新增的人物也必须参与本块某个事件。
+  // 补抽新增的人物也必须参与本块某个事件；群体候选随后会在人名轮前被丢弃，
+  // 不要求它出现在事件参与者里。
   const participants = new Set(combined.events.flatMap((event) => event.participants));
   gleaning.characters.forEach((character, index) => {
-    if (!participants.has(character.id)) {
+    if (!participants.has(character.id) && !isGroupCharacter(character)) {
       issues.push({
         path: `characters.${index}`,
         message: `人物必须至少参与一个有 Evidence 的 Event：${character.id}`,
@@ -129,7 +139,7 @@ function validateLocalGraph(
   if (graph === scope) {
     const participants = new Set(graph.events.flatMap((event) => event.participants));
     graph.characters.forEach((character, index) => {
-      if (!participants.has(character.id)) {
+      if (!participants.has(character.id) && !isGroupCharacter(character)) {
         issues.push({
           path: `characters.${index}`,
           message: `人物必须至少参与一个有 Evidence 的 Event：${character.id}`,
@@ -222,6 +232,48 @@ function claim(id: string, suffix: string, used: Set<string>): string {
   while (used.has(candidate)) candidate = `${id}${suffix}_${counter++}`;
   used.add(candidate);
   return candidate;
+}
+
+// ── 群体过滤 ──
+
+/**
+ * 群体 / 家族 / 机构候选：模型标为 group，或名字呈确定性群体特征。
+ * 安全网不依赖提示词是否被遵守。
+ */
+export function isGroupCharacter(
+  character: Pick<PooledCharacter, "name" | "kind">,
+): boolean {
+  return character.kind === "group" || isCollectiveName(character.name);
+}
+
+/**
+ * 在人名归并前丢弃群体候选，并从事件参与者中移除。
+ * 最小例外：某事件只剩群体参与者时，保留第一个群体，避免事件失去全部参与者。
+ */
+export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
+  const groupIds = new Set(
+    pool.characters.filter(isGroupCharacter).map((character) => character.id),
+  );
+  if (groupIds.size === 0) return pool;
+  const keptGroupIds = new Set<string>();
+  const events = pool.events.map((event) => {
+    const participants = event.participants.filter((id) => !groupIds.has(id));
+    if (participants.length === 0 && event.participants.length > 0) {
+      const kept = event.participants[0]!;
+      keptGroupIds.add(kept);
+      return { ...event, participants: [kept] };
+    }
+    return participants.length === event.participants.length
+      ? event
+      : { ...event, participants };
+  });
+  return {
+    ...pool,
+    characters: pool.characters.filter(
+      (character) => !groupIds.has(character.id) || keptGroupIds.has(character.id),
+    ),
+    events,
+  };
 }
 
 // ── 人名轮次 ──

@@ -113,27 +113,42 @@ const storyMapContentShape = {
 
 export const StoryMapContentSchema = z.object(storyMapContentShape).strict();
 
+/**
+ * 分块抽取 / 补抽阶段的人物候选：模型必须区分「具体个体」与「群体/家族/机构」。
+ * 只存在于生成过程中；最终的 CharacterSchema 不增加 kind。
+ */
+export const StoryMapCandidateCharacterSchema = CharacterSchema.extend({
+  kind: z.enum(["individual", "group"]),
+}).strict();
+
+const storyMapCandidateGraphShape = {
+  title: z.string().min(1),
+  logline: z.string().min(1),
+  events: z.array(StoryMapCandidateEventSchema).min(1),
+  edges: z.array(StoryMapCandidateEdgeSchema),
+};
+
 export const StoryMapExtractionCandidateSchema = z
   .object({
-    title: z.string().min(1),
-    logline: z.string().min(1),
-    characters: z.array(CharacterSchema).min(1),
-    events: z.array(StoryMapCandidateEventSchema).min(1),
-    edges: z.array(StoryMapCandidateEdgeSchema),
+    ...storyMapCandidateGraphShape,
+    characters: z.array(StoryMapCandidateCharacterSchema).min(1),
   })
   .strict();
 
-export const StoryMapContentCandidateSchema =
-  StoryMapExtractionCandidateSchema.extend({
+export const StoryMapContentCandidateSchema = z
+  .object({
+    ...storyMapCandidateGraphShape,
+    characters: z.array(CharacterSchema).min(1),
     endingCandidates: z.array(StoryMapCandidateEndingSchema).min(1),
-  });
+  })
+  .strict();
 
 // ── 分块抽取管线的中间候选（只存在于生成过程中，不持久化）──
 
 /** “还漏了什么”补抽：只返回新增内容，可以为空。 */
 export const StoryMapGleaningCandidateSchema = z
   .object({
-    characters: z.array(CharacterSchema),
+    characters: z.array(StoryMapCandidateCharacterSchema),
     events: z.array(StoryMapCandidateEventSchema),
     edges: z.array(StoryMapCandidateEdgeSchema),
   })
@@ -200,6 +215,9 @@ export const StoryMapSchema = z
   .strict();
 
 export type Character = z.infer<typeof CharacterSchema>;
+export type StoryMapCandidateCharacter = z.infer<
+  typeof StoryMapCandidateCharacterSchema
+>;
 export type Event = z.infer<typeof EventSchema>;
 export type StoryEdge = z.infer<typeof StoryEdgeSchema>;
 export type StoryMapContent = z.infer<typeof StoryMapContentSchema>;

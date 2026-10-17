@@ -52,7 +52,9 @@ export function buildFixtureStoryMapResponses(
     return StoryMapExtractionCandidateSchema.parse({
       title: storyMap.title,
       logline: storyMap.logline,
-      characters: storyMap.characters.filter((character) => participantIds.has(character.id)),
+      characters: storyMap.characters
+        .filter((character) => participantIds.has(character.id))
+        .map((character) => ({ ...character, kind: "individual" as const })),
       events,
       edges,
     });

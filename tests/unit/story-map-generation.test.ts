@@ -174,11 +174,13 @@ describe("chunked Story Map recall pipeline", () => {
     expect(firstChunk?.prompt).toContain("<story_chunk");
     expect(firstChunk?.prompt).toContain(`evidence_unit:${source.id}:`);
     expect(firstChunk?.prompt).toContain("不得返回 `exactQuote`");
-    expect(firstChunk?.prompt).toContain("<name_hints>");
+    expect(firstChunk?.prompt).not.toContain("<name_hints>");
+    expect(firstChunk?.prompt).toContain("kind");
     expect(firstChunk?.prompt).not.toContain(chunks[1]!.coreUnitIds.at(-1));
     expect(secondChunk?.prompt).toContain('"ownership":"context"');
     const stage = stageIndex(chunks.length);
     expect(provider.requests[stage.glean(0)]?.prompt).toContain("<previous_extraction>");
+    expect(provider.requests[stage.glean(0)]?.prompt).toContain("<uncovered_name_hints>");
     expect(provider.requests[stage.names]?.prompt).toContain("<character_candidates>");
     expect(provider.requests[stage.names]?.prompt).not.toContain("<story_chunk");
     expect(provider.requests[stage.endings]?.prompt).toContain("<story_ending_text");
@@ -196,6 +198,45 @@ describe("chunked Story Map recall pipeline", () => {
     ].map((parts) => parts.join("|")).sort());
   });
 
+  it("drops group candidates before the names pass and removes them from event participants", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const stage = stageIndex(chunks.length);
+    const firstExtraction = JSON.parse(responses[0]!) as {
+      events: { id: string; participants: string[] }[];
+    };
+    const targetEvent = firstExtraction.events[0]!;
+    const expectedParticipants = [...targetEvent.participants];
+    const edited = edit(responses, 0, (extraction) => {
+      extraction.characters.push({
+        id: "char_crowd",
+        name: "围观的人群",
+        aliases: [],
+        role: "supporting",
+        initialState: "在码头围观",
+        kind: "group",
+      });
+      extraction.events[0].participants.push("char_crowd");
+    });
+
+    const provider = new MockAIProvider(edited);
+    const result = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider,
+      modelConfig,
+    });
+
+    const namesPrompt = provider.requests[stage.names]?.prompt;
+    expect(namesPrompt).not.toContain("char_crowd");
+    expect(namesPrompt).not.toContain("围观的人群");
+    const storyMap = result.artifact.storyMap;
+    expect(storyMap.characters.map((character) => character.id)).not.toContain("char_crowd");
+    expect(storyMap.events.find((event) => event.id === targetEvent.id)?.participants).toEqual(
+      expectedParticipants,
+    );
+    expect(validateStoryMap(storyMap, source)).toEqual([]);
+  });
+
   it("keeps what gleaning, the names pass, the endings pass and the merge add", async () => {
     const { project, source, chunks, responses } = await createContext();
     const stage = stageIndex(chunks.length);
@@ -208,6 +249,7 @@ describe("chunked Story Map recall pipeline", () => {
         aliases: [],
         role: "supporting",
         initialState: "在港务处值班",
+        kind: "individual",
       });
       gleaning.events.push(
         {

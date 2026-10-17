@@ -23,6 +23,7 @@ import {
 } from "@/domain/source/evidence-units";
 import {
   deriveNameCandidates,
+  isCollectiveName,
   type NameCandidate,
 } from "@/domain/source/name-candidates";
 import { resolveStoryMapContentCandidate } from "@/domain/source/resolve-story-map-evidence";
@@ -30,6 +31,7 @@ import {
   applyEndingPass,
   applyMerge,
   applyRoster,
+  dropGroupCandidates,
   poolChunkCandidates,
   validateChunkExtraction,
   validateChunkGleaning,
@@ -66,9 +68,9 @@ import { createStoryMapArtifact } from "@/server/repositories/story-map-artifact
  * 不写入 Artifact；Source 只读。
  */
 export const STORY_MAP_PROMPT_VERSIONS = {
-  extract: "story-map-chunk.v1",
-  glean: "story-map-glean.v1",
-  names: "story-map-names.v1",
+  extract: "story-map-chunk.v2",
+  glean: "story-map-glean.v2",
+  names: "story-map-names.v2",
   endings: "story-map-endings.v1",
   merge: "story-map-merge.v1",
 } as const;
@@ -147,16 +149,19 @@ export async function generateStoryMap(input: {
       input.provider,
     );
 
-  // 1. 每块抽取
+  // 1. 每块抽取（模型主导人物识别；第一轮不接收任何规则人名提示）
   const chunkContexts = chunks.map((chunk) => {
     const allowed = new Set([...chunk.contextUnitIds, ...chunk.coreUnitIds]);
     const packet = buildChunkPacket(source, chunk, unitsById);
     const coreText = chunk.coreUnitIds.map((id) => unitsById.get(id)!.text).join("\n");
-    const hints = nameHints.filter((hint) => coreText.includes(hint.name));
+    // 规则候选只用于补抽轮的“可能漏名”提示；群体名不进入提示。
+    const hints = nameHints.filter(
+      (hint) => coreText.includes(hint.name) && !isCollectiveName(hint.name),
+    );
     return { chunk, allowed, packet, hints };
   });
   const extractionPrompts = chunkContexts.map((context) =>
-    buildExtractionPrompt(templates.extract, context),
+    [templates.extract, context.packet].join("\n\n"),
   );
   if (chunks.length >= STORY_MAP_WARN_CHUNK_COUNT) {
     // 粗略下限：按抽取 prompt 长度 × 2 估算抽取 + 补抽；不含 names / endings / merge 与模型输出。
@@ -212,8 +217,10 @@ export async function generateStoryMap(input: {
     gleaning: gleanings[index]!.value,
   }));
   const pooled = poolChunkCandidates(chunkCandidates, unitOrder);
+  // 群体 / 家族 / 机构在人名归并前丢弃；只剩群体参与者的事件保留一个群体作为最小例外。
+  const individualPool = dropGroupCandidates(pooled);
 
-  // 3. 人名归并
+  // 3. 人名归并（规则候选只作为过滤后的“可能漏名/别名”提示）
   const roster = await structured(
     {
       kind: "story_map_names",
@@ -223,14 +230,14 @@ export async function generateStoryMap(input: {
     },
     [
       templates.names,
-      formatNameHints("name_hints", nameHints),
+      formatNameHints("name_hints", filterRosterHints(nameHints, individualPool.characters)),
       "<character_candidates>",
-      JSON.stringify(pooled.characters),
+      JSON.stringify(individualPool.characters),
       "</character_candidates>",
     ].join("\n\n"),
-    (value) => validateRoster(value, pooled),
+    (value) => validateRoster(value, individualPool),
   );
-  const withRoster = applyRoster(pooled, roster.value);
+  const withRoster = applyRoster(individualPool, roster.value);
 
   // 4. 结局 / 人物结局
   const tailUnits = units.slice(
@@ -347,13 +354,6 @@ function validateCandidate(
   return validateStoryMap(storyMap.data, source);
 }
 
-function buildExtractionPrompt(
-  template: string,
-  context: { packet: string; hints: NameCandidate[] },
-): string {
-  return [template, formatNameHints("name_hints", context.hints), context.packet].join("\n\n");
-}
-
 function buildChunkPacket(
   source: Source,
   chunk: EvidenceUnitChunk,
@@ -397,13 +397,29 @@ function formatNameHints(tag: string, hints: NameCandidate[]): string {
   return `<${tag}>${JSON.stringify(hints.map(({ name, count }) => ({ name, count })))}</${tag}>`;
 }
 
+/** 人名轮只看到“尚未覆盖、且不像群体”的规则候选，避免把群体名当成别名。 */
+function filterRosterHints(
+  hints: NameCandidate[],
+  characters: { name: string; aliases: string[] }[],
+): NameCandidate[] {
+  const known = new Set(
+    characters.flatMap((character) => [
+      character.name.trim(),
+      ...character.aliases.map((alias) => alias.trim()),
+    ]),
+  );
+  return hints.filter((hint) => !isCollectiveName(hint.name) && !known.has(hint.name));
+}
+
 function uncoveredHints(
   hints: NameCandidate[],
   extraction: StoryMapExtractionCandidate,
 ): NameCandidate[] {
   const known = extraction.characters.flatMap((character) => [character.name, ...character.aliases]);
   return hints.filter(
-    (hint) => !known.some((name) => name.includes(hint.name) || hint.name.includes(name)),
+    (hint) =>
+      !isCollectiveName(hint.name) &&
+      !known.some((name) => name.includes(hint.name) || hint.name.includes(name)),
   );
 }
 
