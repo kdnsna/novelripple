@@ -40,6 +40,7 @@ import {
   type WorldlineDelta,
 } from "@/domain/schemas";
 import { generateStructured } from "@/server/ai/generate-structured";
+import { runWithInFlightLock } from "@/server/ai/in-flight-generation";
 import type { AIProvider, ModelConfig } from "@/server/ai/types";
 import {
   createContinuationDirectionsArtifactV2,
@@ -64,32 +65,6 @@ const scenePromptVersion = "continuation-scene.v3";
 export const DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS = 24_000;
 export const CONTINUATION_CONTEXT_MAX_CHARS_ENV =
   "CONTINUATION_CONTEXT_MAX_CHARS";
-
-/**
- * 同一进程内的请求去重锁。
- *
- * key 是确定性目标 Artifact id：并发同内容请求只有第一个真正调用模型，
- * 其余请求 await 同一个 Promise。锁释放后再次进入会先查已有 Artifact，
- * 因此不会为相同内容重复生成。它不是跨进程锁，数据库确定性主键仍是
- * 最终幂等边界。
- */
-const inFlightGenerations = new Map<string, Promise<unknown>>();
-
-function runWithInFlightLock<T>(
-  key: string,
-  task: () => Promise<T>,
-): Promise<T> {
-  const existing = inFlightGenerations.get(key);
-  if (existing) return existing as Promise<T>;
-
-  const promise = task();
-  inFlightGenerations.set(key, promise);
-  return promise.finally(() => {
-    if (inFlightGenerations.get(key) === promise) {
-      inFlightGenerations.delete(key);
-    }
-  });
-}
 
 /**
  * 读取上下文预算。未配置时使用默认值；配置值必须是正整数，

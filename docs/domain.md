@@ -51,7 +51,23 @@ rename / aliases / role、人物 merge、Event 更新/删除/有 Evidence 新增
 
 新增 Event 和 Edge 必须先从不可变 Source 派生的自然段 Evidence Unit 选择 Evidence；服务端仍只保存现有 `SourceReference[]` 并执行 offset/hash 与引用校验。不存在无 Evidence 新增 Canon Event 的路径。Edge 类型仍只有 `causes`、`enables`、`foreshadows`。
 
-Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending Candidate 已核对、无非法引用、无悬空 Edge，以及 inference / 低置信度 Event 与低置信度 Edge 的重要 Evidence 已核对。服务端基于最新 revision 重新计算；未 ready 或 stale 的确认请求 fail closed。历史 confirmed Artifact 不迁移或覆盖，新的 draft 必须通过该门才能创建 confirmed revision。
+Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending Candidate 已核对、无非法引用、无悬空 Edge，以及 inference / 低置信度 Event 与低置信度 Edge 的重要 Evidence 已核对。服务端基于最新 revision 重新计算；未 ready 或 stale 的普通确认请求 fail closed。历史 confirmed Artifact 不迁移或覆盖。读者优先流程允许不经过该门直接确认，见下方“快速确认”；它仍受 Source、Evidence、Schema 与不可变性约束。
+
+### 快速确认与“未精修”
+
+`quick_confirm_story_map` 是 Story Map review operation 之一，只服务读者优先入口。它从最新 draft 通过与其它 revision 相同的 `createRevisionFromLatest` 路径创建**新的** confirmed revision：仍执行 Source、Evidence、Story Map Schema 和 review metadata 校验，旧 revision 与旧确认保持不变；区别只是不检查 readiness，也不改写 review confirmations。因此该 revision 的 operation 记录“它是被快速确认的”，而 confirmations 记录“它还没有经过精修”。已经 confirmed 的 revision 重复快速确认幂等返回同一行；普通 `confirm_story_map` 仍需 readiness 通过，语义不变。
+
+Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `status === "confirmed"` 的不可变 Story Map revision。快速确认不会放宽这些仓库与生成器的 confirmed 检查，也不会自动创建 Worldline。
+
+“未精修”是纯派生的 UI 状态：当前 confirmed revision 的 operation 为 `quick_confirm_story_map`，且 readiness 尚未满足。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
+
+### Edge 的“不确定”标记
+
+Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。下游 Ripple、Impact Plan、Worldline 与 Continuation 忽略该标记。
+
+`mark_edge_uncertain` / `clear_edge_uncertain` 走既有 `createRevisionFromLatest` 路径：实际改变状态时创建新的不可变 draft revision 并记录 operation；重复标记或重复清除幂等返回当前 Artifact，不新增 revision。删除 Edge（或通过删除 Event 级联删除 Edge）时同步清理对应标记。`uncertainEdgeIds` 必须唯一且引用当前版本存在的 Edge，否则 fail closed。
+
+不确定 Edge 仍显示在 Review Queue 中并保持 pending，同时显示“不确定”角标；它不阻塞 `quick_confirm_story_map`（快速开始本来就不检查 readiness）。普通 `confirm_story_map` 的 readiness 将该标记视为“人工已经看过”：不再要求该 Edge 的重要 Evidence confirmation，因此可以正常确认；这不会伪造 Evidence confirmation，移除标记后旧要求重新生效。Evidence 选择器对 Edge 按到两个端点 Event 现有 Evidence Unit 的最小距离排序，对 Event 先按到当前 Evidence 的距离、再按参与人物姓名/别名的文本命中排序；排序是纯函数、确定性且不调用模型。
 
 ### Story Map 生成管线（Phase 1 分块召回）
 
@@ -65,6 +81,12 @@ Story Map 由一条确定性的分块召回管线生成，取代此前“全书 
 6. **全书合并**（`story-map-merge.v2`）：合并跨块重复事件，也合并相邻块把同一场景/节拍拆得更细的事件（地点与时间窗口相同、参与者重叠、证据连续）；合并 prompt 附带 `<granularity_hint>`（核心文本字符数与目标事件范围 `[round(len/1000), round(len/600)]`，下限 3）：明显超出上限时把相邻同场景/更细节拍折叠到大致范围内，不同场景或转折点不合并，范围内只合并真正重复；按 `duplicateEndingGroups` 合并同一人物/故事主线上同一结果的结局候选，不同人物的命运不算重复；补充跨块 `causes` / `enables` / `foreshadows` 边并统一事件序列。服务端随后确定性去重：同一 `(from, to)` 的边只保留第一条的类型/说明并合并证据；故事级结局只在目标事件与规范化后的 `requirement` 文本都相同时折叠，人物结局按人物名折叠，均合并证据；最后去掉块内冲突 ID 的 `__c<chunk>` 后缀，碰撞时依次改为 `-2`、`-3`，并重写人物参与者、边端点和结局目标引用。
 
 每个证据阶段都在本阶段做引用校验：块抽取与补抽只接受该块 `core` + `context` Unit，结局轮次只接受末尾 Unit 及已汇总事件的证据；最终合并对完整候选执行 Evidence 解析（Unit ID → `SourceReference[]`）和 Story Map 领域校验。Schema 或引用不合法时只 repair 一次，仍失败即 fail closed，不写入 Artifact；通过后才创建版本化 Artifact，Story Map Schema 保持不变。模型侧证据句柄始终是稳定 Unit ID，不返回 `exactQuote`、Section ID、偏移或 Hash。M1-03（`ca705d3`）曾把证据改为 sectionId + exactQuote，真实回归因逐字摘录无法稳定匹配而在一次 repair 后仍失败；本管线保留 Unit ID。
+
+### Story Map 生成任务（后台、可恢复）
+
+Story Map 生成不再占用一次同步 Server Action。用户点击生成后，服务端先写入 `jobs` 行（`kind: "story_map_generation"`，`input_json` 只含 `sourceId` 等稳定 ID），再由进程内 Runner 在响应之后调用同一分块管线。任务状态只能是 `queued` / `running` / `succeeded` / `failed` / `interrupted`；进度只记录固定阶段与计数（`chunking` → `extract` → `glean` → `names` → `endings` → `merge` → `saving`），不包含原文、Prompt 或模型输出。
+
+同一 project + kind + source 同时最多一个 `queued`/`running` 任务；重复点击直接回到已有任务。成功时任务只保存 `artifactId`，失败时保存经统一脱敏的短错误。任务历史只追加：`failed` / `interrupted` 行不被复用，重试创建新行。Runner 每 15 秒刷新心跳；进程首次使用或心跳超过 2 分钟时，遗留的 `queued`/`running` 任务被标为 `interrupted`。project 页面读取该 Source 的最新任务，客户端在任务进行中每秒轮询 `GET /api/jobs/[jobId]`，成功后导航到 `?artifact=<id>`；刷新页面仍从服务端恢复同一任务。详见 [`ADR 0008`](decisions/0008-background-jobs.md)。
 
 ## Character
 
@@ -143,7 +165,7 @@ Ripple Preview 只保存 `candidate` Impact Plan Artifact 与对应 Generation R
 
 ## Ripple Suggestions 与反馈谱系
 
-Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。
+Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。同一 confirmed Story Map revision 已有 Suggestions 时，后续请求直接复用最新一组 Artifact，不再次调用模型；同一进程内按 Story Map Artifact id 合并并发请求。失败后只有用户显式重试才会再次生成。
 
 Impact Plan 反馈重生成是完整的新 Generation Run 与完整 `ImpactPlanModelOutput`，不是局部 patch 或聊天。每次反馈产生新的不可变 `candidate` revision，并保存 `lineage`：父 candidate Artifact、反馈文本、新 Generation Run、同一 Story Map Artifact、同一 Divergence、同一 mode 与同一 Anchors。这些字段由服务端从父 candidate 冻结，客户端不可替换；原 candidate 与任何已接受版本保持不变。只有用户明确接受的一个候选谱系才能创建 Worldline。
 
@@ -181,7 +203,7 @@ Continuation 分为两个固定阶段，不是 Agent：
 
 方向和场景分别保存为不可变 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。一次方向生成是一个方向批次（`schemaVersion: 2`）：`parentSceneId` 指向路径末端场景，根批次为 `null`，`batchIndex` 从 0 递增，批次内恰好三个方向。一次场景生成是一个节点（`schemaVersion: 2`），保存 `parentSceneId`、`depth`、`origin`（`generated` / `retry`）、`attemptIndex` 与 `summary`。根节点 `parentSceneId: null`、`depth: 1`；子节点 `depth = parent.depth + 1`。任一场景都可以作为父节点继续；同一方向重试创建新的兄弟场景（`origin: retry`、`attemptIndex` 递增），旧场景不更新；「换一批」在同一个父节点上创建新的方向批次（`batchIndex` 递增），旧批次保留。场景和方向 Artifact 永不 UPDATE，新内容总是新行。
 
-方向批次 ID 由 `(worldlineId, parentSceneId ?? "root", batchIndex)` 确定性派生，方向 ID 由 `(batchId, index)` 派生；场景 ID 由 `(directionsArtifactId, selectedDirectionId, attemptIndex)` 派生。相同 ID 的重复写入幂等返回已有行，因此并发重试不会产生重复批次或重复场景。v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`），保留可读并可作为根父节点，不迁移历史行。
+方向批次 ID 由 `(worldlineId, parentSceneId ?? "root", batchIndex)` 确定性派生，方向 ID 由 `(batchId, index)` 派生；场景 ID 由 `(directionsArtifactId, selectedDirectionId, attemptIndex)` 派生。相同 ID 的重复写入幂等返回已有行，因此并发重试不会产生重复批次或重复场景。进入 Worldline 时客户端自动请求根批次一次；服务端若已有根批次直接复用，同一进程内按确定性目标 Artifact id 合并并发请求，只有用户“换一批”才会创建新的 `batchIndex`。v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`），保留可读并可作为根父节点，不迁移历史行。
 
 `statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。
 

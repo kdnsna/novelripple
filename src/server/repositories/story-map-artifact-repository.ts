@@ -157,6 +157,8 @@ export function createStoryMapRevision(input: {
     projectId: input.projectId,
     artifactId: input.artifactId,
     operationType: change.type,
+    // 不确定标记是显式的人工决定：重复标记 / 重复清除幂等返回当前 Artifact。
+    returnIfNoChange: uncertaintyNoOp(change),
     update(storyMap, review, assertEvidence) {
       applyReviewChange(storyMap, review, change, assertEvidence);
       return "draft";
@@ -177,12 +179,30 @@ export function confirmStoryMapArtifact(input: {
   });
 }
 
+/**
+ * 读者优先入口：不要求 readiness，直接从最新 draft 创建 confirmed revision。
+ * review confirmations 保持原样，因此该 revision 可派生为“未精修”；
+ * operation type 记录它是如何被确认的。已经 confirmed 时幂等返回同一行。
+ */
+export function quickConfirmStoryMapArtifact(input: {
+  projectId: string;
+  artifactId: string;
+}): StoryMapArtifact {
+  return createRevisionFromLatest({
+    ...input,
+    operationType: "quick_confirm_story_map",
+    returnIfAlreadyConfirmed: true,
+    update: () => "confirmed",
+  });
+}
+
 function createRevisionFromLatest(input: {
   projectId: string;
   artifactId: string;
   operationType: NonNullable<StoryMapReview["operation"]>["type"];
   requireReadyForRipple?: boolean;
   returnIfAlreadyConfirmed?: boolean;
+  returnIfNoChange?: (base: StoryMapArtifact) => boolean;
   update: (
     storyMap: StoryMapArtifact["storyMap"],
     review: StoryMapReview,
@@ -232,6 +252,9 @@ function createRevisionFromLatest(input: {
       input.returnIfAlreadyConfirmed &&
       base.storyMap.status === "confirmed"
     ) {
+      return base;
+    }
+    if (input.returnIfNoChange?.(base)) {
       return base;
     }
     if (
@@ -395,6 +418,10 @@ function applyReviewChange(
     if (change.confidence !== undefined) {
       event.confidence = change.confidence;
     }
+    if (change.evidence !== undefined) {
+      assertEvidence(change.evidence);
+      event.evidence = change.evidence;
+    }
     if (JSON.stringify(event) === before) throw new Error("修改没有产生变化");
     invalidateEventEvidence(review, [change.eventId]);
     return;
@@ -428,6 +455,9 @@ function applyReviewChange(
     invalidateEventEvidence(review, [change.eventId]);
     review.edgeEvidenceConfirmations = review.edgeEvidenceConfirmations.filter(
       (confirmation) => !removedEdgeIds.includes(confirmation.edgeId),
+    );
+    review.uncertainEdgeIds = review.uncertainEdgeIds.filter(
+      (edgeId) => !removedEdgeIds.includes(edgeId),
     );
     review.endingCandidateConfirmations =
       review.endingCandidateConfirmations.filter(
@@ -486,6 +516,9 @@ function applyReviewChange(
     review.edgeEvidenceConfirmations = review.edgeEvidenceConfirmations.filter(
       (confirmation) => confirmation.edgeId !== change.edgeId,
     );
+    review.uncertainEdgeIds = review.uncertainEdgeIds.filter(
+      (edgeId) => edgeId !== change.edgeId,
+    );
     return;
   }
 
@@ -517,6 +550,28 @@ function applyReviewChange(
     if (JSON.stringify(edge) === before) throw new Error("修改没有产生变化");
     review.edgeEvidenceConfirmations = review.edgeEvidenceConfirmations.filter(
       (confirmation) => confirmation.edgeId !== change.edgeId,
+    );
+    return;
+  }
+
+  if (change.type === "mark_edge_uncertain") {
+    const edge = storyMap.edges.find((candidate) => candidate.id === change.edgeId);
+    if (!edge) throw new Error("找不到指定的 Story Edge");
+    if (review.uncertainEdgeIds.includes(edge.id)) {
+      throw new Error("Edge 已标记为不确定");
+    }
+    review.uncertainEdgeIds.push(edge.id);
+    return;
+  }
+
+  if (change.type === "clear_edge_uncertain") {
+    const edge = storyMap.edges.find((candidate) => candidate.id === change.edgeId);
+    if (!edge) throw new Error("找不到指定的 Story Edge");
+    if (!review.uncertainEdgeIds.includes(edge.id)) {
+      throw new Error("Edge 未标记为不确定");
+    }
+    review.uncertainEdgeIds = review.uncertainEdgeIds.filter(
+      (edgeId) => edgeId !== edge.id,
     );
     return;
   }
@@ -582,6 +637,20 @@ function applyReviewChange(
     throw new Error("Ending Candidate 已确认");
   }
   review.endingCandidateConfirmations.push(ending.id);
+}
+
+function uncertaintyNoOp(
+  change: StoryMapRevisionChange,
+): ((base: StoryMapArtifact) => boolean) | undefined {
+  if (change.type === "mark_edge_uncertain") {
+    return (base) => base.review.uncertainEdgeIds.includes(change.edgeId);
+  }
+  if (change.type === "clear_edge_uncertain") {
+    return (base) =>
+      base.storyMap.edges.some((edge) => edge.id === change.edgeId) &&
+      !base.review.uncertainEdgeIds.includes(change.edgeId);
+  }
+  return undefined;
 }
 
 function invalidateCharacterReview(

@@ -4,13 +4,17 @@ import { notFound } from "next/navigation";
 import { PersistedSourceReader } from "@/components/project/persisted-source-reader";
 import { SourceImportForm } from "@/components/project/source-import-form";
 import { StoryMapGenerationForm } from "@/components/project/story-map-generation-form";
+import { StoryMapJobProgress } from "@/components/project/story-map-job-progress";
 import { StoryMapReviewWorkspace } from "@/components/story-workspace/story-map-review-workspace";
 import { buildContinuationTreeView } from "@/components/story-workspace/continuation-tree-view";
 import {
   deriveEvidenceUnits,
   sourceReferenceForUnit,
 } from "@/domain/source/evidence-units";
+import { ensureJobRecovery } from "@/server/jobs/job-recovery";
+import { toJobView } from "@/server/jobs/job-view";
 import { listContinuationArtifactsForWorldline } from "@/server/repositories/continuation-repository";
+import { getLatestJobForSource } from "@/server/repositories/job-repository";
 import {
   getProject,
   getProjectSource,
@@ -20,6 +24,7 @@ import {
   getStoryMapArtifact,
   listStoryMapArtifactsForSource,
 } from "@/server/repositories/story-map-artifact-repository";
+import { listRippleSuggestionsArtifactsForStoryMap } from "@/server/repositories/ripple-suggestions-repository";
 import {
   listImpactPlanArtifactsForStoryMap,
   listProjectWorldlines,
@@ -46,11 +51,20 @@ export default async function ProjectPage({
   const project = getProject(projectId);
   if (!project) notFound();
 
+  // 首个请求先收口上个进程遗留的 queued/running 任务（服务器重启恢复）。
+  ensureJobRecovery();
   const projectSources = listProjectSources(project.id);
   const selectedSourceId = singleValue(query.source);
   const selectedSource = selectedSourceId
     ? getProjectSource(project.id, selectedSourceId)
     : projectSources[0] ?? null;
+  const latestJob = selectedSource
+    ? getLatestJobForSource({
+        projectId: project.id,
+        kind: "story_map_generation",
+        sourceId: selectedSource.id,
+      })
+    : null;
   const imported = singleValue(query.imported);
   const generated = singleValue(query.generated);
   const storyMapArtifacts = selectedSource
@@ -74,6 +88,12 @@ export default async function ProjectPage({
   const selectedImpactPlanArtifacts = selectedArtifact
     ? listImpactPlanArtifactsForStoryMap(project.id, selectedArtifact.id)
     : [];
+  const initialRippleSuggestions = selectedArtifact
+    ? listRippleSuggestionsArtifactsForStoryMap(
+        project.id,
+        selectedArtifact.id,
+      )[0] ?? null
+    : null;
   const selectedContinuationTrees = selectedWorldlines.map((worldline) => {
     const artifacts = listContinuationArtifactsForWorldline(worldline.id);
     return buildContinuationTreeView(worldline.id, [
@@ -170,54 +190,64 @@ export default async function ProjectPage({
             }))}
             initialContinuationTrees={selectedContinuationTrees}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
+            initialRippleSuggestions={initialRippleSuggestions}
             initialWorldlines={selectedWorldlines}
             projectId={project.id}
             source={selectedSource}
           />
         </>
       ) : (
-        <div className="project-grid">
-        <aside className="foundation-card source-sidebar">
-          <div>
-            <span className="eyebrow">导入新版本</span>
-            <h2>添加 Source</h2>
-          </div>
-          <SourceImportForm projectId={project.id} />
-
-          {projectSources.length > 0 ? (
-            <div className="source-version-list">
-              <h3>已保存版本</h3>
-              {projectSources.map((source, index) => (
-                <Link
-                  className={source.id === selectedSource?.id ? "active" : ""}
-                  href={`/projects/${project.id}?source=${source.id}`}
-                  key={source.id}
-                >
-                  <span>v{projectSources.length - index}</span>
-                  <strong>{source.title}</strong>
-                </Link>
-              ))}
-            </div>
-          ) : null}
-
-          {selectedSource ? (
-            <StoryMapGenerationForm
+        <>
+          {latestJob ? (
+            <StoryMapJobProgress
+              initialJob={toJobView(latestJob)}
               projectId={project.id}
-              sourceId={selectedSource.id}
+              sourceId={latestJob.input.sourceId}
             />
           ) : null}
-        </aside>
+          <div className="project-grid">
+            <aside className="foundation-card source-sidebar">
+              <div>
+                <span className="eyebrow">导入新版本</span>
+                <h2>添加 Source</h2>
+              </div>
+              <SourceImportForm projectId={project.id} />
 
-        {selectedSource ? (
-          <PersistedSourceReader source={selectedSource} />
-        ) : (
-          <section className="foundation-card empty-source-state">
-            <span className="eyebrow">等待原著</span>
-            <h2>尚未导入 Source</h2>
-            <p>请选择一个 UTF-8 编码的 txt 或 md 文件开始。</p>
-          </section>
-        )}
-        </div>
+              {projectSources.length > 0 ? (
+                <div className="source-version-list">
+                  <h3>已保存版本</h3>
+                  {projectSources.map((source, index) => (
+                    <Link
+                      className={source.id === selectedSource?.id ? "active" : ""}
+                      href={`/projects/${project.id}?source=${source.id}`}
+                      key={source.id}
+                    >
+                      <span>v{projectSources.length - index}</span>
+                      <strong>{source.title}</strong>
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+
+              {selectedSource && !latestJob ? (
+                <StoryMapGenerationForm
+                  projectId={project.id}
+                  sourceId={selectedSource.id}
+                />
+              ) : null}
+            </aside>
+
+            {selectedSource ? (
+              <PersistedSourceReader source={selectedSource} />
+            ) : (
+              <section className="foundation-card empty-source-state">
+                <span className="eyebrow">等待原著</span>
+                <h2>尚未导入 Source</h2>
+                <p>请选择一个 UTF-8 编码的 txt 或 md 文件开始。</p>
+              </section>
+            )}
+          </div>
+        </>
       )}
     </main>
   );

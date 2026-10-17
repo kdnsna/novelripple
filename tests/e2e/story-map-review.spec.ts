@@ -118,7 +118,7 @@ test("supports merge, evidenced Event add/delete, reorder, Edge lifecycle, and s
   await page.getByRole("button", { name: "返回核对队列" }).click();
 
   await page.getByRole("button", { name: "补充 Event" }).click();
-  await page.getByRole("button", { name: "选择这段 Evidence" }).click();
+  await page.getByRole("radio").first().check();
   await page.getByLabel("事件标题").fill("人工新增测试事件");
   await page.getByLabel("事件摘要").fill("读者从选定 Evidence 补充遗漏事件。");
   await page.getByLabel("状态变化（每行一项）").fill("遗漏事实进入地图");
@@ -142,10 +142,10 @@ test("supports merge, evidenced Event add/delete, reorder, Edge lifecycle, and s
   );
 
   await page.getByRole("button", { name: "新增 Edge" }).click();
-  await page.getByRole("button", { name: "选择这段 Evidence" }).click();
   await page.getByLabel("Edge 起点 Event").selectOption("event_01");
   await page.getByLabel("Edge 终点 Event").selectOption("event_03");
   await page.getByLabel("Edge 类型").selectOption("enables");
+  await page.getByRole("radio").first().check();
   await page.getByLabel("解释").fill("人工添加的测试关系");
   await clickRevisionAction(
     page,
@@ -181,6 +181,80 @@ test("supports merge, evidenced Event add/delete, reorder, Edge lifecycle, and s
   await expect(page.getByRole("heading", { name: "优先核对队列" })).toBeVisible();
 });
 
+
+test("ranks evidence, previews context, and marks an Edge uncertain", async ({
+  page,
+}) => {
+  await createFixtureStoryMap(page, "Evidence Picker 排序");
+
+  await page.getByRole("button", { name: "新增 Edge" }).click();
+  await page.getByLabel("Edge 起点 Event").selectOption("event_01");
+  await page.getByLabel("Edge 终点 Event").selectOption("event_06");
+
+  const picker = page.getByTestId("evidence-picker");
+  await expect(picker).toContainText(
+    "按与两端 Event 现有 Evidence Unit 的最小距离排序",
+  );
+  await expect(page.getByTestId("evidence-candidate")).toHaveCount(8);
+  const distances = await page
+    .getByTestId("evidence-candidate")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => Number(node.getAttribute("data-evidence-distance"))),
+    );
+  expect(distances).toEqual([...distances].sort((left, right) => left - right));
+  await expect(page.getByTestId("evidence-candidate").first()).toContainText(
+    "evidence_unit:",
+  );
+
+  await page
+    .getByTestId("evidence-candidate")
+    .first()
+    .getByRole("button", { name: "预览上下文" })
+    .click();
+  const preview = page.getByTestId("evidence-context-preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("上一段");
+  await expect(preview).toContainText("当前段");
+  await expect(preview).toContainText("下一段");
+
+  await picker.getByRole("button", { name: "显示全部段落" }).click();
+  await expect(page.getByTestId("evidence-candidate")).toHaveCount(136);
+
+  await page.getByRole("radio").first().check();
+  await page.getByLabel("Edge 类型").selectOption("enables");
+  await expect(
+    page.getByText("他提前拿到地图，才有可能在雨停前找到出口。"),
+  ).toBeVisible();
+  await page.getByLabel("解释").fill("用于验证排序与不确定标记的关系");
+  await clickRevisionAction(
+    page,
+    page.getByRole("button", { name: "新增 Edge revision" }),
+  );
+
+  await openManualEdgeAdvisory(page);
+  await clickRevisionAction(
+    page,
+    page.getByRole("button", { name: "标记为不确定" }),
+  );
+  await expect(
+    page.locator('[data-testid^="review-queue-item-uncertain_edge:"]'),
+  ).toBeVisible();
+
+  await page
+    .locator('[data-testid^="review-queue-item-uncertain_edge:"]')
+    .click();
+  await expect(
+    page.getByRole("button", { name: "清除不确定标记" }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".review-editor-panel .panel-heading .review-badge"),
+  ).toHaveText("不确定");
+
+  // 不确定 Edge 留在待核队列，但不阻塞直接开始涟漪。
+  await page.getByRole("button", { name: "直接开始涟漪" }).click();
+  await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
+});
+
 async function createFixtureStoryMap(page: Page, projectTitle: string) {
   await page.goto("/");
   await page.getByRole("link", { name: /创建故事项目/ }).click();
@@ -192,7 +266,10 @@ async function createFixtureStoryMap(page: Page, projectTitle: string) {
   await page.getByRole("button", { name: "导入 Source" }).click();
   await expect(page.getByRole("status")).toContainText("Source 导入成功");
   await page.getByRole("button", { name: "生成 Story Map" }).click();
-  await expect(page.getByText("Story Map v1 · draft")).toBeVisible();
+  await expect(page.getByTestId("story-map-job-progress")).toBeVisible();
+  await expect(page.getByText("Story Map v1 · draft")).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 async function clickRevisionAction(page: Page, action: ReturnType<Page["locator"]>) {

@@ -5,6 +5,7 @@ import {
   deriveStoryMapReview,
   summarizeStoryMapReviewOperations,
 } from "@/domain/review/derive-story-map-review";
+import { deriveStoryMapRefinementState } from "@/domain/review/derive-story-map-refinement";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 
 async function createArtifact(): Promise<StoryMapArtifact> {
@@ -138,6 +139,51 @@ describe("derived Story Map review", () => {
     });
   });
 
+
+  it("defaults uncertainEdgeIds for old review rows and treats an uncertain Edge as reviewed", async () => {
+    const fixture = await loadRippleFixture();
+    const artifact = await createArtifact();
+    const parsedOldRow = StoryMapArtifactSchema.parse({
+      ...artifact,
+      review: { evidenceConfirmations: [] },
+    });
+    expect(parsedOldRow.review.uncertainEdgeIds).toEqual([]);
+
+    const edge = artifact.storyMap.edges[0]!;
+    edge.confidence = 0.6;
+    for (const requirement of deriveStoryMapReview(artifact, fixture.source)
+      .importantEvidence) {
+      if (requirement.targetKind !== "event") continue;
+      artifact.review.evidenceConfirmations.push({
+        eventId: requirement.targetId,
+        evidence: requirement.evidence,
+      });
+    }
+    const before = deriveStoryMapReview(artifact, fixture.source);
+    expect(before.readiness.importantEvidenceReviewed).toBe(false);
+    expect(
+      before.queue.find((item) => item.id === `low_confidence_edge:${edge.id}`)
+        ?.status,
+    ).toBe("pending");
+
+    artifact.review.uncertainEdgeIds = [edge.id];
+    const after = deriveStoryMapReview(artifact, fixture.source);
+
+    expect(after.readiness.importantEvidenceReviewed).toBe(true);
+    expect(
+      after.queue.find((item) => item.id === `low_confidence_edge:${edge.id}`)
+        ?.status,
+    ).toBe("reviewed");
+    expect(
+      after.queue.find((item) => item.id === `uncertain_edge:${edge.id}`),
+    ).toMatchObject({
+      category: "uncertain_edge",
+      targetKind: "edge",
+      targetId: edge.id,
+      status: "pending",
+    });
+  });
+
   it("does not treat dangling or illegal references as reviewable warnings", async () => {
     const fixture = await loadRippleFixture();
     const artifact = await createArtifact();
@@ -172,6 +218,76 @@ describe("derived Story Map review", () => {
         merge_characters: 1,
       },
     });
+  });
+
+  it("derives unrefined quick-confirm badges from the existing review queue", async () => {
+    const fixture = await loadRippleFixture();
+    const artifact = await createArtifact();
+    artifact.storyMap.status = "confirmed";
+    artifact.storyMap.events[3]!.confidence = 0.7;
+    artifact.storyMap.edges[0]!.confidence = 0.6;
+    artifact.review.operation = {
+      type: "quick_confirm_story_map",
+      timestamp: "2026-08-13T00:00:00.000Z",
+      storyMapVersion: 1,
+    };
+
+    const derived = deriveStoryMapReview(artifact, fixture.source);
+    const refinement = deriveStoryMapRefinementState(artifact, derived);
+    const expectedEvents = [
+      ...new Set(
+        derived.queue
+          .filter(
+            (item) => item.status === "pending" && item.targetKind === "event",
+          )
+          .map((item) => item.targetId),
+      ),
+    ].sort();
+
+    expect(derived.readiness.readyForRipple).toBe(false);
+    expect(refinement.quickConfirmed).toBe(true);
+    expect(refinement.needsRefinement).toBe(true);
+    expect(refinement.eventIds).toEqual(expectedEvents);
+    expect(refinement.eventIds).toContain(artifact.storyMap.events[3]!.id);
+    expect(refinement.edgeIds).toContain(artifact.storyMap.edges[0]!.id);
+    expect(refinement.endingIds).toEqual(
+      artifact.storyMap.endingCandidates.map((ending) => ending.id).sort(),
+    );
+    expect(
+      refinement.pendingItems.every(
+        (item) => item.status === "pending" && item.targetKind !== "character",
+      ),
+    ).toBe(true);
+
+    expect(
+      deriveStoryMapRefinementState(artifact, {
+        ...derived,
+        readiness: { ...derived.readiness, readyForRipple: true },
+      }).needsRefinement,
+    ).toBe(false);
+    expect(
+      deriveStoryMapRefinementState(
+        {
+          ...artifact,
+          storyMap: { ...artifact.storyMap, status: "draft" },
+        },
+        derived,
+      ).needsRefinement,
+    ).toBe(false);
+
+    artifact.review.operation = {
+      type: "confirm_story_map",
+      timestamp: "2026-08-13T00:00:00.000Z",
+      storyMapVersion: 1,
+    };
+    const normallyConfirmed = deriveStoryMapRefinementState(
+      artifact,
+      deriveStoryMapReview(artifact, fixture.source),
+    );
+    expect(normallyConfirmed.quickConfirmed).toBe(false);
+    // “未精修”只看 confirmed + readiness，不依赖最新 operation type；
+    // 仓库的正常确认要求 readiness，这里人为构造的未就绪 confirmed 仍应提示精修。
+    expect(normallyConfirmed.needsRefinement).toBe(true);
   });
 });
 

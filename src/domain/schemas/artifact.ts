@@ -38,6 +38,9 @@ export const StoryMapReviewOperationTypeSchema = z.enum([
   "confirm_edge_evidence",
   "confirm_ending_candidate",
   "confirm_story_map",
+  "quick_confirm_story_map",
+  "mark_edge_uncertain",
+  "clear_edge_uncertain",
 ]);
 
 export const StoryMapReviewOperationSchema = z
@@ -56,6 +59,8 @@ export const StoryMapReviewSchema = z
       .default([]),
     characterConfirmations: z.array(z.string().min(1)).default([]),
     endingCandidateConfirmations: z.array(z.string().min(1)).default([]),
+    /** Edge 级“不确定”标记；不是 StoryMap.edge.type，下游涟漪逻辑忽略它。 */
+    uncertainEdgeIds: z.array(z.string().min(1)).default([]),
     operation: StoryMapReviewOperationSchema.nullable().default(null),
   })
   .strict();
@@ -89,6 +94,7 @@ const UpdateEventChangeSchema = z
     stateChanges: z.array(z.string().trim().min(1).max(1_000)).optional(),
     evidenceKind: EvidenceKindSchema.optional(),
     confidence: z.number().min(0).max(1).optional(),
+    evidence: z.array(SourceReferenceSchema).min(1).optional(),
   })
   .strict()
   .refine(
@@ -98,7 +104,8 @@ const UpdateEventChangeSchema = z
       change.participants !== undefined ||
       change.stateChanges !== undefined ||
       change.evidenceKind !== undefined ||
-      change.confidence !== undefined,
+      change.confidence !== undefined ||
+      change.evidence !== undefined,
     { message: "事件修改必须至少包含一个字段" },
   );
 
@@ -203,6 +210,18 @@ export const StoryMapRevisionChangeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("confirm_ending_candidate"),
       endingCandidateId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("mark_edge_uncertain"),
+      edgeId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("clear_edge_uncertain"),
+      edgeId: z.string().min(1),
     })
     .strict(),
 ]);

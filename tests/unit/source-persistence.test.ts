@@ -37,7 +37,7 @@ afterAll(async () => {
 });
 
 describe("SQLite Source persistence", () => {
-  it("migrates the five-table schema and immutable Source trigger from empty", () => {
+  it("migrates the six-table schema and immutable Source trigger from empty", () => {
     const sqlite = new Database(databasePath, { readonly: true });
     const tables = sqlite
       .prepare(
@@ -54,6 +54,7 @@ describe("SQLite Source persistence", () => {
     expect(tables.map((table) => table.name)).toEqual([
       "artifacts",
       "generation_runs",
+      "jobs",
       "projects",
       "sources",
       "worldlines",

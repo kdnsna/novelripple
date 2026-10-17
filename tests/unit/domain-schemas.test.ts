@@ -122,6 +122,7 @@ describe("core domain schemas", () => {
       edgeEvidenceConfirmations: [],
       characterConfirmations: [],
       endingCandidateConfirmations: [],
+      uncertainEdgeIds: [],
       operation: null,
     });
 

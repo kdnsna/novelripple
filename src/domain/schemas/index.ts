@@ -4,6 +4,7 @@ export * from "./context-manifest";
 export * from "./divergence";
 export * from "./generation-run";
 export * from "./impact-plan";
+export * from "./job";
 export * from "./project";
 export * from "./ripple-suggestion";
 export * from "./source";

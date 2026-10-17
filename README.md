@@ -8,7 +8,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 ## 核心体验
 
 1. 导入一部小说。
-2. 生成一张可追溯原文的「全书故事地图」。
+2. 生成一张可追溯原文的「全书故事地图」，并实时看到后台生成进度。
 3. 选择一个关键节点，保留原选择或提出新的选择。
 4. 先预览人物、线索、因果与结局将受到的影响。
 5. 确认后进入新的世界线，继续阅读、推演或创作。
@@ -70,6 +70,8 @@ M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 U
 
 仓库已经建立最薄的 OpenAI-compatible 模型调用边界，并实现可调用的分块 Story Map 召回管线：按 Evidence Unit 分块抽取（每块一轮补抽）→ 人名归并 → 结局/人物结局 → 全书合并 → Evidence 解析与领域校验 → 版本化 Artifact。服务端从不可变 Source 的 Section / 自然段确定性派生带稳定 ID 的 Evidence Unit；模型候选只返回 Unit ID，服务端再生成现有 SourceReference 的 Source、Section、UTF-16 偏移与 Hash。未知、重复、跨 Source 或领域引用非法时均 fail closed，不做模糊匹配或相似度 fallback。
 
+Story Map 生成现在是可恢复的后台任务：点击后立即进入阶段/分块进度视图，刷新页面仍从 `jobs` 表恢复同一任务；服务重启会把遗留任务标为 `interrupted` 并提供“重试”，重试创建新任务行而不是覆盖历史。任务只保存 Source ID、阶段计数、Artifact ID 和脱敏错误，不保存原文、Prompt 或模型输出；客户端每 1 秒轮询，成功后打开与旧流程相同的候选 Story Map。实现见 [`ADR 0008`](docs/decisions/0008-background-jobs.md)。
+
 项目页默认进入 Guided Review：系统按可解释风险显示 inference / 低置信度、人物 identity、Ending、重要 Evidence 与高杠杆分叉队列，并展示进入 Ripple 前的 Readiness Checklist；完整 React Flow 图属于次级视图。用户可以 rename / merge 人物、修改别名与角色，更新/删除/基于所选 Source Evidence 新增/重排 Event，重指派 participants，以及新增/修改/删除/确认 Edge。每次修正和确认都创建新的 revision Artifact，不覆盖 AI 原始版本；服务端拒绝 stale revision，且只有通过 readiness 的新 draft 才能确认并进入 Ripple。M1-04 没有真实 split 需求证据，因此未实现 Character split。
 
 Ripple Simulator 已支持 `prevent` / `choice` / `outcome`、严格与开放模式、结构化 Impact Plan 和四种 Anchor 状态。Preview 只使用已确认 Story Map 构造只读 Canonical 上下文；用户接受后才在同一事务中保存 accepted Impact Plan revision、幂等 Canonical Worldline 和子 Worldline。严格模式的 `incompatible` 会在写入前被拦截。
@@ -107,6 +109,8 @@ npm run dev
 `npm run dev` 会先幂等执行本地 SQLite migration；也可单独运行 `npm run db:migrate`。
 
 打开 `http://localhost:3000` 即可创建项目并导入 Source。重复导入规范化后内容相同的文件会打开已有 Source；内容发生变化时会创建新版本，旧 Source 不会被覆盖。
+
+> **隐私：真实作品请用生产服务器运行。** 开发模式请只导入测试或公版文本；处理真实作品时使用 `npm run build && npm start`。Next 16 开发模式默认会在终端记录 Server Function 名称、参数值与耗时，而本项目 action 会接收原著正文与改写指令；仓库已在 `next.config.ts` 设置 `logging.serverFunctions: false`，请保持关闭，避免作品内容进入日志。
 
 常用验证命令：
 

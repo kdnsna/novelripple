@@ -9,6 +9,7 @@ import {
   StoryMapMergeCandidateSchema,
   StoryMapRosterCandidateSchema,
   StoryMapSchema,
+  type JobProgress,
   type Source,
   type StoryMapContentCandidate,
   type StoryMapExtractionCandidate,
@@ -89,7 +90,13 @@ export async function generateStoryMap(input: {
   provider: AIProvider;
   modelConfig: ModelConfig;
   limits?: Partial<StoryMapLimits>;
+  /**
+   * 只观察阶段与计数；默认 no-op。callback 不参与 Prompt、校验或调用次数，
+   * 因此开启/关闭进度不会改变任何生成结果。
+   */
+  onProgress?: (progress: JobProgress) => void;
 }) {
+  const reportProgress = input.onProgress ?? (() => {});
   const source = getProjectSource(input.projectId, input.sourceId);
   if (!source) throw new Error("找不到指定的 Source");
 
@@ -110,6 +117,7 @@ export async function generateStoryMap(input: {
       `Story Map 预计基础模型调用 ${estimatedBaseCalls} 次超过上限 ${limits.maxModelCalls}（STORY_MAP_MAX_MODEL_CALLS）；未调用模型`,
     );
   }
+  reportProgress({ stage: "chunking", completed: chunks.length, total: chunks.length });
 
   const nameHints = deriveNameCandidates(units);
   let modelCalls = 0;
@@ -174,8 +182,10 @@ export async function generateStoryMap(input: {
         `预计输入约 ${estimatedInputChars} 字符（约 ${estimatedInputChars} tokens，按 prompt 字符粗略估算）`,
     );
   }
-  const extractions = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, (context, index, signal) =>
-    structured(
+  reportProgress({ stage: "extract", completed: 0, total: chunks.length });
+  let extractionCompleted = 0;
+  const extractions = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, async (context, index, signal) => {
+    const result = await structured(
       {
         kind: "story_map_extract",
         promptVersion: STORY_MAP_PROMPT_VERSIONS.extract,
@@ -185,13 +195,18 @@ export async function generateStoryMap(input: {
       extractionPrompts[index]!,
       (value) => validateChunkExtraction(value, context.allowed),
       signal,
-    ),
-  );
+    );
+    extractionCompleted += 1;
+    reportProgress({ stage: "extract", completed: extractionCompleted, total: chunks.length });
+    return result;
+  });
 
   // 2. 每块补抽一轮
-  const gleanings = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, (context, index, signal) => {
+  reportProgress({ stage: "glean", completed: 0, total: chunks.length });
+  let gleaningCompleted = 0;
+  const gleanings = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, async (context, index, signal) => {
     const extraction = extractions[index]!.value;
-    return structured(
+    const result = await structured(
       {
         kind: "story_map_glean",
         promptVersion: STORY_MAP_PROMPT_VERSIONS.glean,
@@ -209,6 +224,9 @@ export async function generateStoryMap(input: {
       (value) => validateChunkGleaning(value, extraction, context.allowed),
       signal,
     );
+    gleaningCompleted += 1;
+    reportProgress({ stage: "glean", completed: gleaningCompleted, total: chunks.length });
+    return result;
   });
 
   const chunkCandidates: ChunkCandidate[] = chunks.map((chunk, index) => ({
@@ -221,6 +239,7 @@ export async function generateStoryMap(input: {
   const individualPool = dropGroupCandidates(pooled);
 
   // 3. 人名归并（规则候选只作为过滤后的“可能漏名/别名”提示）
+  reportProgress({ stage: "names", completed: 0, total: 1 });
   const roster = await structured(
     {
       kind: "story_map_names",
@@ -238,8 +257,10 @@ export async function generateStoryMap(input: {
     (value) => validateRoster(value, individualPool),
   );
   const withRoster = applyRoster(individualPool, roster.value);
+  reportProgress({ stage: "names", completed: 1, total: 1 });
 
   // 4. 结局 / 人物结局
+  reportProgress({ stage: "endings", completed: 0, total: 1 });
   const tailUnits = units.slice(
     Math.max(0, units.length - Math.max(ENDING_TAIL_MIN_UNITS, Math.ceil(units.length * ENDING_TAIL_RATIO))),
   );
@@ -267,8 +288,10 @@ export async function generateStoryMap(input: {
     (value) => validateEndingPass(value, withRoster, endingUnitIds),
   );
   const withEndings = applyEndingPass(withRoster, endingPass.value);
+  reportProgress({ stage: "endings", completed: 1, total: 1 });
 
   // 5. 全书合并（Artifact 绑定这一 Run）
+  reportProgress({ stage: "merge", completed: 0, total: 1 });
   const totalCoreChars = chunks.reduce(
     (total, chunk) =>
       total +
@@ -308,6 +331,7 @@ export async function generateStoryMap(input: {
     },
   );
   if (!finalCandidate) throw new Error("Story Map 合并结果缺失");
+  reportProgress({ stage: "merge", completed: 1, total: 1 });
 
   const resolved = resolveStoryMapContentCandidate(finalCandidate, source, units);
   if (!resolved.success) {
@@ -317,12 +341,14 @@ export async function generateStoryMap(input: {
         .join("; ")}`,
     );
   }
+  reportProgress({ stage: "saving", completed: 0, total: 1 });
   const artifact = createStoryMapArtifact({
     projectId: input.projectId,
     sourceId: source.id,
     content: resolved.content,
     generationRunId: merge.generation.runId,
   });
+  reportProgress({ stage: "saving", completed: 1, total: 1 });
 
   return {
     artifact,

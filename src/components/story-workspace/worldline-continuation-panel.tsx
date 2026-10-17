@@ -29,12 +29,19 @@ import {
 
 type PendingKind = "directions" | "newBatch" | "scene" | "retry";
 
+type AutoRootDirections = {
+  loading: boolean;
+  error: string | null;
+};
+
 type WorldlineContinuationPanelProps = {
   projectId: string;
   storyMapArtifact: StoryMapArtifact;
   worldline: Worldline;
   acceptedImpactPlanArtifact: ImpactPlanArtifact;
   initialContinuation: ContinuationTreeView;
+  autoRootDirections: AutoRootDirections;
+  onRetryRootDirections: () => void;
   onClose: () => void;
 };
 
@@ -54,6 +61,8 @@ export function WorldlineContinuationPanel({
   worldline,
   acceptedImpactPlanArtifact,
   initialContinuation,
+  autoRootDirections,
+  onRetryRootDirections,
   onClose,
 }: WorldlineContinuationPanelProps) {
   const [view, setView] = useState(initialContinuation);
@@ -236,7 +245,9 @@ export function WorldlineContinuationPanel({
         <li>
           <span>当前 Worldline</span>
           <strong>{worldline.id}</strong>
-          <small>{plan.mode === "strict" ? "严格模式" : "开放模式"}</small>
+          <small>
+            {plan.mode === "strict" ? "保留原结局" : "让故事自由发展"}
+          </small>
         </li>
       </ol>
 
@@ -268,7 +279,26 @@ export function WorldlineContinuationPanel({
             只读取当前 Worldline、已接受 ImpactPlan、相关原文 Evidence
             和当前状态。
           </p>
-          {!activeBatch ? (
+          {!activeBatch && autoRootDirections.loading ? (
+            <p className="ripple-suggestions-status" role="status">
+              正在构思 3 个方向…
+            </p>
+          ) : null}
+          {!activeBatch && autoRootDirections.error ? (
+            <div className="ripple-suggestions-error" role="alert">
+              <p>{autoRootDirections.error}</p>
+              <button
+                className="secondary-button compact-button"
+                onClick={onRetryRootDirections}
+                type="button"
+              >
+                重试
+              </button>
+            </div>
+          ) : null}
+          {!activeBatch &&
+          !autoRootDirections.loading &&
+          !autoRootDirections.error ? (
             <button
               className="primary-button full-width-button"
               disabled={pending}

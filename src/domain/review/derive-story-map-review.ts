@@ -13,6 +13,7 @@ export type StoryMapReviewQueueCategory =
   | "inference_event"
   | "low_confidence_event"
   | "low_confidence_edge"
+  | "uncertain_edge"
   | "alias_rich_character"
   | "identity_merge_risk"
   | "ending_candidate"
@@ -59,6 +60,7 @@ const categoryOrder: Record<StoryMapReviewQueueCategory, number> = {
   inference_event: 1,
   low_confidence_event: 2,
   low_confidence_edge: 3,
+  uncertain_edge: 10,
   alias_rich_character: 4,
   identity_merge_risk: 5,
   ending_candidate: 6,
@@ -137,6 +139,7 @@ export function deriveStoryMapReview(
           sameSourceReference(confirmation.evidence, evidence),
       ),
     );
+    const uncertain = review.uncertainEdgeIds.includes(edge.id);
     if (edge.confidence < LOW_CONFIDENCE_THRESHOLD) {
       queue.push({
         id: `low_confidence_edge:${edge.id}`,
@@ -147,7 +150,21 @@ export function deriveStoryMapReview(
         relatedTargetIds: [edge.from, edge.to],
         title: edge.explanation,
         reason: `Edge 置信度 ${formatConfidence(edge.confidence)}，低于明确阈值 ${formatConfidence(LOW_CONFIDENCE_THRESHOLD)}。`,
-        status: evidenceReviewed ? "reviewed" : "pending",
+        // “不确定”是显式人工决定：保留在待核队列，但视为已看过。
+        status: evidenceReviewed || uncertain ? "reviewed" : "pending",
+      });
+    }
+    if (uncertain) {
+      queue.push({
+        id: `uncertain_edge:${edge.id}`,
+        category: "uncertain_edge",
+        priority: 3,
+        targetKind: "edge",
+        targetId: edge.id,
+        relatedTargetIds: [edge.from, edge.to],
+        title: edge.explanation,
+        reason: "已标记为不确定；保留在队列中供后续复查，不阻塞直接开始。",
+        status: "pending",
       });
     }
   }
@@ -456,6 +473,8 @@ function deriveImportantEvidenceRequirements(
     }
   }
   for (const edge of artifact.storyMap.edges) {
+    // 已人工标记“不确定”的 Edge 不再用 evidence confirmation 阻塞 readiness。
+    if (artifact.review.uncertainEdgeIds.includes(edge.id)) continue;
     if (edge.confidence >= LOW_CONFIDENCE_THRESHOLD) continue;
     for (const evidence of edge.evidence) {
       requirements.push({ targetKind: "edge", targetId: edge.id, evidence });

@@ -193,6 +193,9 @@ async function evaluateStory(
         modelConfig: config.modelConfig,
       });
       suggestionsArtifact = result.artifact;
+      if (!result.generation) {
+        throw new Error("Ripple Suggestions 未产生新的 Generation Run");
+      }
       suggestionsStage = {
         ...successfulStage(
           result.generation,

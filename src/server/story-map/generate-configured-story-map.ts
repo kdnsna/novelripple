@@ -1,4 +1,4 @@
-import type { Source } from "@/domain/schemas";
+import type { JobProgress, Source } from "@/domain/schemas";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import {
   createConfiguredAIProvider,
@@ -12,6 +12,7 @@ import { generateStoryMap } from "@/server/story-map/generate-story-map";
 export async function generateConfiguredStoryMap(input: {
   projectId: string;
   sourceId: string;
+  onProgress?: (progress: JobProgress) => void;
 }) {
   const source = getProjectSource(input.projectId, input.sourceId);
   if (!source) throw new Error("找不到指定的 Source");
