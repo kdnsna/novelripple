@@ -97,6 +97,96 @@ describe("roster pass", () => {
     ]);
   });
 
+  it("unions roster aliases with every merged candidate name and alias in order", () => {
+    const unionPool: StoryMapPool = {
+      characters: [
+        { ...character("char_shen", "沈砚", ["沈公子"]), kind: "individual" },
+        { ...character("char_shen__c2", "沈砚", ["砚哥"]), kind: "individual" },
+        {
+          ...character("char_shen__c3", "沈三", [" 三哥 ", "沈先生", "围观的人群"]),
+          kind: "individual",
+        },
+      ],
+      events: [],
+      edges: [],
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_shen",
+          name: "沈砚",
+          aliases: [" 阿砚 ", " 沈公子 ", "沈砚", "", "围观的人群"],
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_shen", "char_shen__c2", "char_shen__c3"],
+        },
+      ],
+      rejectedCandidateIds: [],
+    };
+
+    expect(applyRoster(unionPool, roster).characters[0]!.aliases).toEqual([
+      "阿砚",
+      "沈公子",
+      "砚哥",
+      "沈三",
+      "三哥",
+      "沈先生",
+    ]);
+  });
+
+  it("excludes aliases that match the final name after roster normalization", () => {
+    const normalizedPool: StoryMapPool = {
+      characters: [
+        { ...character("char_ab", "Ａ Ｂ", ["ＡＢ"]), kind: "individual" },
+        { ...character("char_ab__c2", " A  B ", ["a b"]), kind: "individual" },
+      ],
+      events: [],
+      edges: [],
+    };
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_ab",
+          name: "Ａ Ｂ",
+          aliases: ["a  b", "阿比"],
+          role: "supporting",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_ab", "char_ab__c2"],
+        },
+      ],
+      rejectedCandidateIds: [],
+    };
+
+    expect(applyRoster(normalizedPool, roster).characters[0]!.aliases).toEqual(["阿比", "ＡＢ"]);
+  });
+
+  it("caps merged aliases at 12, keeping roster-pass aliases first", () => {
+    const cappedPool: StoryMapPool = {
+      characters: [
+        character("char_lin", "林舟", ["候选甲"]),
+        character("char_lin__c2", "林舟", ["候选乙", "候选丙"]),
+      ],
+      events: [],
+      edges: [],
+    };
+    const rosterAliases = Array.from({ length: 12 }, (_, index) => `别名${index + 1}`);
+    const roster: StoryMapRosterCandidate = {
+      characters: [
+        {
+          id: "char_lin",
+          name: "林舟",
+          aliases: rosterAliases,
+          role: "protagonist",
+          initialState: "刚回到港城",
+          mergedFrom: ["char_lin", "char_lin__c2"],
+        },
+      ],
+      rejectedCandidateIds: [],
+    };
+
+    expect(applyRoster(cappedPool, roster).characters[0]!.aliases).toEqual(rosterAliases);
+  });
+
   it("keeps identities separate when the roster is not certain they are the same person", () => {
     const separatePool: StoryMapPool = {
       characters: [character("char_lin", "林舟"), character("char_lin__c2", "林周")],

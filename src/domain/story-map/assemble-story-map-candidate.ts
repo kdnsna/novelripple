@@ -422,7 +422,7 @@ export function applyRoster(
       ...roster.characters.map((character) => ({
         id: character.id,
         name: character.name,
-        aliases: character.aliases,
+        aliases: collectMergedAliases(character, poolById),
         role: character.role,
         initialState: character.initialState,
       })),
@@ -435,6 +435,38 @@ export function applyRoster(
     })),
     edges: pool.edges,
   };
+}
+
+/** 最终人物的别名上限；人名轮给出的别名优先保留。 */
+const MAX_CHARACTER_ALIASES = 12;
+
+/**
+ * 合并后人物的别名 = 人名轮别名 ∪ 每个 mergedFrom 候选的 name 与 aliases。
+ * 保持出现顺序，按人名比较键去重；去掉空串、与最终 name 等价的写法和群体名。
+ */
+function collectMergedAliases(
+  character: StoryMapRosterCandidate["characters"][number],
+  poolById: ReadonlyMap<string, PooledCharacter>,
+): string[] {
+  const seen = new Set([normalizeRosterName(character.name)]);
+  const aliases: string[] = [];
+  const push = (value: string) => {
+    if (aliases.length >= MAX_CHARACTER_ALIASES) return;
+    const alias = value.trim();
+    if (!alias || isCollectiveName(alias)) return;
+    const key = normalizeRosterName(alias);
+    if (seen.has(key)) return;
+    seen.add(key);
+    aliases.push(alias);
+  };
+  for (const alias of character.aliases) push(alias);
+  for (const candidateId of character.mergedFrom) {
+    const candidate = poolById.get(candidateId);
+    if (!candidate) continue;
+    push(candidate.name);
+    for (const alias of candidate.aliases) push(alias);
+  }
+  return aliases;
 }
 
 // ── 结局轮次 ──
