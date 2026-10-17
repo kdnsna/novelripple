@@ -227,7 +227,7 @@ export function createContinuationSceneArtifact(input: {
     stored.continuation.directionsArtifactId !== input.directionsArtifact.id ||
     stored.continuation.selectedDirectionId !== input.selectedDirectionId
   ) {
-    throw new Error("M0 只允许一个后续场景，不能更换已生成方向");
+    throw new Error("v1 场景 Artifact 只支持一个后续场景，不能更换已生成方向");
   }
   return stored;
 }

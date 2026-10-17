@@ -1052,6 +1052,8 @@ CI=1 npm run test:e2e
 
 ## M1-06｜真实作品单场景 Continuation 质量
 
+> 历史范围说明：本节冻结的是 M1-06 的“单场景”验收口径。P0（[`0007`](../decisions/0007-scene-node-tree-and-context-assembly.md)）之后，Continuation 已支持场景节点树；本节只保留当时的执行决策，不描述当前能力。
+
 开始 NovelRipple M1-06。
 目标：
 不增加无限续写，不增加章节系统，只提高“一条新世界线的第一个场景”在真实作品上的一致性、连续性和阅读价值。

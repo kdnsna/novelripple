@@ -174,12 +174,43 @@ Source → Story Map version → Divergence → accepted Impact Plan → Worldli
 
 Continuation 分为两个固定阶段，不是 Agent：
 
-1. 基于当前 Worldline 有效状态提出恰好三个方向，每个方向包含标题、前提、受影响人物与预期后果；
+1. 基于当前 Worldline 有效状态与当前路径提出恰好三个方向，每个方向包含标题、前提、受影响人物与预期后果；
 2. 用户选择一个方向后生成一个完整场景及 `statePatch`。
 
-`statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。方向和场景分别保存为不可变 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。场景构成场景节点树：任一场景都可以作为父节点继续，深度递增；同一方向重试创建新的兄弟场景（`origin: retry`、`attemptIndex` 递增），旧场景不更新；「换一批」创建新的方向批次（`batchIndex` 递增），旧批次保留。场景的 `statePatch` 只折叠当前路径，兄弟分支的状态互不可见。
+### 场景节点树
 
-模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan 和当前 Delta，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
+方向和场景分别保存为不可变 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。一次方向生成是一个方向批次（`schemaVersion: 2`）：`parentSceneId` 指向路径末端场景，根批次为 `null`，`batchIndex` 从 0 递增，批次内恰好三个方向。一次场景生成是一个节点（`schemaVersion: 2`），保存 `parentSceneId`、`depth`、`origin`（`generated` / `retry`）、`attemptIndex` 与 `summary`。根节点 `parentSceneId: null`、`depth: 1`；子节点 `depth = parent.depth + 1`。任一场景都可以作为父节点继续；同一方向重试创建新的兄弟场景（`origin: retry`、`attemptIndex` 递增），旧场景不更新；「换一批」在同一个父节点上创建新的方向批次（`batchIndex` 递增），旧批次保留。场景和方向 Artifact 永不 UPDATE，新内容总是新行。
+
+方向批次 ID 由 `(worldlineId, parentSceneId ?? "root", batchIndex)` 确定性派生，方向 ID 由 `(batchId, index)` 派生；场景 ID 由 `(directionsArtifactId, selectedDirectionId, attemptIndex)` 派生。相同 ID 的重复写入幂等返回已有行，因此并发重试不会产生重复批次或重复场景。v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`），保留可读并可作为根父节点，不迁移历史行。
+
+`statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。
+
+### 路径状态
+
+Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta（`baseDelta`）。当前路径状态是 `baseDelta` 沿根节点到当前节点的 `statePatch` 依次折叠的结果：只读取该路径上的节点，不读取兄弟节点、世界线中路径外的场景或未来节点。折叠沿用上述 `statePatch` 语义。路径必须同属一个 Worldline、父子链连续、`depth` 逐级加一，否则 fail closed。因此兄弟分支的状态互不可见，任一节点只影响它的后代路径。
+
+### 上下文组装与清单
+
+每次生成只从当前路径和当前 Worldline 组装上下文，固定顺序为：
+
+1. `worldline_setup`：世界线、分歧、模式、Anchor、人物、accepted Impact Plan 与当前路径状态；
+2. `path_summary`：当前路径较早场景的滚动摘要；
+3. `canon_evidence`：现有 `selectContinuationContext` 选出的原著证据（分叉点窗口与人物证据，绝对上限 6000 字符且严格小于 Source 的 25%）；
+4. `recent_scenes`：当前路径最近 2 个场景正文；
+5. `selected_direction`：用户选中的方向；
+6. `anchor_reminder`：严格/开放模式提示与状态补丁约束。
+
+方向生成没有 `selected_direction`，其余段相同。
+
+`worldline_setup`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不裁剪；`path_summary` 可截尾，`canon_evidence` 从末尾整条丢弃，`recent_scenes` 从最旧开始整条丢弃但始终保留最新一个场景。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符；配置不是正整数、或必需段与最新场景本身超过预算时 fail closed。系统 Prompt 模板不计入该素材预算；预算按 UTF-16 字符数计算，不引入 tokenizer。
+
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+
+### 路径滚动摘要
+
+场景生成输出 `summary`（≤200 字），与场景一起不可变保存。组装上下文时，沿根→当前节点路径确定性构建滚动摘要：最近 2 个场景留给 `recent_scenes` 原文，更早的场景按从旧到新写成摘要行；超过 1200 字符时从最旧一行开始省略并加省略提示，`watermarkSceneId` 指向最后一条被摘要覆盖的节点。摘要只读取给定路径的不可变字段，同一输入逐字节相同，不额外调用模型，也不查询兄弟分支；切换路径时按新路径重建，祖先内容保持一致。
+
+模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan、当前路径状态、路径摘要与最近场景，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
 
 ## 状态转换与确认门
 

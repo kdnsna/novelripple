@@ -7,9 +7,12 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Added / 新增
 
-- P0 服务层场景节点树：v2 方向批次与场景 Artifact 使用确定性幂等 ID；任一场景可继续、retry 生成兄弟场景、「换一批」创建新批次，旧行不更新；v1 行保持可读并可作为根父节点。P0 server-side scene tree: deterministic v2 directions/scene artifacts support continue, retry siblings and new batches without mutating old rows; v1 rows stay readable as root parents.
-- 续写上下文改为分段组装（世界线设定、路径摘要、原著证据、最近场景、所选方向、Anchor 提示），预算 `CONTINUATION_CONTEXT_MAX_CHARS` 默认 24000 并 fail closed；场景保存不含正文的 Context Manifest。Continuation context is now assembled by fixed sections with a fail-closed `CONTINUATION_CONTEXT_MAX_CHARS` budget (default 24000); scenes store a prose-free context manifest.
-- 新续写 Prompt：`continuation-directions.v2` 与 `continuation-scene.v3`；场景输出新增 ≤200 字 `summary` 供路径滚动摘要。New continuation prompts; v3 scene output includes a ≤200-character summary for path summaries.
+- P0 场景节点树：续写 Artifact 升级到 `schemaVersion: 2`；方向批次记录 `parentSceneId` / `batchIndex`，场景节点记录父节点、深度、`origin` / `attemptIndex` 与 ≤200 字摘要；任一场景可继续、同方向重试生成兄弟场景、「换一批」创建新批次，旧行永不 UPDATE。P0 scene node tree: v2 continuation artifacts add parent, depth, origin/attemptIndex and a ≤200-character summary; any scene can be continued, retry creates a sibling, and a new batch preserves old rows.
+- 确定性幂等 ID 与 v1 兼容：方向/场景 ID 由内容身份派生，重复请求返回同一行；v1 方向视为根批次 0，v1 场景归一化为根节点，历史数据不迁移。Deterministic content-addressed IDs and v1 compatibility: duplicate requests are idempotent; v1 rows stay readable as root nodes without migration.
+- 路径状态隔离：当前状态 = accepted Impact Plan 基础 Delta 沿根→当前节点折叠，兄弟分支互不可见；断裂父子链、跨世界线父节点或深度不连续 fail closed。Path-state isolation: the base delta is folded only along root→node, so sibling state never leaks; broken chains, cross-worldline parents and depth gaps fail closed.
+- 续写上下文改为固定六段组装（世界线设定、路径摘要、原著证据、最近 2 个场景、所选方向、锚点提醒），预算 `CONTINUATION_CONTEXT_MAX_CHARS` 默认 24000 并 fail closed；场景保存不含正文的 Context Manifest，界面提供查看器。Continuation context is assembled from six fixed sections with a fail-closed `CONTINUATION_CONTEXT_MAX_CHARS` budget (default 24000); scenes store a prose-free context manifest and the UI exposes a viewer.
+- 路径滚动摘要：`continuation-scene.v3` 顺带输出 ≤200 字摘要；最近 2 幕之前的场景沿当前路径确定性生成摘要（≤1200 字符，水位线为最后覆盖节点），不额外调用模型，兄弟分支互相隔离。Rolling path summary: v3 scenes emit a ≤200-character summary; scenes older than the recent 2 are summarized deterministically (≤1200 characters, watermark = last covered node) with no extra model call and sibling isolation.
+- 新续写 Prompt：`continuation-directions.v2` 与 `continuation-scene.v3`。New continuation prompts: `continuation-directions.v2` and `continuation-scene.v3`.
 - 按稳定 Evidence Unit 分块召回 Story Map（ADR 0006）：目标 6,000 字符、最小/最大 3,000/9,000、2 个只读上下文 Unit、4 路并发。Chunked Story Map recall over stable Evidence Units (ADR 0006): 6k target, 3k/9k bounds, 2 context units, 4-way concurrency.
 - 每块一轮补抽，并用确定性人名候选（含对白说话人）驱动人名归并。One gleaning pass per chunk; deterministic name hints, including dialogue speakers, seed the roster pass.
 - 末尾约 20%（至少 3 个 Unit）的结局轮次，输出故事结局与 `【人物结局】` 人物结局。Endings pass over the last ~20% of units (min 3), including character endings.
@@ -36,6 +39,7 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Changed / 变更
 
+- 续写面板从单场景线性阅读改为场景树：展示当前路径、用 `‹ 2/3 ›` 切换兄弟场景、继续、重试本幕、换一批，并可查看上下文清单。The continuation panel is now a scene-tree reader with current path, sibling switching, continue, retry, new batch and a context manifest viewer.
 - 评测门禁改为非阻塞的质量仪表盘（ADR 0005）。Evaluation gate became a non-blocking quality dashboard (ADR 0005).
 - M1 仪表盘遇到任一篇 private manifest（或来自 `NOVELRIPPLE_BENCH_ROOT`）时不再写入 `docs/evals/runs/`：报告默认与 `metrics.json` 同落在 `.data/evals/`；`--report-dir` 只允许仓库外或 Git 忽略的仓库内路径（脚本用 `git check-ignore -q` 判断），并把私有 benchmark ID 脱敏为 `private:<storyClass>`。Private M1 dashboard runs no longer write into `docs/evals/runs/`: reports stay next to `metrics.json` under `.data/evals/`; `--report-dir` is allowed only outside the repository or in a git-ignored in-repo path (checked with `git check-ignore -q`), and private benchmark IDs are redacted as `private:<storyClass>`.
 - 四条硬规则仍然阻塞：原文与分歧前历史不被覆盖、证据可溯源、世界线隔离、坏输出被拒绝。Four hard rules still block.
