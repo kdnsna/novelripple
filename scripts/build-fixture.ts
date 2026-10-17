@@ -3,7 +3,7 @@ import path from "node:path";
 
 import {
   ContinuationDirectionsModelOutputSchema,
-  ContinuationSceneModelOutputSchema,
+  ContinuationSceneModelOutputV3Schema,
   DivergenceSchema,
   ImpactPlanSchema,
   SourceSchema,
@@ -728,8 +728,10 @@ const continuationFixture = {
     ],
   }),
   selectedDirectionIndex: 0,
-  scene: ContinuationSceneModelOutputSchema.parse({
+  scene: ContinuationSceneModelOutputV3Schema.parse({
     title: "潮标站的第二把锁",
+    summary:
+      "许澄把红账原件封存在潮标站，与沈砚、周岚约定天亮后在旧灯塔再次核对封条，并继续提防顾闻舟的追踪。",
     prose:
       `许澄没有把红账带去报社。雨水沿着旧潮标站的百叶窗往下淌，她把包在防潮布里的账簿放进铁柜，又让沈砚当面记下封条编号。沈砚关掉顶灯，只留下值班台的一圈冷光。他们没有宣称证据已经安全，也没有假装周岚持有原件；电话另一端，周岚只记录时间、地点和两人的口述。
 

@@ -10,13 +10,16 @@ import {
 } from "@/app/projects/actions";
 import type { EvidencePickerOption } from "@/components/story-workspace/evidence-unit-picker";
 import {
+  emptyContinuationTreeView,
+  type ContinuationTreeView,
+} from "@/components/story-workspace/continuation-tree-view";
+import {
   deriveStoryMapReview,
   type DerivedStoryMapReview,
   type StoryMapReviewQueueItem,
 } from "@/domain/review/derive-story-map-review";
 import {
   sourceReferenceKey,
-  type ContinuationArtifact,
   type Event,
   type ImpactPlanArtifact,
   type Source,
@@ -45,7 +48,7 @@ type StoryMapReviewWorkspaceProps = {
   evidenceOptions: EvidencePickerOption[];
   initialWorldlines: Worldline[];
   initialImpactPlanArtifacts: ImpactPlanArtifact[];
-  initialContinuationArtifacts: ContinuationArtifact[];
+  initialContinuationTrees: ContinuationTreeView[];
 };
 
 export function StoryMapReviewWorkspace({
@@ -56,7 +59,7 @@ export function StoryMapReviewWorkspace({
   evidenceOptions,
   initialWorldlines,
   initialImpactPlanArtifacts,
-  initialContinuationArtifacts,
+  initialContinuationTrees,
 }: StoryMapReviewWorkspaceProps) {
   const router = useRouter();
   // artifact 是本地状态：revision 成功后立即快进（不等待导航），
@@ -459,10 +462,11 @@ export function StoryMapReviewWorkspace({
           {activeWorldline && activeImpactPlanArtifact ? (
             <WorldlineContinuationPanel
               acceptedImpactPlanArtifact={activeImpactPlanArtifact}
-              initialArtifacts={initialContinuationArtifacts.filter(
-                (continuation) =>
-                  continuation.worldlineId === activeWorldline.id,
-              )}
+              initialContinuation={
+                initialContinuationTrees.find(
+                  (tree) => tree.worldlineId === activeWorldline.id,
+                ) ?? emptyContinuationTreeView(activeWorldline.id)
+              }
               key={`${activeWorldline.id}:continuation`}
               onClose={() => setActiveWorldlineId(null)}
               projectId={projectId}

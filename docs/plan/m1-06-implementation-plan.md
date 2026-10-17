@@ -1,5 +1,7 @@
 # M1-06 实现计划：真实作品单场景 Continuation 质量
 
+> 历史范围说明：本计划冻结的是 M1-06 的“单场景”验收口径。P0（[`0007`](../decisions/0007-scene-node-tree-and-context-assembly.md)）之后，Continuation 已支持场景节点树；本文件只保留当时的实现与验收决策，不描述当前能力。
+
 目标：不增加无限续写/章节系统，只提高"一条新世界线的第一个场景"在真实作品上的一致性、连续性和阅读价值。仍保持 3 directions → user selects 1 → 1 scene。
 
 ## 需求源

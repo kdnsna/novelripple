@@ -72,10 +72,16 @@ test("generates a strict rerouted preview and creates one child only after accep
 
   await page.getByRole("button", { name: "生成 3 个后续方向" }).click();
   await expect(page.locator(".direction-card")).toHaveCount(3);
+  await expect(page.getByText("方向批次 1")).toBeVisible();
   await expect(page.getByText("把证据藏进潮标站")).toBeVisible();
+
+  // 换一批：同一父节点创建新批次，旧批次不覆盖；界面切到新批次。
+  await page.getByRole("button", { name: "换一批" }).click();
+  await expect(page.getByText("方向批次 2")).toBeVisible();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
   await page
-    .getByText("把证据藏进潮标站")
-    .locator("xpath=ancestor::article[1]")
+    .locator(".direction-card")
+    .first()
     .getByRole("button", { name: "选择此方向" })
     .click();
   await expect(page.getByTestId("continuation-scene")).toContainText(
@@ -92,6 +98,41 @@ test("generates a strict rerouted preview and creates one child only after accep
   await expect(page.getByTestId("continuation-scene")).toContainText(
     "潮标站的第二把锁",
   );
+
+  // 从当前场景继续：先取 3 个方向，再选择第一个方向生成第二幕。
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-path")).toContainText("第 1 幕");
+  await expect(page.getByTestId("continuation-scene")).toContainText("第 2 幕");
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+
+  // 重试本幕生成同父节点的新兄弟；切回首次尝试时导航显示 1/2。
+  await page.getByRole("button", { name: "重试本幕" }).click();
+  await expect(page.getByTestId("continuation-scene")).toContainText("第 2 幕");
+  await expect(page.getByTestId("continuation-scene")).toContainText("重试");
+  await expect(page.getByTestId("scene-siblings")).toContainText("2/2");
+  await page.getByRole("button", { name: "上一个兄弟场景" }).click();
+  await expect(page.getByTestId("scene-siblings")).toContainText("1/2");
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+  await expect(page.getByTestId("continuation-scene")).not.toContainText(
+    "重试",
+  );
+
+  // Context Viewer 只展示段名/计数，不展示正文。
+  await page.getByTestId("context-viewer").locator("summary").click();
+  await expect(page.getByTestId("context-viewer")).toContainText("预算使用");
+  for (const section of ["世界线设定", "原著证据", "最近场景", "所选方向"]) {
+    await expect(page.getByTestId("context-viewer")).toContainText(section);
+  }
 });
 
 test("shows incompatible and blocks strict acceptance", async ({ page }) => {

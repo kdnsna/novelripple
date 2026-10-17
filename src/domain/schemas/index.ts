@@ -1,5 +1,6 @@
 export * from "./artifact";
 export * from "./continuation";
+export * from "./context-manifest";
 export * from "./divergence";
 export * from "./generation-run";
 export * from "./impact-plan";

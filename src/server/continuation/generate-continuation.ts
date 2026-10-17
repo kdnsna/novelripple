@@ -2,16 +2,37 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  assembleContext,
+  RELATED_EVIDENCE_PRIORITY,
+  STYLE_EVIDENCE_PRIORITY,
+  type ContextAssemblerResult,
+  type ContextEvidenceItem,
+  type ContextSceneItem,
+} from "@/domain/continuation/context-assembler";
+import {
+  buildCanonEventsSection,
+  buildRelatedEvidenceItems,
+} from "@/domain/continuation/canon-context";
+import { buildPathSummary } from "@/domain/continuation/path-summary";
+import {
+  buildSceneTree,
+  derivePathState,
+  getScenePath,
+  type SceneNode,
+} from "@/domain/continuation/scene-tree";
+import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
+import {
   deriveWorldlineDelta,
   validateContinuationDirections,
   validateContinuationStatePatch,
 } from "@/domain/invariants/validate-continuation";
-import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { assertValidStoryMap } from "@/domain/invariants/validate-story-map";
 import {
   ContinuationDirectionsModelOutputSchema,
-  ContinuationSceneModelOutputSchema,
+  ContinuationSceneModelOutputV3Schema,
   type ContinuationDirection,
+  type ContinuationDirectionsArtifact,
+  type ContinuationSceneModelOutput,
   type ImpactPlanArtifact,
   type Source,
   type StoryMapArtifact,
@@ -21,11 +42,14 @@ import {
 import { generateStructured } from "@/server/ai/generate-structured";
 import type { AIProvider, ModelConfig } from "@/server/ai/types";
 import {
-  createContinuationDirectionsArtifact,
-  createContinuationSceneArtifact,
+  createContinuationDirectionsArtifactV2,
+  createContinuationSceneArtifactV2,
   getContinuationArtifact,
-  getContinuationDirectionsForWorldline,
-  getContinuationSceneForWorldline,
+  getLatestDirectionsBatch,
+  listContinuationArtifactsForWorldline,
+  listScenesForDirection,
+  stableDirectionsArtifactIdV2,
+  stableSceneArtifactIdV2,
 } from "@/server/repositories/continuation-repository";
 import { getProjectSource } from "@/server/repositories/project-repository";
 import {
@@ -34,50 +58,137 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const directionsPromptVersion = "continuation.v1";
-const scenePromptVersion = "continuation.v2";
+const directionsPromptVersion = "continuation-directions.v2";
+const scenePromptVersion = "continuation-scene.v3";
+
+export const DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS = 24_000;
+export const CONTINUATION_CONTEXT_MAX_CHARS_ENV =
+  "CONTINUATION_CONTEXT_MAX_CHARS";
+
+/**
+ * 同一进程内的请求去重锁。
+ *
+ * key 是确定性目标 Artifact id：并发同内容请求只有第一个真正调用模型，
+ * 其余请求 await 同一个 Promise。锁释放后再次进入会先查已有 Artifact，
+ * 因此不会为相同内容重复生成。它不是跨进程锁，数据库确定性主键仍是
+ * 最终幂等边界。
+ */
+const inFlightGenerations = new Map<string, Promise<unknown>>();
+
+function runWithInFlightLock<T>(
+  key: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const existing = inFlightGenerations.get(key);
+  if (existing) return existing as Promise<T>;
+
+  const promise = task();
+  inFlightGenerations.set(key, promise);
+  return promise.finally(() => {
+    if (inFlightGenerations.get(key) === promise) {
+      inFlightGenerations.delete(key);
+    }
+  });
+}
+
+/**
+ * 读取上下文预算。未配置时使用默认值；配置值必须是正整数，
+ * 否则 fail closed（不做字符串截取或回退到默认值的猜测）。
+ */
+export function readContinuationContextMaxChars(): number {
+  const raw = process.env[CONTINUATION_CONTEXT_MAX_CHARS_ENV];
+  if (raw === undefined) return DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS;
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error(
+      `${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 必须是正整数：${raw}`,
+    );
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 必须是安全正整数：${raw}`,
+    );
+  }
+  return parsed;
+}
 
 export async function generateContinuationDirections(input: {
   projectId: string;
   worldlineId: string;
+  parentSceneId?: string | null;
+  newBatch?: boolean;
   provider: AIProvider;
   modelConfig: ModelConfig;
 }) {
-  const existing = getContinuationDirectionsForWorldline(input.worldlineId);
-  if (existing) {
-    if (existing.projectId !== input.projectId) {
-      throw new Error("找不到当前 Project 的 Worldline");
-    }
-    return { artifact: existing, generation: null };
-  }
-
+  const parentSceneId = input.parentSceneId ?? null;
+  const newBatch = input.newBatch ?? false;
   const context = loadContinuationContext(input);
-  const prompt = await buildPrompt("directions", context);
-  const generation = await generateStructured(
-    {
-      projectId: input.projectId,
-      worldlineId: context.worldline.id,
-      kind: "continuation_directions",
-      promptVersion: directionsPromptVersion,
-      prompt,
-      schemaName: "continuation_directions",
-      schema: ContinuationDirectionsModelOutputSchema,
-      modelConfig: input.modelConfig,
-      validate: (output) =>
-        validateContinuationDirections(output, context.storyMapArtifact.storyMap),
-    },
-    input.provider,
-  );
-  const artifact = createContinuationDirectionsArtifact({
-    projectId: input.projectId,
-    sourceId: context.source.id,
-    worldline: context.worldline,
-    acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
-    output: generation.value,
-    generationRunId: generation.generation.runId,
+  const { path } = resolveScenePath({
+    worldlineId: context.worldline.id,
+    parentSceneId,
   });
 
-  return { artifact, generation: generation.generation };
+  const latestBatch = getLatestDirectionsBatch(
+    context.worldline.id,
+    parentSceneId,
+  );
+  if (!newBatch && latestBatch) {
+    return { artifact: latestBatch, generation: null };
+  }
+  const batchIndex =
+    latestBatch === null ? 0 : directionsBatchIndex(latestBatch) + 1;
+  const targetArtifactId = stableDirectionsArtifactIdV2(
+    context.worldline.id,
+    parentSceneId,
+    batchIndex,
+  );
+
+  return runWithInFlightLock(targetArtifactId, async () => {
+    const existing = getContinuationArtifact(targetArtifactId);
+    if (existing && existing.artifactType === "directions") {
+      return { artifact: existing, generation: null };
+    }
+
+    const pathState = derivePathState(context.baseState, path);
+    const material = buildContextMaterial({
+      context,
+      path,
+      pathState,
+      selectedDirection: null,
+    });
+    const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
+
+    const generation = await generateStructured(
+      {
+        projectId: input.projectId,
+        worldlineId: context.worldline.id,
+        kind: "continuation_directions",
+        promptVersion: directionsPromptVersion,
+        prompt,
+        schemaName: "continuation_directions",
+        schema: ContinuationDirectionsModelOutputSchema,
+        modelConfig: input.modelConfig,
+        validate: (output) =>
+          validateContinuationDirections(
+            output,
+            context.storyMapArtifact.storyMap,
+          ),
+      },
+      input.provider,
+    );
+    const artifact = createContinuationDirectionsArtifactV2({
+      projectId: input.projectId,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
+      parentSceneId,
+      batchIndex,
+      output: generation.value,
+      generationRunId: generation.generation.runId,
+    });
+
+    return { artifact, generation: generation.generation };
+  });
 }
 
 export async function generateContinuationScene(input: {
@@ -85,27 +196,12 @@ export async function generateContinuationScene(input: {
   worldlineId: string;
   directionsArtifactId: string;
   selectedDirectionId: string;
+  retry?: boolean;
   provider: AIProvider;
   modelConfig: ModelConfig;
 }) {
-  const existing = getContinuationSceneForWorldline(input.worldlineId);
-  if (existing) {
-    if (
-      existing.projectId !== input.projectId ||
-      existing.continuation.directionsArtifactId !==
-        input.directionsArtifactId
-    ) {
-      throw new Error("找不到当前 Project 的 Continuation");
-    }
-    if (
-      existing.continuation.selectedDirectionId !== input.selectedDirectionId
-    ) {
-      throw new Error("M0 只允许一个后续场景，不能更换已生成方向");
-    }
-    return { artifact: existing, generation: null };
-  }
-
   const context = loadContinuationContext(input);
+  const retry = input.retry ?? false;
   const directionsArtifact = getContinuationArtifact(
     input.directionsArtifactId,
   );
@@ -123,45 +219,105 @@ export async function generateContinuationScene(input: {
     (direction) => direction.id === input.selectedDirectionId,
   );
   if (!selectedDirection) throw new Error("找不到选中的后续方向");
-  const divergenceEventId = context.worldline.divergence?.eventId;
-  if (!divergenceEventId) {
-    throw new Error("Continuation Worldline 缺少 Divergence Event");
-  }
 
-  const prompt = await buildPrompt("scene", context, selectedDirection);
-  const generation = await generateStructured(
-    {
-      projectId: input.projectId,
-      worldlineId: context.worldline.id,
-      kind: "continuation_scene",
-      promptVersion: scenePromptVersion,
-      prompt,
-      schemaName: "continuation_scene",
-      schema: ContinuationSceneModelOutputSchema,
-      modelConfig: input.modelConfig,
-      validate: (output) =>
-        validateContinuationStatePatch(
-          output.statePatch,
-          context.currentState,
-          context.storyMapArtifact.storyMap,
-          divergenceEventId,
-          context.worldline.anchors.map((anchor) => anchor.targetEventId),
-        ),
-    },
-    input.provider,
+  const parentSceneId =
+    directionsArtifact.continuation.schemaVersion === 2
+      ? directionsArtifact.continuation.parentSceneId
+      : null;
+  const siblings = listScenesForDirection(
+    directionsArtifact.id,
+    selectedDirection.id,
   );
-  const artifact = createContinuationSceneArtifact({
-    projectId: input.projectId,
-    sourceId: context.source.id,
-    worldline: context.worldline,
-    acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
-    directionsArtifact,
-    selectedDirectionId: selectedDirection.id,
-    output: generation.value,
-    generationRunId: generation.generation.runId,
-  });
+  if (!retry) {
+    const first = siblings.find(
+      (scene) =>
+        scene.continuation.schemaVersion === 1 ||
+        scene.continuation.attemptIndex === 0,
+    );
+    if (first) {
+      return { artifact: first, generation: null };
+    }
+  }
+  const attemptIndex = retry
+    ? siblings.reduce((max, scene) => {
+        const attempt =
+          scene.continuation.schemaVersion === 1
+            ? 0
+            : scene.continuation.attemptIndex;
+        return Math.max(max, attempt);
+      }, -1) + 1
+    : 0;
 
-  return { artifact, generation: generation.generation };
+  const targetArtifactId = stableSceneArtifactIdV2(
+    directionsArtifact.id,
+    selectedDirection.id,
+    attemptIndex,
+  );
+
+  return runWithInFlightLock(targetArtifactId, async () => {
+    const existing = getContinuationArtifact(targetArtifactId);
+    if (existing && existing.artifactType === "scene") {
+      return { artifact: existing, generation: null };
+    }
+
+    const { path, parent } = resolveScenePath({
+      worldlineId: context.worldline.id,
+      parentSceneId,
+    });
+    const depth = parent === null ? 1 : parent.depth + 1;
+    const pathState = derivePathState(context.baseState, path);
+    const material = buildContextMaterial({
+      context,
+      path,
+      pathState,
+      selectedDirection,
+    });
+    const prompt = await buildPrompt(scenePromptVersion, material.prompt);
+    const divergenceEventId = context.worldline.divergence?.eventId;
+    if (!divergenceEventId) {
+      throw new Error("Continuation Worldline 缺少 Divergence Event");
+    }
+
+    const generation = await generateStructured(
+      {
+        projectId: input.projectId,
+        worldlineId: context.worldline.id,
+        kind: "continuation_scene",
+        promptVersion: scenePromptVersion,
+        prompt,
+        schemaName: "continuation_scene",
+        schema: ContinuationSceneModelOutputV3Schema,
+        modelConfig: input.modelConfig,
+        validate: (output) =>
+          validateContinuationStatePatch(
+            output.statePatch,
+            pathState,
+            context.storyMapArtifact.storyMap,
+            divergenceEventId,
+            context.worldline.anchors.map((anchor) => anchor.targetEventId),
+          ),
+      },
+      input.provider,
+    );
+    const artifact = createContinuationSceneArtifactV2({
+      projectId: input.projectId,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
+      directionsArtifact,
+      selectedDirectionId: selectedDirection.id,
+      parentSceneId,
+      depth,
+      origin: retry ? "retry" : "generated",
+      attemptIndex,
+      summary: generation.value.summary,
+      contextManifest: material.manifest,
+      output: sceneOutputWithoutSummary(generation.value),
+      generationRunId: generation.generation.runId,
+    });
+
+    return { artifact, generation: generation.generation };
+  });
 }
 
 type ContinuationContext = {
@@ -169,7 +325,8 @@ type ContinuationContext = {
   acceptedImpactPlanArtifact: ImpactPlanArtifact;
   storyMapArtifact: StoryMapArtifact;
   source: Source;
-  currentState: WorldlineDelta;
+  /** accepted Impact Plan 派生的基础 Delta，不包含任何场景。 */
+  baseState: WorldlineDelta;
 };
 
 function loadContinuationContext(input: {
@@ -209,7 +366,7 @@ function loadContinuationContext(input: {
   const source = getProjectSource(input.projectId, storyMapArtifact.sourceId);
   if (!source) throw new Error("找不到 Worldline 对应的不可变 Source");
   assertValidStoryMap(storyMapArtifact.storyMap, source);
-  const currentState = deriveWorldlineDelta({
+  const baseState = deriveWorldlineDelta({
     worldline,
     impactPlan: acceptedImpactPlanArtifact.impactPlan,
     storyMap: storyMapArtifact.storyMap,
@@ -220,106 +377,249 @@ function loadContinuationContext(input: {
     acceptedImpactPlanArtifact,
     storyMapArtifact,
     source,
-    currentState,
+    baseState,
   };
 }
 
-async function buildPrompt(
-  stage: "directions" | "scene",
+/**
+ * 解析父场景并返回 root→父节点路径。
+ *
+ * 父节点必须属于当前 Worldline；树断裂、跨世界线或深度不连续时
+ * `buildSceneTree` / `getScenePath` 会 fail closed。
+ */
+function resolveScenePath(input: {
+  worldlineId: string;
+  parentSceneId: string | null;
+}): { path: SceneNode[]; parent: SceneNode | null } {
+  const { scenes } = listContinuationArtifactsForWorldline(input.worldlineId);
+  const tree = buildSceneTree(scenes.map((scene) => scene.continuation));
+  if (input.parentSceneId === null) {
+    return { path: [], parent: null };
+  }
+  const parent = tree.nodes.get(input.parentSceneId);
+  if (!parent) {
+    throw new Error("父场景不属于当前 Worldline");
+  }
+  return { path: getScenePath(tree, input.parentSceneId), parent };
+}
+
+function buildContextMaterial(input: {
+  context: ContinuationContext;
+  path: readonly SceneNode[];
+  pathState: WorldlineDelta;
+  selectedDirection: ContinuationDirection | null;
+}): ContextAssemblerResult {
+  const storyMap = input.context.storyMapArtifact.storyMap;
+  const plan = input.context.acceptedImpactPlanArtifact.impactPlan;
+  const selectorDirection =
+    input.selectedDirection ?? {
+      id: "directions",
+      title: "为当前路径生成后续方向",
+      premise: "根据当前世界线状态提出三个彼此不同的后续方向。",
+      affectedCharacterIds: storyMap.characters.map(
+        (character) => character.id,
+      ),
+      expectedConsequence: "三个方向产生不同的分支路径。",
+    };
+  const selection = selectContinuationContext({
+    storyMap,
+    source: input.context.source,
+    worldline: input.context.worldline,
+    acceptedImpactPlan: input.context.acceptedImpactPlanArtifact,
+    selectedDirection: selectorDirection,
+  });
+  const relatedEvidence: ContextEvidenceItem[] =
+    buildRelatedEvidenceItems({
+      storyMap,
+      source: input.context.source,
+      impactPlan: plan,
+    }).map((item) => ({
+      ...item,
+      priority: RELATED_EVIDENCE_PRIORITY,
+    }));
+  const canonEvidence: ContextEvidenceItem[] = [
+    ...relatedEvidence,
+    ...selection.representativeExcerpts.map((excerpt) => ({
+      id: `excerpt:${excerpt.kind}:${excerpt.start}:${excerpt.end}`,
+      text: `[${excerpt.kind} ${excerpt.sectionId} ${excerpt.start}-${excerpt.end}]\n${excerpt.excerpt}`,
+      priority: STYLE_EVIDENCE_PRIORITY,
+    })),
+    ...selection.characterEvidence.map((evidence) => ({
+      id: `character:${evidence.characterId}:${evidence.eventId}:${evidence.excerptHash.slice(0, 16)}`,
+      text: `[人物 ${evidence.characterId} / 事件 ${evidence.eventId} / ${evidence.sectionId} ${evidence.start}-${evidence.end}]\n${evidence.excerpt}`,
+      priority: STYLE_EVIDENCE_PRIORITY,
+    })),
+  ];
+  const canonEvents = buildCanonEventsSection({
+    storyMap,
+    storyMapArtifactId: input.context.storyMapArtifact.id,
+    source: input.context.source,
+    impactPlan: plan,
+    anchors: input.context.worldline.anchors,
+  });
+  const pathSummary = buildPathSummary({ pathNodes: input.path });
+  const recentScenes: ContextSceneItem[] = input.path.slice(-2).map((node) => ({
+    id: node.id,
+    text: node.prose,
+    ...(node.summary === null ? {} : { summary: node.summary }),
+  }));
+  const worldlineSetup = buildWorldlineSetup(input.context, input.pathState);
+  const worldlineSetupCompact = buildWorldlineSetup(
+    input.context,
+    compactCurrentState(input.pathState),
+  );
+  const anchorReminder = buildAnchorReminder(input.context);
+  const selectedDirection =
+    input.selectedDirection === null
+      ? ""
+      : JSON.stringify(input.selectedDirection);
+
+  return assembleContext({
+    maxChars: readContinuationContextMaxChars(),
+    sections: {
+      worldlineSetup,
+      worldlineSetupCompact,
+      worldlineSetupCompactRemoved: WORLDLINE_SETUP_COMPACT_REMOVED,
+      canonEvents,
+      pathSummary: pathSummary.text,
+      pathSummaryCoveredSceneIds: pathSummary.coveredSceneIds,
+      pathSummaryWatermarkSceneId: pathSummary.watermarkSceneId,
+      canonEvidence,
+      recentScenes,
+      selectedDirection,
+      anchorReminder,
+    },
+  });
+}
+
+/**
+ * 紧凑 currentState 实际移除的字段：只保留 key/计数，不保留正文。
+ * 线索文本仍以 key 形式保留，因此不在移除列表中。
+ */
+const WORLDLINE_SETUP_COMPACT_REMOVED = [
+  "currentState.factsAdded[].statement",
+  "currentState.characterChanges[].summary",
+] as const;
+
+function buildWorldlineSetup(
   context: ContinuationContext,
-  selectedDirection?: ContinuationDirection,
+  currentState: unknown,
+): string {
+  const storyMap = context.storyMapArtifact.storyMap;
+  const plan = context.acceptedImpactPlanArtifact.impactPlan;
+  return JSON.stringify({
+    worldlineId: context.worldline.id,
+    mode: context.worldline.mode,
+    divergence: context.worldline.divergence,
+    anchors: context.worldline.anchors,
+    storyMap: {
+      id: storyMap.id,
+      title: storyMap.title,
+      logline: storyMap.logline,
+    },
+    characters: storyMap.characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      aliases: character.aliases,
+      role: character.role,
+    })),
+    acceptedImpactPlan: {
+      id: plan.id,
+      mode: plan.mode,
+      divergence: plan.divergence,
+      impacts: plan.impacts.map((impact) => ({
+        id: impact.id,
+        scope: impact.scope,
+        changeType: impact.changeType,
+        fromEventId: impact.fromEventId,
+        affectedEventId: impact.affectedEventId,
+        summary: impact.summary,
+      })),
+      characterChanges: plan.characterChanges,
+      threadChanges: plan.threadChanges,
+      anchorEvaluations: plan.anchorEvaluations,
+      uncertainties: plan.uncertainties,
+    },
+    currentState,
+  });
+}
+
+/**
+ * 深层路径的紧凑 currentState：只有计数与 key，不包含任何 fact/人物正文。
+ * 仅在必需段超预算时整体替换完整状态，不改变状态语义。
+ */
+function compactCurrentState(state: WorldlineDelta) {
+  return {
+    factsAddedCount: state.factsAdded.length,
+    factsRemovedCount: state.factsRemoved.length,
+    characterChangesCount: state.characterChanges.length,
+    threadsOpenedCount: state.threadsOpened.length,
+    threadsClosedCount: state.threadsClosed.length,
+    factsAddedKeys: state.factsAdded.map((fact) => fact.key),
+    factsRemovedKeys: state.factsRemoved,
+    characterChangeKeys: state.characterChanges.map(
+      (change) => change.characterId,
+    ),
+    threadsOpenedKeys: state.threadsOpened,
+    threadsClosedKeys: state.threadsClosed,
+  };
+}
+
+function buildAnchorReminder(context: ContinuationContext): string {
+  const anchors = context.worldline.anchors;
+  const lines =
+    anchors.length === 0
+      ? [
+          "开放模式：没有结局 Anchor；分歧前历史、角色认知与未被修改的世界规则仍然有效。",
+        ]
+      : [
+          "严格模式锁定以下 Anchor；不得删除或改写对应目标事件：",
+          ...anchors.map(
+            (anchor) =>
+              `- ${anchor.requirement}（目标事件 ${anchor.targetEventId}）`,
+          ),
+        ];
+  lines.push(
+    "不得删除或改写分歧点之前的 Canon Event；不得占用 event: / impact: / divergence: 命名空间。",
+    "statePatch.factsAdded 的 key 必须以 generated: 开头；不得恢复已删除事实，不得删除 accepted ImpactPlan 拥有的 Delta。",
+  );
+  return lines.join("\n");
+}
+
+async function buildPrompt(
+  promptVersion: string,
+  assembledContext: string,
 ): Promise<string> {
-  const promptVersion =
-    stage === "scene" ? scenePromptVersion : directionsPromptVersion;
   const template = await readFile(
     path.join(process.cwd(), "prompts", `${promptVersion}.md`),
     "utf8",
   );
-  const relevantEventIds = collectRelevantEventIds(
-    context.acceptedImpactPlanArtifact,
-  );
-  const storyMap = context.storyMapArtifact.storyMap;
-  const relevantEvents = storyMap.events.filter((event) =>
-    relevantEventIds.has(event.id),
-  );
-  const readonlyCanonical = {
-    sourceId: context.source.id,
-    storyMapArtifactId: context.storyMapArtifact.id,
-    storyMapId: storyMap.id,
-    characters: storyMap.characters,
-    events: relevantEvents.map((event) => ({
-      id: event.id,
-      title: event.title,
-      summary: event.summary,
-      sequence: event.sequence,
-      participants: event.participants,
-      stateChanges: event.stateChanges,
-    })),
-    edges: storyMap.edges.filter(
-      (edge) =>
-        relevantEventIds.has(edge.from) && relevantEventIds.has(edge.to),
-    ),
-    endingCandidates: storyMap.endingCandidates.filter((ending) =>
-      context.worldline.anchors.some(
-        (anchor) => anchor.targetEventId === ending.targetEventId,
-      ),
-    ),
-  };
-  const relevantEvidence = relevantEvents.flatMap((event) =>
-    event.evidence.map((reference) => ({
-      eventId: event.id,
-      eventTitle: event.title,
-      sourceId: reference.sourceId,
-      sectionId: reference.sectionId,
-      start: reference.start,
-      end: reference.end,
-      excerptHash: reference.excerptHash,
-      excerpt: context.source.normalizedText.slice(reference.start, reference.end),
-    })),
-  );
-  const styleContext =
-    stage === "scene" && selectedDirection
-      ? selectContinuationContext({
-          storyMap,
-          source: context.source,
-          worldline: context.worldline,
-          acceptedImpactPlan: context.acceptedImpactPlanArtifact,
-          selectedDirection,
-        })
-      : undefined;
-  const packet = {
-    stage,
-    readonlyCanonical,
-    currentWorldline: context.worldline,
-    divergence: context.worldline.divergence,
-    acceptedImpactPlan: context.acceptedImpactPlanArtifact.impactPlan,
-    relevantEvidence,
-    currentState: context.currentState,
-    ...(styleContext ? { styleContext } : {}),
-    ...(selectedDirection ? { selectedDirection } : {}),
-  };
-
   return [
     template,
     "<continuation_context>",
-    JSON.stringify(packet),
+    assembledContext,
     "</continuation_context>",
   ].join("\n\n");
 }
 
-function collectRelevantEventIds(
-  acceptedImpactPlanArtifact: ImpactPlanArtifact,
-): Set<string> {
-  const plan = acceptedImpactPlanArtifact.impactPlan;
-  const ids = new Set<string>([plan.divergence.eventId]);
-  for (const impact of plan.impacts) {
-    ids.add(impact.fromEventId);
-    if (impact.affectedEventId) ids.add(impact.affectedEventId);
-    for (const id of impact.reasonPath) ids.add(id);
-  }
-  for (const evaluation of plan.anchorEvaluations) {
-    for (const id of evaluation.reasonPath) ids.add(id);
-  }
-  for (const anchor of plan.anchors) ids.add(anchor.targetEventId);
-  return ids;
+function directionsBatchIndex(
+  artifact: ContinuationDirectionsArtifact,
+): number {
+  return artifact.continuation.schemaVersion === 1
+    ? 0
+    : artifact.continuation.batchIndex;
+}
+
+function sceneOutputWithoutSummary(
+  output: {
+    title: string;
+    prose: string;
+    statePatch: ContinuationSceneModelOutput["statePatch"];
+  },
+): ContinuationSceneModelOutput {
+  return {
+    title: output.title,
+    prose: output.prose,
+    statePatch: output.statePatch,
+  };
 }

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import {
   ContinuationDirectionsModelOutputSchema,
-  ContinuationSceneModelOutputSchema,
+  ContinuationSceneModelOutputV3Schema,
   DivergenceSchema,
   ImpactPlanSchema,
   SourceSchema,
@@ -27,7 +27,7 @@ const ContinuationFixtureSchema = z
     impactPlanFixtureId: z.string().min(1),
     directions: ContinuationDirectionsModelOutputSchema,
     selectedDirectionIndex: z.number().int().min(0).max(2),
-    scene: ContinuationSceneModelOutputSchema,
+    scene: ContinuationSceneModelOutputV3Schema,
   })
   .strict();
 

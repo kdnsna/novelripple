@@ -174,12 +174,74 @@ Source → Story Map version → Divergence → accepted Impact Plan → Worldli
 
 Continuation 分为两个固定阶段，不是 Agent：
 
-1. 基于当前 Worldline 有效状态提出恰好三个方向，每个方向包含标题、前提、受影响人物与预期后果；
+1. 基于当前 Worldline 有效状态与当前路径提出恰好三个方向，每个方向包含标题、前提、受影响人物与预期后果；
 2. 用户选择一个方向后生成一个完整场景及 `statePatch`。
 
-`statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。方向和场景分别保存为 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。M0 每条 Worldline 只允许一个场景，同一选择重试返回原 Artifact，更换选择必须明确失败。
+### 场景节点树
 
-模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan 和当前 Delta，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
+方向和场景分别保存为不可变 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。一次方向生成是一个方向批次（`schemaVersion: 2`）：`parentSceneId` 指向路径末端场景，根批次为 `null`，`batchIndex` 从 0 递增，批次内恰好三个方向。一次场景生成是一个节点（`schemaVersion: 2`），保存 `parentSceneId`、`depth`、`origin`（`generated` / `retry`）、`attemptIndex` 与 `summary`。根节点 `parentSceneId: null`、`depth: 1`；子节点 `depth = parent.depth + 1`。任一场景都可以作为父节点继续；同一方向重试创建新的兄弟场景（`origin: retry`、`attemptIndex` 递增），旧场景不更新；「换一批」在同一个父节点上创建新的方向批次（`batchIndex` 递增），旧批次保留。场景和方向 Artifact 永不 UPDATE，新内容总是新行。
+
+方向批次 ID 由 `(worldlineId, parentSceneId ?? "root", batchIndex)` 确定性派生，方向 ID 由 `(batchId, index)` 派生；场景 ID 由 `(directionsArtifactId, selectedDirectionId, attemptIndex)` 派生。相同 ID 的重复写入幂等返回已有行，因此并发重试不会产生重复批次或重复场景。v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`），保留可读并可作为根父节点，不迁移历史行。
+
+`statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。
+
+### 路径状态
+
+Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta（`baseDelta`）。当前路径状态是 `baseDelta` 沿根节点到当前节点的 `statePatch` 依次折叠的结果：只读取该路径上的节点，不读取兄弟节点、世界线中路径外的场景或未来节点。折叠沿用上述 `statePatch` 语义。路径必须同属一个 Worldline、父子链连续、`depth` 逐级加一，否则 fail closed。因此兄弟分支的状态互不可见，任一节点只影响它的后代路径。
+
+### 上下文组装与清单
+
+每次生成只从当前路径和当前 Worldline 组装上下文，固定顺序为：
+
+1. `worldline_setup`：世界线、分歧、模式、Anchor、人物、accepted Impact Plan 与当前路径状态；
+2. `canon_events`：与 accepted Impact Plan / Anchor 相关的 Canon 事件（id、标题、摘要、参与者、状态变化）、这些事件之间的边，以及 Anchor 目标结局；
+3. `path_summary`：当前路径较早场景的滚动摘要；
+4. `canon_evidence`：相关事件的原著证据切片排在最前，随后是 `selectContinuationContext` 选出的代表窗口与人物证据（后者仍受 6000 字符且严格小于 Source 25% 的选择器上限）；
+5. `recent_scenes`：当前路径最近 2 个场景正文；
+6. `selected_direction`：用户选中的方向；
+7. `anchor_reminder`：严格/开放模式提示与状态补丁约束。
+
+方向生成没有 `selected_direction`，其余段相同。
+
+`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试，返回第一个渲染长度不超过预算的状态；每一级都只删除或严格缩短内容，因此更大的预算不会得到更靠后的降级状态：
+
+1. 完整内容；
+2. `canon_evidence` 按优先级从低到高、同优先级从末尾一次丢一条，因此相关事件证据最后才被裁掉；
+3. `recent_scenes` 从最旧开始整条丢弃，始终保留最新一个场景；
+4. `path_summary` 按整行从开头裁剪，首行省略/压缩提示保留到最后一刻，绝不把一行切成半句；
+5. 若调用方提供了严格更短的紧凑 `worldline_setup`，整体替换为紧凑形式（只保留计数与 key，不包含任何 fact 正文）；
+6. 最新场景有非空且严格短于正文的 `summary` 时，用该摘要替换正文；
+7. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；若连句末前缀都放不下或正文没有句末边界，则进入第 8 步；
+8. 仍超过预算则 fail closed，错误消息包含所需长度与 `maxChars`，不返回半成品。
+
+不会因为“完整形式的必需段放不下”提前启用紧凑形式：紧凑 `worldline_setup` 只出现在阶梯第 5 步，且只有它严格更短时才使用。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
+
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+
+### 路径滚动摘要
+
+场景生成输出 `summary`（≤200 字），与场景一起不可变保存。组装上下文时，沿根→当前节点路径确定性构建滚动摘要：最近 2 个场景留给 `recent_scenes` 原文，更早的场景按从旧到新写成摘要行。超过 1200 字符时不再只丢弃旧行，而是保留最新若干行原文，把更早的场景压缩成一行 `更早剧情（第 a–b 幕）：` 加场景标题（以 `；` 连接）；标题按整条截断，不做字符截断。压缩行放不下全部压缩标题时，保留最靠近剩余全文行的最近若干条标题、丢弃更早的标题，因此显示范围始终连续；标记写实际显示范围 `第 a–b 幕`（a 为第一个实际显示的场景）。`coveredSceneIds` / `watermarkSceneId` 只覆盖实际显示的压缩场景与保留的全文行，不包含被丢弃的最早标题。压缩只读取给定路径的不可变字段，同一输入逐字节相同，不额外调用模型，也不查询兄弟分支；切换路径时按新路径重建，祖先内容保持一致。
+
+模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan、当前路径状态、路径摘要与最近场景，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
+
+### v3 上下文与 v2 Prompt packet 的差异
+
+v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 `readonlyCanonical`、完整 `currentWorldline`、`divergence`、完整 `acceptedImpactPlan`、`relevantEvidence`、`currentState`，以及可选的 `styleContext` 与 `selectedDirection`。v3 改为固定段标签，内容对应关系如下：
+
+| v2 packet | v3 段 | 说明 |
+| --- | --- | --- |
+| `readonlyCanonical` | `canon_events` | 保留 `sourceId`、`storyMapArtifactId`、`storyMapId`、`characters`、相关事件完整字段、事件之间的边与 Anchor 目标 `endingCandidates`；未变 |
+| `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；裁剪时最后丢弃；未变 |
+| `styleContext.representativeExcerpts` / `styleContext.characterEvidence` | `canon_evidence` 的后半部分 | 仍由 `selectContinuationContext` 选择；排在相关事件证据之后，先被裁剪 |
+| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
+| 无 | `path_summary` | 新增：当前路径较早场景的确定性滚动摘要 |
+| 无 | `recent_scenes` | 新增：当前路径最近 2 个场景正文 |
+| 无 | `anchor_reminder` | 新增：从 Prompt 模板移到上下文末尾的严格/开放 Anchor 与 statePatch 约束 |
+| 完整 `currentWorldline` JSON | `worldline_setup` 字段 | 不再发送完整 worldline 行；只保留上述字段。未发送的是数据库/审计字段（如 `parentWorldlineId`、`baseStoryMapArtifactId`、`acceptedImpactPlanId`、`idempotencyKey`、`createdAt`、`status` 等引用与时间戳），它们不改变生成语义 |
+| 无预算/无清单 | manifest + `CONTINUATION_CONTEXT_MAX_CHARS` | 新增：段级字符预算、裁剪记录、`coveredItemIds` / `watermarkId`；Prompt 模板不计入预算 |
+
+`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。
+
 
 ## 状态转换与确认门
 
@@ -191,7 +253,7 @@ Source
 → Impact Plan（提案并评估 Anchor）
 → 用户接受当前 Impact Plan
 → Worldline（父世界线 + Delta）
-→ Continuation（一个后续场景）
+→ Continuation（场景节点树：可继续、重试分叉、换一批方向）
 ```
 
 Impact Plan 被接受前不得创建或改变 Worldline。所有模型结构化输出只有同时通过 Schema、Evidence、引用完整性和领域不变量校验，才能成为下一步输入；失败时拒绝完整候选并停止状态推进。

@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销；生产生成管线已替换为 Phase 1 分块召回。M1-04 已实现 Guided Review 的确定性能力，并取得 Story A 一次真人计时观察（7 分钟、16 次修正），但修正成本仍超过门槛、B/C 未测，correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。M1-05 Ripple Suggestions 与反馈重推已完成并通过人工语义复核，见 [`M1-05 回归报告`](docs/evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)。M1-06 单场景续写三篇全部 5 分。M1-07 聚合评测曾判 FAIL 并让开发停下；2026-10-17 起评测改为质量仪表盘，硬规则和 CI 继续阻塞，质量目标只记录不阻塞（[`0005`](docs/decisions/0005-eval-dashboard-not-gate.md)）。Phase 1 分块召回的真实模型 A/B/C 仪表盘数字尚未重测（私有基准正文不在仓库）。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销；生产生成管线已替换为 Phase 1 分块召回。M1-04 已实现 Guided Review 的确定性能力，并取得 Story A 一次真人计时观察（7 分钟、16 次修正），但修正成本仍超过门槛、B/C 未测，correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。M1-05 Ripple Suggestions 与反馈重推已完成并通过人工语义复核，见 [`M1-05 回归报告`](docs/evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)。M1-06 当时按单场景验收，三篇全部 5 分；P0 已把 Continuation 扩展为场景节点树与分段上下文组装（[`0007`](docs/decisions/0007-scene-node-tree-and-context-assembly.md)）。M1-07 聚合评测曾判 FAIL 并让开发停下；2026-10-17 起评测改为质量仪表盘，硬规则和 CI 继续阻塞，质量目标只记录不阻塞（[`0005`](docs/decisions/0005-eval-dashboard-not-gate.md)）。Phase 1 分块召回的真实模型 A/B/C 仪表盘数字尚未重测（私有基准正文不在仓库）。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -74,7 +74,7 @@ M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 U
 
 Ripple Simulator 已支持 `prevent` / `choice` / `outcome`、严格与开放模式、结构化 Impact Plan 和四种 Anchor 状态。Preview 只使用已确认 Story Map 构造只读 Canonical 上下文；用户接受后才在同一事务中保存 accepted Impact Plan revision、幂等 Canonical Worldline 和子 Worldline。严格模式的 `incompatible` 会在写入前被拦截。
 
-接受后的 Worldline 以 confirmed Story Map 为只读基线，并从 accepted Impact Plan 确定性派生 Delta，不复制 Canon。Continuation 先生成恰好 3 个未来方向，用户选择其一后只生成 1 个带 `statePatch` 的完整场景；方向和场景分别保存为可追踪 Artifact，刷新后可恢复。场景若恢复已删除事实、删除 accepted Delta / Anchor / 分歧前 Canon，或占用非 `generated:` 事实命名空间，会在一次定向 repair 后 fail closed，不写入 Artifact。
+接受后的 Worldline 以 confirmed Story Map 为只读基线，并从 accepted Impact Plan 确定性派生 Delta，不复制 Canon。Continuation 先生成恰好 3 个未来方向，用户选择其一后生成 1 个带 `statePatch` 的完整场景；场景组成不可变场景节点树，任一场景都可以继续、重试本幕（同方向兄弟节点）或换一批方向，旧场景不覆盖。每次生成只读取当前路径：accepted Impact Plan 基础 Delta 沿根→当前节点折叠，较早场景以滚动摘要进入上下文；上下文按固定七段组装（世界线设定、相关原著事件、路径摘要、原著证据、最近场景、所选方向、锚点提醒），并用 `CONTINUATION_CONTEXT_MAX_CHARS`（默认 24000，只约束组装素材，不含 Prompt 模板）确定性裁剪，场景保存不含正文的 Context Manifest。方向和场景分别保存为可追踪 Artifact，刷新后可恢复；设计见 [`ADR 0007`](docs/decisions/0007-scene-node-tree-and-context-assembly.md)。场景若恢复已删除事实、删除 accepted Delta / Anchor / 分歧前 Canon，或占用非 `generated:` 事实命名空间，会在一次定向 repair 后 fail closed，不写入 Artifact。
 
 Source 只在本地 SQLite 中持久化且永不被生成内容覆盖；执行 Story Map 生成时，正文会发送到你在环境变量中配置的 OpenAI-compatible 模型端点。请只配置你信任且符合数据处理要求的服务。
 

@@ -28,6 +28,7 @@ describe("ripple-001 fixture", () => {
     expect(storyMap.edges).toHaveLength(12);
     expect(impactPlans).toHaveLength(3);
     expect(continuation.directions.directions).toHaveLength(3);
+    expect(continuation.scene.summary.length).toBeLessThanOrEqual(200);
     expect(continuation.scene.statePatch.factsAdded).toHaveLength(1);
     expect(continuation.scene.statePatch.factsAdded[0]?.key).not.toBe(
       "event:event_07",

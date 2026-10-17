@@ -7,6 +7,14 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Added / 新增
 
+- P0 场景节点树：续写 Artifact 升级到 `schemaVersion: 2`；方向批次记录 `parentSceneId` / `batchIndex`，场景节点记录父节点、深度、`origin` / `attemptIndex` 与 ≤200 字摘要；任一场景可继续、同方向重试生成兄弟场景、「换一批」创建新批次，旧行永不 UPDATE。P0 scene node tree: v2 continuation artifacts add parent, depth, origin/attemptIndex and a ≤200-character summary; any scene can be continued, retry creates a sibling, and a new batch preserves old rows.
+- 确定性幂等 ID 与 v1 兼容：方向/场景 ID 由内容身份派生，重复请求返回同一行；v1 方向视为根批次 0，v1 场景归一化为根节点，历史数据不迁移。Deterministic content-addressed IDs and v1 compatibility: duplicate requests are idempotent; v1 rows stay readable as root nodes without migration.
+- 路径状态隔离：当前状态 = accepted Impact Plan 基础 Delta 沿根→当前节点折叠，兄弟分支互不可见；断裂父子链、跨世界线父节点或深度不连续 fail closed。Path-state isolation: the base delta is folded only along root→node, so sibling state never leaks; broken chains, cross-worldline parents and depth gaps fail closed.
+- 续写上下文改为固定七段组装（世界线设定、相关原著事件、路径摘要、原著证据、最近 2 个场景、所选方向、锚点提醒），预算 `CONTINUATION_CONTEXT_MAX_CHARS` 默认 24000（只约束组装素材，不含 Prompt 模板）并 fail closed；场景保存不含正文的 Context Manifest（含 `path_summary` 的 `coveredItemIds` / `watermarkId`，以及 `recent_scenes` 的 `summarizedItemIds` / `truncatedItemIds` 与 `worldline_setup.compactedFields`），界面提供查看器。Continuation context is assembled from seven fixed sections with a fail-closed `CONTINUATION_CONTEXT_MAX_CHARS` budget (default 24000, assembled material only); scenes store a prose-free context manifest with path-summary coverage ids plus summarized/truncated ids and compacted fields, and the UI exposes a viewer.
+- 恢复相关 Canon 上下文：新增永不裁剪的 `canon_events` 段，保留相关事件、事件之间的边与 Anchor 目标结局；相关事件证据排在代表/人物证据之前，并按 priority 最后裁剪。Restored related Canon context: a never-trimmed `canon_events` section keeps related events, their edges and Anchor target endings; related-event evidence comes first and is trimmed last by priority.
+- 路径滚动摘要：`continuation-scene.v3` 顺带输出 ≤200 字摘要；最近 2 幕之前的场景沿当前路径确定性生成摘要（≤1200 字符），超预算时保留最新行并把更早场景压缩为 `更早剧情（第 a–b 幕）：` + 标题（标题放不下时只保留最近若干条，范围连续），不额外调用模型，兄弟分支互相隔离。Rolling path summary: v3 scenes emit a ≤200-character summary; scenes older than the recent 2 are summarized deterministically (≤1200 characters), and over-budget summaries keep newest lines while compressing older ones into a contiguous title line with no extra model call and sibling isolation.
+- 深层路径与并发：超预算按固定降级阶梯处理（丢低优先级证据 → 丢旧场景 → 裁路径摘要行 → 紧凑 `currentState` → 最新场景摘要 → v1 句末截断），不会因完整必需段放不下而提前压缩，阶梯用尽才 fail closed；同一进程内按确定性目标 Artifact id 的 in-flight 锁合并并发同内容请求，只调用一次模型。Deep paths follow one monotonic ladder and only fail closed after every degradation step is exhausted; an in-process in-flight lock keyed by deterministic target artifact id coalesces identical concurrent requests into one model call.
+- 新续写 Prompt：`continuation-directions.v2` 与 `continuation-scene.v3`。New continuation prompts: `continuation-directions.v2` and `continuation-scene.v3`.
 - 按稳定 Evidence Unit 分块召回 Story Map（ADR 0006）：目标 6,000 字符、最小/最大 3,000/9,000、2 个只读上下文 Unit、4 路并发。Chunked Story Map recall over stable Evidence Units (ADR 0006): 6k target, 3k/9k bounds, 2 context units, 4-way concurrency.
 - 每块一轮补抽，并用确定性人名候选（含对白说话人）驱动人名归并。One gleaning pass per chunk; deterministic name hints, including dialogue speakers, seed the roster pass.
 - 末尾约 20%（至少 3 个 Unit）的结局轮次，输出故事结局与 `【人物结局】` 人物结局。Endings pass over the last ~20% of units (min 3), including character endings.
@@ -33,6 +41,7 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Changed / 变更
 
+- 续写面板从单场景线性阅读改为场景树：展示当前路径、用 `‹ 2/3 ›` 切换兄弟场景、继续、重试本幕、换一批，并可查看上下文清单。The continuation panel is now a scene-tree reader with current path, sibling switching, continue, retry, new batch and a context manifest viewer.
 - 评测门禁改为非阻塞的质量仪表盘（ADR 0005）。Evaluation gate became a non-blocking quality dashboard (ADR 0005).
 - M1 仪表盘遇到任一篇 private manifest（或来自 `NOVELRIPPLE_BENCH_ROOT`）时不再写入 `docs/evals/runs/`：报告默认与 `metrics.json` 同落在 `.data/evals/`；`--report-dir` 只允许仓库外或 Git 忽略的仓库内路径（脚本用 `git check-ignore -q` 判断），并把私有 benchmark ID 脱敏为 `private:<storyClass>`。Private M1 dashboard runs no longer write into `docs/evals/runs/`: reports stay next to `metrics.json` under `.data/evals/`; `--report-dir` is allowed only outside the repository or in a git-ignored in-repo path (checked with `git check-ignore -q`), and private benchmark IDs are redacted as `private:<storyClass>`.
 - 四条硬规则仍然阻塞：原文与分歧前历史不被覆盖、证据可溯源、世界线隔离、坏输出被拒绝。Four hard rules still block.
