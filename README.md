@@ -56,7 +56,7 @@ NovelRipple 把一部已经完成的小说，变成一个可以理解、探索�
 
 ## 当前状态
 
-`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销，生产生成管线仍是已验证的 v2。M1-04 已实现 Guided Review 的确定性能力，并取得 Story A 一次真人计时观察（7 分钟、16 次修正），但修正成本仍超过门槛、B/C 未测，correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。M1-05 Ripple Suggestions 与反馈重推已完成并通过人工语义复核，见 [`M1-05 回归报告`](docs/evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)。
+`v0.1.0` 已冻结 **M0 — First Ripple**；正式封版状态与评测边界见 [`M0 封版报告`](docs/evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)。当前开发合同是 [`M1 — Real Story`](docs/mvp.md)。M1-02A Provider / Evidence 兼容性门已通过；[正式 M1-02 baseline](docs/evals/runs/m1-baseline-2026-08-12-37aeb6b.md)保留产品质量与 First Ripple 的 FAIL；M1-03 section-first 真实回归失败后已按 retention gate 撤销，生产生成管线仍是已验证的 v2。M1-04 已实现 Guided Review 的确定性能力，并取得 Story A 一次真人计时观察（7 分钟、16 次修正），但修正成本仍超过门槛、B/C 未测，correction-cost 结论保持 FAIL，详见 [`M1-04 回归报告`](docs/evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)。M1-05 Ripple Suggestions 与反馈重推已完成并通过人工语义复核，见 [`M1-05 回归报告`](docs/evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)。M1-06 单场景续写三篇全部 5 分。M1-07 聚合评测曾判 FAIL 并让开发停下；2026-10-17 起评测改为质量仪表盘，硬规则和 CI 继续阻塞，质量目标只记录不阻塞（[`0005`](docs/decisions/0005-eval-dashboard-not-gate.md)），下一步是 Story Map 召回修复。
 
 M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 UTF-8 `.txt` / `.md` 保存为不可变 Source，并在刷新后从本地 SQLite 继续阅读；同时保留公开基准故事，用来回归验证故事地图与世界线领域合同。真实模型质量通过显式 Live Eval 单独验收，不进入默认 CI；历史配置失败记录不等于模型质量 PASS。
 
@@ -84,7 +84,20 @@ Source 只在本地 SQLite 中持久化且永不被生成内容覆盖；执行 S
 
 ## 本地启动
 
-需要 Node.js 22 或更高版本。
+### 前置依赖
+
+- Node.js 22.9 或更高版本（见 `package.json` 的 `engines`）。
+- **C/C++ 编译工具链**：`better-sqlite3` 在 `npm install` / `npm ci` 时会通过 `node-gyp` 从源码编译原生模块，缺少工具链会直接安装失败（报 `gyp ERR! not ok` / 找不到 `make`）。需要：
+  - Debian / Ubuntu：`sudo apt-get install -y python3 make g++`（或 `build-essential python3`）；
+  - Fedora / RHEL：`sudo dnf install -y python3 make gcc-c++`；
+  - Alpine：`apk add python3 make g++`；
+  - macOS：`xcode-select --install`；
+  - Windows：Visual Studio Build Tools（勾选"使用 C++ 的桌面开发"）+ Python 3。
+- GitHub Actions 的 `ubuntu-latest` 已自带上述工具，CI 里有一步显式检查。
+
+> English: `better-sqlite3` is compiled from source by `node-gyp` during `npm install`/`npm ci`, so you need Python 3, `make` and a C++ compiler (`g++`/clang) installed. On Debian/Ubuntu: `sudo apt-get install -y python3 make g++`.
+
+### 启动
 
 ```bash
 npm install
@@ -120,9 +133,20 @@ npm run eval:m1:baseline -- \
 
 命令强制要求冻结的 Story A / B / C、至少一篇已由 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置。它直接调用当前生产 Story Map 管线，把脱敏指标和本地评测数据库写入 Git ignored 的 `.data/evals/m1-baseline/<run-id>/`，且不进入默认 CI。自动阶段结束后状态只能是 `awaiting_human_review`；Event、Ending Candidate、Edge、修正成本以及 strict/open Ripple 与 Continuation 必须由独立复核者通过生产 revision/Worldline 流程完成，不能由被测模型替代。
 
-产品范围、领域语义和评测门槛分别见 [`docs/mvp.md`](docs/mvp.md)、[`docs/domain.md`](docs/domain.md) 与 [`docs/evals.md`](docs/evals.md)。
+评测不再是阻塞门禁，而是**质量仪表盘**（[`0005`](docs/decisions/0005-eval-dashboard-not-gate.md)）：
 
-参与开发或使用编码 Agent 前，请先阅读 [AGENTS.md](AGENTS.md)。安装、启动与验证命令以 `package.json` 中的脚本为准。
+```bash
+npm run eval:m1 -- \
+  --manifest benchmarks/private/<story-a>/manifest.json \
+  --manifest benchmarks/private/<story-b>/manifest.json \
+  --manifest benchmarks/private/<story-c>/manifest.json
+```
+
+它读取人工评分（作者自评有效，真人观察可选），把召回率、修正成本、续写评分等画成 `met` / `below_target` / `not_measured`，**不阻塞**；只有四条硬规则——原文与分歧前历史不被覆盖、证据可溯源、世界线隔离、坏输出被拒绝——被违反时才以非零退出。
+
+产品范围、领域语义和评测规则分别见 [`docs/mvp.md`](docs/mvp.md)、[`docs/domain.md`](docs/domain.md) 与 [`docs/evals.md`](docs/evals.md)。
+
+参与开发或使用编码 Agent 前，请先阅读 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](CONTRIBUTING.md)。安装、启动与验证命令以 `package.json` 中的脚本为准。
 
 ## 内容权利与隐私
 

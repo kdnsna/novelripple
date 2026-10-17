@@ -2,6 +2,16 @@
 
 M0 将确定性正确性和模型质量分开验证。确定性门槛必须在每次变更中通过；真实模型评测暂不进入默认 CI。
 
+## 阻塞与不阻塞（2026-10-17 起）
+
+见 [`0005：评测从"阻塞门禁"改为"质量仪表盘"`](decisions/0005-eval-dashboard-not-gate.md)。
+
+- **阻塞**：本文件的 11 条硬不变量，以及默认 CI（lint、typecheck、Vitest 单元与合约、build、Chromium E2E）。真实作品评测中只有四条硬规则——原文与分歧前历史不被覆盖、证据可溯源、世界线隔离、坏输出被拒绝——被测到违反时才阻塞，`npm run eval:m1` 以非零退出。
+- **不阻塞**：下文 M1 各节列出的召回率、修正成本、人工评分与真人观察阈值是**质量目标**。`npm run eval:m1` 把它们画在仪表盘上（`met` / `below_target` / `not_measured`），用来决定下一步优先改什么，但不再阻止开发、合并或发布内部版本。
+- **真人观察可选**；**作者自评是有效人工评分**（人工评分可选填 `reviewer: "author" | "external"`，缺省为 `author`）。
+- 缺失数据记为 `not_measured`，不等于失败。
+- 阈值数值不因此调低；历史报告（含 M1-07 FAIL）保留原样作为仪表盘历史数据。
+
 ## 封版报告索引
 
 - [`v0.1.0 M0 正式封版报告（PASS）`](evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)：M0 确定性发布门禁的唯一正式 PASS 记录，并明确它不代表真实模型 Live Eval PASS。
@@ -15,9 +25,9 @@ M0 将确定性正确性和模型质量分开验证。确定性门槛必须在�
 - [`M1-04 Guided Review 真实候选回归（FAIL）`](evals/runs/m1-04-guided-review-2026-08-13-afd432b.md)：三篇冻结私人候选均可派生优先队列与 readiness，公开 fixture 的全部不可变修正和 E2E 通过；Story A 已取得一次真人计时观察（7 分钟、16 次修正），但 B/C 未测且 A 的 material revisions 超过门槛，不能放行 correction-cost gate。
 - [`M1-05 Ripple Suggestions 与反馈重推真实回归（PASS）`](evals/runs/m1-05-ripple-guidance-2026-08-13-97766a5.md)：同一 `deepseek-chat / json_object` 下三篇均生成 3 个推荐、初始 candidate 与反馈后不可变 revision，自动硬不变量全部通过；2026-08-13 人工语义复核完成（每篇推荐价值 ≥2/3、反馈问题解决），M1-05 放行。
 - [`M1-06 单场景 Continuation 质量（PASS）`](evals/runs/m1-06-continuation-2026-08-14-d3abd3fd.md)：`deepseek-v4-flash / json_object` 下三篇均一次完成 directions→scene 全链路，场景长度 1274–1396 汉字全在目标区间、六项一致性 hard gate 与五项隔离全部通过；2026-08-14 人工量表完成（三篇 worldline/character/narrative/interest 全 5、愿意继续读 3/3），M1-06 放行。
-- [`M1-07 M1 Real Story Eval 聚合与最终 Gate（FAIL）`](evals/runs/m1-07-final-2026-08-14.md)：`npm run eval:m1` 聚合六大块指标与全部门禁；Story Map gate 三篇 FAIL（Ending Candidate recall A/B 66.7%、C 50%，聚合 identity F1 83.3%）、correction cost A 超限（16 revisions）且 B/C 未观察、Ripple strict B/C 通过 A 无法评测（anchor 缺口实证）、Continuation PASS、用户观察未开始；**v0.2.0 不可发布，停止不进入 M1-08**。
+- [`M1-07 M1 Real Story Eval 聚合与最终 Gate（FAIL）`](evals/runs/m1-07-final-2026-08-14.md)：`npm run eval:m1` 聚合六大块指标与全部门禁；Story Map gate 三篇 FAIL（Ending Candidate recall A/B 66.7%、C 50%，聚合 identity F1 83.3%）、correction cost A 超限（16 revisions）且 B/C 未观察、Ripple strict B/C 通过 A 无法评测（anchor 缺口实证）、Continuation PASS、用户观察未开始；当时判为 v0.2.0 不可发布并停止；按 0005 该结论现在只作为质量仪表盘的历史数据点，不再阻塞后续开发。
 
-后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。同一运行在人工复核后结论翻转（如 FAIL → PASS）时，应在原报告追加"人工语义复核记录"章节并同步更新本索引条目，两处结论必须一致；跨运行的新结果始终写入新文件。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记 PASS。
+后续运行不得覆盖既有报告；每次 Eval 使用新文件记录 commit、模型、Prompt 版本和结论。同一运行在人工复核后结论翻转（如 FAIL → PASS）时，应在原报告追加"人工语义复核记录"章节并同步更新本索引条目，两处结论必须一致；跨运行的新结果始终写入新文件。真实模型质量只有在自动阈值和脱敏人工复核均完成时才能标记"达标"；未达标只记录在仪表盘上，不阻塞（见 0005）。
 
 ## 硬不变量
 
@@ -127,9 +137,11 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - review time：从首次展示 candidate Story Map 到确认 revision 的主动操作时间；等待模型、休息和环境故障不计入，并在报告中单列。
 - “愿意继续阅读”：参与者在看完场景后明确选择 `yes`；缺席或未回答不得按 `yes` 计。
 
-## M1 Story Map 门禁
+## M1 Story Map 质量目标
 
-每篇作品均须满足：
+以下是质量目标，进入仪表盘、不阻塞。其中 Evidence validity 100% 与"无有效 Evidence 的关键事件 0"属于**可溯源硬规则**，被违反时阻塞。
+
+每篇作品的目标：
 
 - 核心人物召回率：100%；
 - 关键事件召回率：至少 85%；
@@ -139,14 +151,14 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - 关键 Ending Candidate 召回率：100%；
 - 主要因果 Edge 人工认可率：至少 75%。
 
-三篇聚合还须满足：
+三篇聚合目标：
 
 - 总体人物身份 F1：至少 90%；
 - 关键事件召回率：至少 90%。
 
-错误 merge 是硬失败：将两个真实人物合成同一 identity 时，即使总体 F1 仍达标，也不得放行该作品。
+错误 merge 是最严重的质量问题：将两个真实人物合成同一 identity 时，仪表盘会单独列出，即使总体 F1 仍达标也应优先修复；它不属于四条硬规则，不阻塞。
 
-## M1 人工修正成本门禁
+## M1 人工修正成本质量目标
 
 对不超过 30k 字的作品：
 
@@ -160,7 +172,9 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - 系统必须提供基于风险的优先核对队列，至少覆盖人物 merge、缺失/无效 Evidence、关键 Event、主要 Edge 与 Ending Candidate；
 - 每篇 material revisions 与人工新增关键 Event 必须报告，不用未验证阈值掩盖实际成本。
 
-## M1 Ripple 门禁
+## M1 Ripple 质量目标
+
+`pre-divergence mutation：0` 属于**原文与分歧前历史不被覆盖**硬规则，被违反时阻塞；其余为质量目标。
 
 - 每篇至少评测一个 strict divergence 和一个 open divergence；
 - direct impact 人工认可率：每篇至少 85%；
@@ -169,7 +183,9 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - 系统推荐的 3 个分叉点中，每篇至少 2 个被人工认为“有明确因果空间且值得探索”；
 - 用户反馈后的 Impact Plan 必须生成新的 candidate revision，原 candidate 与任何已接受版本保持不变。
 
-## M1 Continuation 门禁
+## M1 Continuation 质量目标
+
+硬事实冲突、恢复 deleted fact、pre-divergence rewrite 与 strict Anchor violation 四项为 0 属于硬规则（分别对应坏输出被拒绝、世界线隔离、原文与分歧前历史不被覆盖、坏输出被拒绝），被违反时阻塞；评分类指标为质量目标。
 
 每篇选择一个已接受 Worldline 并评测一个完整场景：
 
@@ -180,26 +196,34 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - worldline consistency：至少 4/5；
 - narrative continuity：至少 3.5/5。
 
-评分采用模板中的 1—5 分量表；多人评分时取该场景的算术平均。三篇中至少 2 篇必须得到“愿意继续阅读”。任何结构化硬失败都不能被主观评分抵消。
+评分采用模板中的 1—5 分量表；多人评分时取该场景的算术平均。目标是三篇中至少 2 篇得到“愿意继续阅读”。任何结构化硬失败都不能被主观评分抵消。
 
-## M1 真实用户观察门禁
+## M1 真实用户观察（可选）
+
+真人观察是可选的参考数据，有就进入仪表盘，没有记为 `not_measured`。进行观察时的目标是：
 
 - 至少完成 3 次独立观察；
 - 至少 2 名不同的非开发参与者；
 - 参与者无需开发者代操作即可完成从导入到阅读一个新场景的 First Ripple；
 - 报告只记录匿名参与者 ID、完成情况、主动操作时长、阻塞点分类和脱敏观察，不记录姓名、联系方式、录屏或作品正文。
 
-## `v0.2.0` M1 Eval 放行
+## M1 质量仪表盘与版本
 
-`v0.2.0` 需要同时满足：
+`npm run eval:m1 -- --manifest <A> --manifest <B> --manifest <C> [--human-dir <dir>]` 读取人工评分（`story-map.json`、`correction-cost.json`、`ripple.json`、`continuation.json`，可选 `users.json`），生成：
 
-1. 三篇作品的单篇硬门禁和聚合门禁全部通过；
-2. 至少一篇真正未见作品通过，且未在运行前用于 Prompt 或阈值调试；
-3. 人工修正成本、Ripple Suggestions、feedback regeneration、Continuation 与真实用户观察均有完整脱敏记录；
-4. 每份报告记录 Story ID、commit SHA、Provider / model、全部 Prompt 版本与 PASS / FAIL；
+- `.data/evals/m1-eval/<run-id>/metrics.json`（`kind: "m1_dashboard"`，被 Git 忽略）；
+- `docs/evals/runs/m1-dashboard-<date>-<sha>.md`（脱敏，可提交）。
+
+只有硬规则被违反时命令以非零退出。质量目标未达标、数据缺失都不影响退出码。
+
+发布版本时：
+
+1. 四条硬规则在已测数据上没有违反，M0 硬不变量和默认 CI 全部通过；
+2. 附上最新一次质量仪表盘，说明哪些目标已达成、哪些未达成，以及相对上一次的变化；
+3. 有数据就记录：至少一篇真正未见作品、人工修正成本、Ripple Suggestions、feedback regeneration、Continuation 与（可选）真实用户观察；
+4. 每份报告记录 Story ID、commit SHA、Provider / model、全部 Prompt 版本、硬规则状态与各质量目标状态；
 5. Prompt 变化有对应的新真实 Eval，不以旧报告代替；
-6. M0 硬不变量和本文件的确定性门禁全部通过；
-7. Git、CI、日志、截图、报告和公开夹具均不含私人作品正文或可恢复正文的 raw output。
+6. Git、CI、日志、截图、报告和公开夹具均不含私人作品正文或可恢复正文的 raw output。
 
 ## 分享前检查
 

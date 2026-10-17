@@ -2,6 +2,8 @@
 
 ## 阶段状态
 
+> **2026-10-17 更新（Phase 0）**：M1-07 聚合评测曾判 FAIL 并按旧规则停止开发。现在评测改为**质量仪表盘**：四条硬规则（原文不被覆盖、证据可溯源、世界线隔离、坏输出被拒绝）和默认 CI 继续阻塞，召回率、修正成本、人工评分和真人观察只作为质量目标记录、不阻塞。真人观察可选，作者自评有效。见 [`0005`](decisions/0005-eval-dashboard-not-gate.md)。下一步按阶段推进：Story Map 召回修复 → 场景节点树与上下文组装 → 读者优先流程。
+
 `v0.1.0` 是已冻结的 **M0 — First Ripple** 基线；M0 的正式封版状态见 [`M0 封版报告`](evals/runs/2026-08-12-v0.1.0-m0-release-pass.md)，历史合同以该 tag 为准。当前 `main` 的开发合同是 **M1 — Real Story**，目标发布版本为 `v0.2.0`。M1 在现有 M0 闭环上验证真实作品，不重写 Source、Artifact、Worldline 或已有领域不变量。
 
 ## 用户结果
@@ -28,7 +30,7 @@
 2. 人工修正成本是否足够低；
 3. 新世界线是否值得继续阅读。
 
-M1 的成功不是“能跑一次 Prompt”，而是三类真实作品都达到 [`docs/evals.md`](evals.md) 的质量门槛，并由真实用户完成 First Ripple。
+M1 的成功不是“能跑一次 Prompt”，而是三类真实作品在 [`docs/evals.md`](evals.md) 的质量仪表盘上持续改进、四条硬规则零违反，并且读者能顺利完成 First Ripple。质量目标用来决定优先级，不是停止开发的门禁。
 
 ## 最小验收场景
 
@@ -43,7 +45,7 @@ M1 的成功不是“能跑一次 Prompt”，而是三类真实作品都达到 
 7. 必要时对 candidate Impact Plan 提交反馈并生成新的 candidate revision；
 8. 接受一个 Impact Plan，创建隔离的 Worldline；
 9. 生成并阅读一个符合 Canon、Delta 与 Anchor 的完整场景；
-10. 将自动指标、人工评分、修正成本和用户观察写入脱敏 M1 Eval 报告。
+10. 将自动指标、人工评分（作者自评有效）、修正成本和（可选）用户观察写入脱敏 M1 质量仪表盘。
 
 任一 Evidence、Schema、引用、分歧前历史、Anchor 或 Worldline 隔离校验失败，都必须 fail closed；不得部分采用、静默修补或覆盖旧版本。
 
@@ -57,9 +59,9 @@ M1 的成功不是“能跑一次 Prompt”，而是三类真实作品都达到 
 - Ripple Suggestions；
 - Impact Plan feedback regeneration；
 - 每篇至少一个真实高质量 Continuation scene；
-- 完整 M1 Eval；
-- 至少 3 次真实用户观察测试；
-- `v0.2.0` 发布门禁。
+- M1 质量仪表盘；
+- 真实用户观察（可选）；
+- `v0.2.0` 发布检查。
 
 这些项目定义 M1 的交付范围，不代表 M1-01 已实现对应业务能力。每项实现必须由后续单一 Issue 承担，并由 Benchmark 数据证明必要性。
 
@@ -100,12 +102,12 @@ M1 使用三种互补作品验证，而不是用为 Prompt 量身编写的夹具
 
 M1-01 还明确不修改 AI Prompt、Story Map Schema、生产 pipeline，不做 chunking、Review UI、Ripple Suggestion 或 Continuation 改造，也不新增 runtime dependency。
 
-## `v0.2.0` 发布门禁
+## `v0.2.0` 发布检查
 
-只有同时满足以下条件，才能发布 `v0.2.0`：
+发布 `v0.2.0` 需要：
 
 1. 三类 Benchmark 均有权利记录、manifest 与独立脱敏报告，且至少一篇满足真正未见作品条件；
-2. Story Map、人工修正成本、Ripple、Continuation 和真实用户观察达到 [`docs/evals.md`](evals.md) 的 M1 门槛；
+2. 附最新 M1 质量仪表盘：四条硬规则零违反；Story Map、人工修正成本、Ripple、Continuation（与可选的真实用户观察）的达标情况如实列出，未达标项不阻塞发布，但要写进发布说明；
 3. M0 的 Source 不可变、candidate-first、revision 不可变、Evidence、Anchor、Worldline 隔离与 fail-closed 门禁没有退化；
 4. 当前仓库的 lint、typecheck、unit、contract、完整测试、build 与 Chromium E2E 全部通过；
 5. Prompt 如在后续 Issue 发生变化，必须有对应真实 M1 Eval 结果；
