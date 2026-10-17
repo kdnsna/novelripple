@@ -5,11 +5,11 @@ import { isPathInside } from "@/evals/benchmark-root";
 /**
  * M1 仪表盘报告落盘决策（纯路径判断，不读文件系统）。
  *
- * 私有 benchmark 的 ID 与报告不得进入受版本控制的 `docs/evals/runs/`：
+ * 私有 benchmark 的 ID 与报告不得进入受版本控制的仓库路径：
  * - 任一篇 manifest 为 `visibility: "private"`，或位于 `NOVELRIPPLE_BENCH_ROOT` /
  *   仓库 `benchmarks/private` 内，整次运行按 private 处理；
- * - private 运行的默认报告与 metrics.json 同目录（`.data/evals/...`），
- *   `--report-dir` 也不得指向仓库 `docs/`；
+ * - private 运行的默认报告与 metrics.json 同目录（`.data/evals/...`）；
+ *   `--report-dir` 只能在仓库外，或位于 Git 忽略的仓库内路径；
  * - 报告里的私有 benchmark ID 替换为 `private:<storyClass>`。
  */
 export type M1ReportStory = {
@@ -28,6 +28,11 @@ export type M1ReportRoutingInput = {
   reportDirProvided?: boolean;
   /** 已 realpath 的 NOVELRIPPLE_BENCH_ROOT。 */
   extraPrivateRoot?: string;
+  /**
+   * 判断一个已解析路径是否被 Git 忽略；脚本用 `git check-ignore -q` 实现。
+   * 未提供时，仓库内路径一律按未忽略处理（fail closed）。
+   */
+  isGitIgnored?: (path: string) => boolean;
 };
 
 export type M1ReportRouting = {
@@ -39,7 +44,7 @@ export type M1ReportRouting = {
 };
 
 export type M1ReportRoutingErrorCode =
-  | "report_dir_inside_docs_for_private_run";
+  | "report_dir_inside_repository_for_private_run";
 
 export class M1ReportRoutingError extends Error {
   constructor(readonly code: M1ReportRoutingErrorCode) {
@@ -69,10 +74,13 @@ export function resolveM1ReportRouting(
     input.reportDirProvided ?? input.reportDir !== undefined;
 
   if (privateRun && reportDirProvided && input.reportDir) {
-    const docsRoot = path.join(input.repositoryRoot, "docs");
-    if (isPathInside(docsRoot, path.resolve(input.reportDir))) {
+    const resolvedReportDir = path.resolve(input.reportDir);
+    if (
+      isPathInside(input.repositoryRoot, resolvedReportDir) &&
+      input.isGitIgnored?.(resolvedReportDir) !== true
+    ) {
       throw new M1ReportRoutingError(
-        "report_dir_inside_docs_for_private_run",
+        "report_dir_inside_repository_for_private_run",
       );
     }
   }

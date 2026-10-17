@@ -65,6 +65,8 @@ function createInput(projectId: string) {
   };
 }
 
+const noSleep = async (): Promise<void> => {};
+
 describe("structured generation", () => {
   it("migrates the nullable generation_runs.worldline_id column", () => {
     const sqlite = new Database(databasePath, { readonly: true });
@@ -357,13 +359,73 @@ describe("structured generation", () => {
       '{"answer":"ok"}',
     ]);
 
-    const result = await generateStructured(createInput(project.id), provider);
+    const result = await generateStructured(
+      { ...createInput(project.id), sleep: noSleep },
+      provider,
+    );
 
     expect(provider.requests).toHaveLength(2);
     expect(result.value).toEqual({ answer: "ok" });
     expect(result.generation.attemptCount).toBe(1);
     expect(getGenerationRun(result.generation.runId)).toMatchObject({
       status: "succeeded",
+    });
+  });
+
+  it("waits a random 500–1500 ms backoff before a transient retry", async () => {
+    const project = createProject({ title: "网络退避" });
+    const delays: number[] = [];
+    const provider = new MockAIProvider([
+      new APIConnectionError({ cause: new Error("terminated") }),
+      '{"answer":"ok"}',
+    ]);
+
+    const result = await generateStructured(
+      {
+        ...createInput(project.id),
+        sleep: async (milliseconds) => {
+          delays.push(milliseconds);
+        },
+      },
+      provider,
+    );
+
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBeGreaterThanOrEqual(500);
+    expect(delays[0]).toBeLessThanOrEqual(1500);
+    expect(result.value).toEqual({ answer: "ok" });
+  });
+
+  it("throws the abort reason when aborted during the backoff wait", async () => {
+    const project = createProject({ title: "等待中中止" });
+    const controller = new AbortController();
+    const abortReason = new Error("aborted during backoff");
+    let providerCalls = 0;
+    const provider: AIProvider = {
+      providerName: "mock",
+      async generate() {
+        providerCalls += 1;
+        throw new APIConnectionError({ cause: new Error("terminated") });
+      },
+    };
+
+    await expect(
+      generateStructured(
+        {
+          ...createInput(project.id),
+          signal: controller.signal,
+          sleep: async () => {
+            controller.abort(abortReason);
+          },
+        },
+        provider,
+      ),
+    ).rejects.toBe(abortReason);
+
+    expect(providerCalls).toBe(1);
+    expect(listProjectGenerationRuns(project.id)[0]).toMatchObject({
+      status: "failed",
+      error: "aborted during backoff",
     });
   });
 
@@ -379,6 +441,7 @@ describe("structured generation", () => {
       {
         ...createInput(project.id),
         onAttempt: () => attempts.push(attempts.length + 1),
+        sleep: noSleep,
       },
       provider,
     );
@@ -396,7 +459,10 @@ describe("structured generation", () => {
     ]);
 
     await expect(
-      generateStructured(createInput(project.id), provider),
+      generateStructured(
+        { ...createInput(project.id), sleep: noSleep },
+        provider,
+      ),
     ).rejects.toThrow("terminated");
 
     expect(provider.requests).toHaveLength(2);
@@ -422,7 +488,11 @@ describe("structured generation", () => {
 
     await expect(
       generateStructured(
-        { ...createInput(project.id), signal: controller.signal },
+        {
+          ...createInput(project.id),
+          signal: controller.signal,
+          sleep: noSleep,
+        },
         provider,
       ),
     ).rejects.toBe(abortReason);
@@ -442,7 +512,10 @@ describe("structured generation", () => {
       '{"answer":"repaired"}',
     ]);
 
-    const result = await generateStructured(createInput(project.id), provider);
+    const result = await generateStructured(
+      { ...createInput(project.id), sleep: noSleep },
+      provider,
+    );
 
     expect(provider.requests).toHaveLength(3);
     expect(provider.requests[1]?.repair).toMatchObject({

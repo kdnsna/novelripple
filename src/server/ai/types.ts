@@ -62,6 +62,8 @@ export type StructuredGenerationInput<T> = {
   signal?: AbortSignal;
   /** 每次真正发起 provider 调用前触发（含 repair），用于调用预算计数。 */
   onAttempt?: () => void;
+  /** 瞬时网络错误重试前的等待函数；测试可注入以跳过真实定时器。 */
+  sleep?: (milliseconds: number) => Promise<void>;
 };
 
 export type StructuredGenerationResult<T> = {

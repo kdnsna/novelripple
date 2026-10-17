@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   mkdir,
@@ -77,6 +78,19 @@ function parseArguments(): {
       : path.join(repositoryRoot, ".data", "evals", "m1-eval"),
     reportDirProvided: Boolean(values["report-dir"]),
   };
+}
+
+/** `git check-ignore -q`：退出码 0 表示路径被忽略。 */
+function isGitIgnored(candidate: string): boolean {
+  try {
+    execFileSync("git", ["check-ignore", "-q", "--", candidate], {
+      cwd: repositoryRoot,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type ManifestMeta = {
@@ -269,6 +283,7 @@ async function main() {
     reportDir: args.reportDir,
     reportDirProvided: args.reportDirProvided,
     ...(extraPrivateRoot ? { extraPrivateRoot } : {}),
+    isGitIgnored: isGitIgnored,
   });
 
   // 2. 人工输入（缺失 = null，计入 missingData）

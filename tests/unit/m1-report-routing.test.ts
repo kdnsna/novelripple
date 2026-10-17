@@ -93,16 +93,45 @@ describe("M1 report routing", () => {
 
     expect(error).toBeInstanceOf(M1ReportRoutingError);
     expect(error).toMatchObject({
-      code: "report_dir_inside_docs_for_private_run",
+      code: "report_dir_inside_repository_for_private_run",
     });
   });
 
-  it("allows --report-dir outside docs for a private run", () => {
+  it("rejects any non-ignored in-repository --report-dir for a private run", () => {
+    expect(() =>
+      resolveM1ReportRouting({
+        repositoryRoot,
+        stories: [story({ visibility: "private" })],
+        reportDir: "/repo/src/eval-runs",
+        reportDirProvided: true,
+        isGitIgnored: () => false,
+      }),
+    ).toThrow(M1ReportRoutingError);
+  });
+
+  it("allows an in-repository --report-dir only when git ignores it", () => {
+    const checked: string[] = [];
+    const routing = resolveM1ReportRouting({
+      repositoryRoot,
+      stories: [story({ visibility: "private" })],
+      reportDir: "/repo/.data/evals/custom",
+      reportDirProvided: true,
+      isGitIgnored: (candidate) => {
+        checked.push(candidate);
+        return true;
+      },
+    });
+
+    expect(routing.reportTarget).toBe("run-directory");
+    expect(checked).toEqual(["/repo/.data/evals/custom"]);
+  });
+
+  it("allows --report-dir outside the repository for a private run", () => {
     expect(
       resolveM1ReportRouting({
         repositoryRoot,
         stories: [story({ visibility: "private" })],
-        reportDir: "/repo/.data/evals/custom",
+        reportDir: "/tmp/m1-private-report",
         reportDirProvided: true,
       }).reportTarget,
     ).toBe("run-directory");

@@ -354,9 +354,6 @@ export function validateRoster(
       assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
     });
   });
-  const eventParticipants = new Set(
-    pool.events.flatMap((event) => event.participants),
-  );
   roster.rejectedCandidateIds.forEach((candidateId, index) => {
     const candidate = poolById.get(candidateId);
     if (!candidate) {
@@ -364,14 +361,8 @@ export function validateRoster(
         path: `rejectedCandidateIds.${index}`,
         message: `rejectedCandidateIds 引用了未知人物候选：${candidateId}`,
       });
-    } else if (!canRejectRosterCandidate(candidate, eventParticipants)) {
-      issues.push({
-        path: `rejectedCandidateIds.${index}`,
-        message:
-          `只能拒绝漏网的群体/家族/机构或只评论的作者叙事者；` +
-          `具体人物请合并为 role: "minor"：${candidateId}`,
-      });
     }
+    // 不能拒绝的具体人物不再报错：applyRoster 会确定性地降级为 minor 人物。
     assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
   });
   for (const id of poolIds) {
@@ -397,8 +388,28 @@ export function applyRoster(
   for (const character of roster.characters) {
     for (const candidateId of character.mergedFrom) mapping.set(candidateId, character.id);
   }
-  const rejectedIds = new Set(roster.rejectedCandidateIds);
-  // 被拒候选从人物和事件参与者中移除；只剩被拒参与者的事件按最小例外保留第一个。
+  const rosterIds = new Set(roster.characters.map((character) => character.id));
+  const poolById = new Map(pool.characters.map((character) => [character.id, character]));
+  const eventParticipants = new Set(
+    pool.events.flatMap((event) => event.participants),
+  );
+  const rejectedIds = new Set<string>();
+  const demotedRejected: StoryMapPool["characters"] = [];
+  for (const candidateId of new Set(roster.rejectedCandidateIds)) {
+    const candidate = poolById.get(candidateId);
+    if (!candidate) continue;
+    if (canRejectRosterCandidate(candidate, eventParticipants)) {
+      rejectedIds.add(candidateId);
+      continue;
+    }
+    // 不能拒绝的具体人物确定性地降级为独立 minor 人物，保留名字与别名；
+    // 其事件参与关系也保持不变。
+    if (rosterIds.has(candidateId)) continue;
+    const { kind: _kind, ...character } = candidate;
+    void _kind;
+    demotedRejected.push({ ...character, role: "minor" });
+  }
+  // 只移除真正可拒绝的候选；只剩被拒参与者的事件按最小例外保留第一个。
   const withoutRejected = dropCandidates(pool, rejectedIds);
   const keptRejected = withoutRejected.characters
     .filter((character) => rejectedIds.has(character.id))
@@ -415,6 +426,7 @@ export function applyRoster(
         role: character.role,
         initialState: character.initialState,
       })),
+      ...demotedRejected,
       ...keptRejected,
     ],
     events: withoutRejected.events.map((event) => ({
@@ -659,8 +671,9 @@ export function applyMerge(
 }
 
 /**
- * 合并后去重因果边：丢弃自环（含端点经事件合并后相同的边）；同一 (from, to)
- * 只保留第一条边的类型与说明，证据按出现顺序取并集。
+ * 合并后去重因果边：丢弃自环（含端点经事件合并后相同的边）；同一
+ * (from, to, type) 只保留第一条边的说明，证据按出现顺序取并集。
+ * 不同 type 各自保留，避免 enables / foreshadows 被 causes 吞掉。
  */
 export function dedupeEdges(
   edges: readonly StoryMapCandidateEdge[],
@@ -672,7 +685,7 @@ export function dedupeEdges(
     const from = resolveEventId(edge.from);
     const to = resolveEventId(edge.to);
     if (from === to) continue;
-    const key = `${from}|${to}`;
+    const key = `${from}|${to}|${edge.type}`;
     const existing = seen.get(key);
     if (existing) {
       existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
@@ -735,7 +748,8 @@ function characterEndingName(requirement: string): string | null {
 
 /**
  * 去掉汇总阶段为块内冲突 ID 加的 `__c<chunk>` 后缀，并重写所有引用。
- * 碰撞时第一条保留裸 ID，后续依次改为 `<id>-2`、`<id>-3`…。
+ * 无后缀 ID 先保留原值（如合法的 `a-2`）；后缀 ID 再占用裸 ID，被占用时
+ * 依次改为 `<id>-2`、`<id>-3`…，并跳过所有已使用的 ID。
  */
 export function cleanupCandidateIds(
   candidate: StoryMapContentCandidate,
@@ -772,7 +786,19 @@ export function cleanupCandidateIds(
 function assignFinalIds(ids: readonly string[]): Map<string, string> {
   const used = new Set<string>();
   const mapping = new Map<string, string>();
+  const hasChunkSuffix = (id: string) => /__c\d+(?:_\d+)?$/.test(id);
+
+  // 先保留所有本来就没有块后缀的 ID（包括合法的 `a-2`），再加后缀 ID。
   for (const id of ids) {
+    if (hasChunkSuffix(id)) continue;
+    let candidate = id;
+    let counter = 2;
+    while (used.has(candidate)) candidate = `${id}-${counter++}`;
+    used.add(candidate);
+    mapping.set(id, candidate);
+  }
+  for (const id of ids) {
+    if (!hasChunkSuffix(id)) continue;
     const bare = id.replace(/__c\d+(?:_\d+)?$/, "");
     let candidate = bare;
     let counter = 2;

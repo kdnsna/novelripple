@@ -142,6 +142,7 @@ export async function generateStructured<T>(
       },
       INITIAL_RETRY_POLICY,
       input.signal,
+      input.sleep ?? defaultSleep,
     );
   } catch (error) {
     failGenerationRun({
@@ -206,6 +207,7 @@ export async function generateStructured<T>(
       },
       REPAIR_RETRY_POLICY,
       input.signal,
+      input.sleep ?? defaultSleep,
     );
   } catch (error) {
     failGenerationRun({
@@ -303,15 +305,36 @@ function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new Error("Structured generation aborted");
 }
 
+/** 瞬时网络错误重试前的随机退避区间（毫秒）。 */
+const TRANSIENT_RETRY_MIN_DELAY_MS = 500;
+const TRANSIENT_RETRY_MAX_DELAY_MS = 1_500;
+
+function defaultSleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function transientRetryDelay(): number {
+  return (
+    TRANSIENT_RETRY_MIN_DELAY_MS +
+    Math.floor(
+      Math.random() *
+        (TRANSIENT_RETRY_MAX_DELAY_MS - TRANSIENT_RETRY_MIN_DELAY_MS + 1),
+    )
+  );
+}
+
 /**
  * 统一的重试入口：每次真实调用都经过 callProvider，因此 onAttempt
  * （Story Map 的模型调用预算）能看到包括重试在内的每一次尝试。
+ * 瞬时网络错误在重试前等待 500–1500ms 随机退避；等待期间中止则抛出
+ * 调用方的 abort reason。
  */
 async function callWithRetries(
   callProvider: (request: AIProviderRequest) => Promise<AIProviderResponse>,
   request: AIProviderRequest,
   policy: RetryPolicy,
   signal: AbortSignal | undefined,
+  sleep: (milliseconds: number) => Promise<void>,
 ): Promise<AIProviderResponse> {
   let emptyResponseRetries = 0;
   let transientNetworkRetries = 0;
@@ -320,7 +343,8 @@ async function callWithRetries(
     try {
       return await callProvider(request);
     } catch (error) {
-      if (isTransientNetworkError(error)) {
+      const transient = isTransientNetworkError(error);
+      if (transient) {
         if (transientNetworkRetries >= policy.transientNetworkRetries) throw error;
         transientNetworkRetries += 1;
       } else if (isEmptyResponseError(error)) {
@@ -332,6 +356,10 @@ async function callWithRetries(
 
       // 调用方已中止时不再重试，直接抛出其 abort reason。
       if (signal?.aborted) throw abortReason(signal);
+      if (transient) {
+        await sleep(transientRetryDelay());
+        if (signal?.aborted) throw abortReason(signal);
+      }
     }
   }
 }

@@ -14,7 +14,13 @@ import {
   normalizeSourceText,
   sha256,
 } from "@/domain/source/normalize-source";
-import { UNIT_WINDOW, matchM1Gold } from "@/evals/m1-gold-matcher";
+import {
+  STRICT_CONTENT_SCORE,
+  UNIT_WINDOW,
+  buildM1ChanceBaselines,
+  contentBigramScore,
+  matchM1Gold,
+} from "@/evals/m1-gold-matcher";
 import type { M1Gold } from "@/evals/m1-gold";
 
 const SOURCE_TEXT = [
@@ -67,6 +73,8 @@ function createStoryMap(input: {
     id: string;
     participants: string[];
     evidenceUnits: number[];
+    title?: string;
+    summary?: string;
   }>;
   edges?: Array<{
     id: string;
@@ -98,8 +106,8 @@ function createStoryMap(input: {
     })),
     events: input.events.map((event, index) => ({
       id: event.id,
-      title: `测试事件${index + 1}`,
-      summary: "仅用于测试的虚构事件。",
+      title: event.title ?? `测试事件${index + 1}`,
+      summary: event.summary ?? "仅用于测试的虚构事件。",
       sequence: index + 1,
       participants: event.participants,
       stateChanges: [],
@@ -137,6 +145,7 @@ function createGold(input: {
     id: string;
     characterIds: string[];
     evidenceUnits: number[];
+    label?: string;
   }>;
   causalLinks?: Array<{
     id: string;
@@ -149,6 +158,7 @@ function createGold(input: {
     characterIds: string[];
     evidenceUnits: number[];
     interpretive?: boolean;
+    label?: string;
   }>;
 }): M1Gold {
   return {
@@ -167,7 +177,7 @@ function createGold(input: {
     })),
     events: input.events.map((event, index) => ({
       id: event.id,
-      label: `测试黄金事件${index + 1}`,
+      label: event.label ?? `测试黄金事件${index + 1}`,
       storyOrder: index + 1,
       narrativeMode: "scene",
       characterIds: event.characterIds,
@@ -184,7 +194,7 @@ function createGold(input: {
     })),
     endings: input.endings.map((ending, index) => ({
       id: ending.id,
-      label: `测试黄金结局${index + 1}`,
+      label: ending.label ?? `测试黄金结局${index + 1}`,
       interpretive: ending.interpretive ?? false,
       characterIds: ending.characterIds,
       evidence: ending.evidenceUnits.map(goldEvidence),
@@ -443,6 +453,183 @@ describe("M1 gold matcher", () => {
     expect(result.lenientIdentity.f1).toBe(1);
     expect(result.lenientIdentity.excludedCandidateIds).toEqual([
       "cand_extra",
+    ]);
+  });
+
+  it("gives a dense content-free map low strict event F1 while loose stays higher", () => {
+    const gold = createGold({
+      characters: [
+        { id: "hero", name: "甲" },
+        { id: "ally", name: "乙" },
+      ],
+      events: [
+        { id: "g1", characterIds: ["hero", "ally"], evidenceUnits: [1], label: "甲走进钟楼" },
+        { id: "g2", characterIds: ["hero", "ally"], evidenceUnits: [3], label: "乙留在门外" },
+        { id: "g3", characterIds: ["hero", "ally"], evidenceUnits: [5], label: "甲发现一封信" },
+        { id: "g4", characterIds: ["hero", "ally"], evidenceUnits: [7], label: "乙关上灯" },
+      ],
+      endings: [],
+    });
+    const storyMap = createStoryMap({
+      characters: [
+        { id: "cand_hero", name: "甲" },
+        { id: "cand_ally", name: "乙" },
+      ],
+      events: [1, 4, 7].map((unit, index) => ({
+        id: `event_dummy_${index + 1}`,
+        participants: ["cand_hero", "cand_ally"],
+        evidenceUnits: [unit],
+        title: `事件 ${index + 1}`,
+        summary: "...",
+      })),
+      endings: [
+        {
+          id: "ending_dummy",
+          targetEventId: "event_dummy_1",
+          requirement: "结局。",
+          evidenceUnits: [1],
+        },
+      ],
+    });
+
+    const result = matchM1Gold({ gold, source, storyMap });
+
+    expect(result.events.f1).toBeGreaterThan(result.strict.events.f1);
+    expect(result.strict.events.f1).toBeLessThanOrEqual(0.1);
+    expect(result.chanceBaseline.dense.strict.events.f1).toBeLessThanOrEqual(0.1);
+  });
+
+  it("strictly matches a paraphrased title/summary with an exact evidence unit", () => {
+    const gold = createGold({
+      characters: [{ id: "hero", name: "甲" }],
+      events: [
+        {
+          id: "g1",
+          characterIds: ["hero"],
+          evidenceUnits: [3],
+          label: "甲在钟楼发现一封信",
+        },
+      ],
+      endings: [],
+    });
+    const storyMap = createStoryMap({
+      characters: [{ id: "cand_hero", name: "甲" }],
+      events: [
+        {
+          id: "event_discover",
+          participants: ["cand_hero"],
+          evidenceUnits: [3],
+          title: "发现信件",
+          summary: "甲在钟楼找到一封旧信",
+        },
+      ],
+      endings: [
+        {
+          id: "ending_dummy",
+          targetEventId: "event_discover",
+          requirement: "结局。",
+          evidenceUnits: [3],
+        },
+      ],
+    });
+
+    const result = matchM1Gold({ gold, source, storyMap });
+
+    expect(STRICT_CONTENT_SCORE).toBe(0.25);
+    expect(contentBigramScore("甲在钟楼发现一封信", "甲在钟楼找到一封旧信"))
+      .toBeGreaterThanOrEqual(STRICT_CONTENT_SCORE);
+    expect(result.strict.events.matchedPairs).toEqual([
+      { candidateId: "event_discover", goldId: "g1" },
+    ]);
+    expect(result.strict.events.f1).toBe(1);
+  });
+
+  it("builds count-matched and dense chance baselines with content-free text", () => {
+    const gold = createGold({
+      characters: [
+        { id: "hero", name: "甲" },
+        { id: "ally", name: "乙" },
+      ],
+      events: [
+        { id: "g1", characterIds: ["hero", "ally"], evidenceUnits: [1], label: "甲走进钟楼" },
+        { id: "g2", characterIds: ["hero", "ally"], evidenceUnits: [3], label: "乙留在门外" },
+        { id: "g3", characterIds: ["hero", "ally"], evidenceUnits: [5], label: "甲发现一封信" },
+        { id: "g4", characterIds: ["hero", "ally"], evidenceUnits: [7], label: "乙关上灯" },
+      ],
+      causalLinks: [
+        { id: "link_1", from: "g1", to: "g2", strength: "hard" },
+        { id: "link_2", from: "g2", to: "g3", strength: "soft" },
+      ],
+      endings: [
+        { id: "end_1", characterIds: ["hero"], evidenceUnits: [7] },
+        { id: "end_2", characterIds: ["ally"], evidenceUnits: [8] },
+      ],
+    });
+
+    const baselines = buildM1ChanceBaselines({ gold, units });
+
+    expect(baselines.matched.events).toHaveLength(4);
+    expect(baselines.matched.edges).toHaveLength(2);
+    expect(baselines.matched.endingCandidates).toHaveLength(2);
+    expect(baselines.dense.events).toHaveLength(Math.ceil(units.length / 3));
+    expect(baselines.dense.edges).toHaveLength(0);
+    expect(baselines.dense.endingCandidates).toHaveLength(0);
+    expect(baselines.matched.events[0]?.participants).toEqual([
+      "chance_char_1",
+      "chance_char_2",
+    ]);
+
+    const result = matchM1Gold({ gold, source, storyMap: baselines.dense });
+    expect(result.chanceBaseline.dense.strict.events.f1).toBeLessThanOrEqual(0.1);
+    expect(result.chanceBaseline.dense.loose.events.f1)
+      .toBeGreaterThanOrEqual(result.chanceBaseline.dense.strict.events.f1);
+  });
+
+  it("strictly matches an ending only with exact units and label content", () => {
+    const gold = createGold({
+      characters: [{ id: "hero", name: "甲" }],
+      events: [
+        {
+          id: "g1",
+          characterIds: ["hero"],
+          evidenceUnits: [8],
+          label: "甲留在钟楼",
+        },
+      ],
+      endings: [
+        {
+          id: "end_1",
+          characterIds: ["hero"],
+          evidenceUnits: [8],
+          label: "甲留在钟楼里",
+        },
+      ],
+    });
+    const storyMap = createStoryMap({
+      characters: [{ id: "cand_hero", name: "甲" }],
+      events: [
+        {
+          id: "event_final",
+          participants: ["cand_hero"],
+          evidenceUnits: [8],
+          title: "甲留在钟楼",
+          summary: "...",
+        },
+      ],
+      endings: [
+        {
+          id: "ending_final",
+          targetEventId: "event_final",
+          requirement: "甲留在钟楼。",
+          evidenceUnits: [8],
+        },
+      ],
+    });
+
+    const result = matchM1Gold({ gold, source, storyMap });
+
+    expect(result.strict.endings.matchedPairs).toEqual([
+      { candidateId: "ending_final", goldId: "end_1" },
     ]);
   });
 });

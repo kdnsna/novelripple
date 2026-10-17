@@ -30,6 +30,7 @@ import {
   type M1BenchmarkManifest,
 } from "../src/evals/m1-baseline";
 import { parseM1Gold, type M1Gold } from "../src/evals/m1-gold";
+import type { M1GoldMatch } from "../src/evals/m1-gold-matcher";
 import {
   createConfiguredAIProvider,
   readConfiguredAI,
@@ -441,7 +442,7 @@ function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
   for (const story of value.stories) {
     const goldMatch = story.storyMap?.goldMatch;
     const goldSummary = goldMatch
-      ? `; goldEvents=${formatRates(goldMatch.events)}; goldEdges=${formatRates(goldMatch.edges)}; goldHardRecall=${formatRate(goldMatch.edges.hardRecall)}; goldEndings=${formatRates(goldMatch.endings)}; goldNonInterpretiveRecall=${formatRate(goldMatch.endings.nonInterpretiveRecall)}; lenientIdentityF1=${formatRateValue(goldMatch.lenientIdentity.f1)}`
+      ? `; ${formatGoldMatch(goldMatch)}`
       : "; goldMatch=not_available";
     const tieredIdentity = story.storyMap?.tieredIdentity;
     const tieredSummary = tieredIdentity
@@ -455,20 +456,53 @@ function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
   console.log("下一步：使用 eval.db 完成人工 revision/确认与 strict/open Ripple；不得把正文复制到报告。 ");
 }
 
+function formatGoldMatch(goldMatch: M1GoldMatch): string {
+  const chance = goldMatch.chanceBaseline;
+  const pair = (loose: number, strict: number) => ({ loose, strict });
+  const section = (
+    name: string,
+    loose: number,
+    strict: number,
+    matchedChance: { loose: number; strict: number },
+    denseChance: { loose: number; strict: number },
+  ) =>
+    `gold${name} loose=${formatRateValue(loose)} strict=${formatRateValue(strict)} ` +
+    `chance(loose/strict)=${formatRateValue(matchedChance.loose)}/${formatRateValue(matchedChance.strict)} ` +
+    `dense(loose/strict)=${formatRateValue(denseChance.loose)}/${formatRateValue(denseChance.strict)}`;
+  return [
+    section(
+      "Events",
+      goldMatch.events.f1,
+      goldMatch.strict.events.f1,
+      pair(chance.matched.loose.events.f1, chance.matched.strict.events.f1),
+      pair(chance.dense.loose.events.f1, chance.dense.strict.events.f1),
+    ),
+    section(
+      "Edges",
+      goldMatch.edges.f1,
+      goldMatch.strict.edges.f1,
+      pair(chance.matched.loose.edges.f1, chance.matched.strict.edges.f1),
+      pair(chance.dense.loose.edges.f1, chance.dense.strict.edges.f1),
+    ),
+    section(
+      "Endings",
+      goldMatch.endings.f1,
+      goldMatch.strict.endings.f1,
+      pair(chance.matched.loose.endings.f1, chance.matched.strict.endings.f1),
+      pair(chance.dense.loose.endings.f1, chance.dense.strict.endings.f1),
+    ),
+    `goldHardRecall=${formatRate(goldMatch.edges.hardRecall)}`,
+    `goldNonInterpretiveRecall=${formatRate(goldMatch.endings.nonInterpretiveRecall)}`,
+    `lenientIdentityF1=${formatRateValue(goldMatch.lenientIdentity.f1)}`,
+  ].join("; ");
+}
+
 function formatRate(value: { matched: number; total: number; rate: number }) {
   return `${value.matched}/${value.total} (${(value.rate * 100).toFixed(1)}%)`;
 }
 
 function formatRateValue(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatRates(value: {
-  recall: number;
-  precision: number;
-  f1: number;
-}): string {
-  return `R=${formatRateValue(value.recall)},P=${formatRateValue(value.precision)},F1=${formatRateValue(value.f1)}`;
 }
 
 function formatOptionalRate(

@@ -342,11 +342,11 @@ describe("roster pass", () => {
     expect(applied.events[0]!.participants).toEqual(["char_lin", "char_porter"]);
   });
 
-  it("only allows groups and comment-only narrators in rejectedCandidateIds", () => {
+  it("demotes a rejected individual to its own minor character instead of failing validation", () => {
     const pool: StoryMapPool = {
       characters: [
         { ...character("char_lin", "林舟"), kind: "individual" },
-        { ...character("char_porter", "码头脚夫"), kind: "individual" },
+        { ...character("char_porter", "码头脚夫", ["脚夫"]), kind: "individual" },
         character("char_crowd", "围观的人群"),
         character("char_narrator", "旁白者"),
       ],
@@ -369,14 +369,21 @@ describe("roster pass", () => {
       rejectedCandidateIds: ["char_porter", "char_crowd", "char_narrator"],
     };
 
-    expect(validateRoster(roster, pool)).toEqual([
-      {
-        path: "rejectedCandidateIds.0",
-        message:
-          "只能拒绝漏网的群体/家族/机构或只评论的作者叙事者；" +
-          '具体人物请合并为 role: "minor"：char_porter',
-      },
+    expect(validateRoster(roster, pool)).toEqual([]);
+
+    const applied = applyRoster(pool, roster);
+    expect(applied.characters).toEqual([
+      expect.objectContaining({ id: "char_lin", role: "protagonist" }),
+      expect.objectContaining({
+        id: "char_porter",
+        name: "码头脚夫",
+        aliases: ["脚夫"],
+        role: "minor",
+      }),
     ]);
+    expect(applied.characters.map((item) => item.id)).not.toContain("char_crowd");
+    expect(applied.characters.map((item) => item.id)).not.toContain("char_narrator");
+    expect(applied.events[0]!.participants).toEqual(["char_lin", "char_porter"]);
   });
 
   it("removes rejected candidates from characters and participants, keeping one only when an event would be empty", () => {
@@ -564,8 +571,20 @@ describe("deterministic dialogue speakers", () => {
     );
   });
 
-  it("ranks a frequent speaker above a name that only appears in narration", () => {
+  it("keeps 老板 as a nickname candidate because it can be a character's only name", () => {
     const units = [
+      textUnit(
+        "u1",
+        ["老板进门。", "老板点灯。", "老板坐下。"].join("\n"),
+      ),
+    ];
+
+    const candidates = deriveNameCandidates(units);
+
+    expect(candidates.map((candidate) => candidate.name)).toContain("老板");
+  });
+
+  it("ranks a frequent speaker above a name that only appears in narration", () => {    const units = [
       textUnit(
         "u1",
         [
@@ -713,17 +732,19 @@ describe("deterministic edge and ending dedupe", () => {
     return { id, targetEventId, requirement, evidenceUnitIds };
   }
 
-  it("collapses edges by (from, to), keeps the first type/label and unions evidence", () => {
+  it("collapses edges by (from, to, type), keeps the first label and unions evidence", () => {
     const edges = [
       edge("edge_a", "e1", "e2", "causes", ["u1"]),
       edge("edge_b", "e1", "e2", "enables", ["u2"]),
+      edge("edge_c", "e1", "e2", "causes", ["u3"]),
       edge("edge_self", "e1", "e1", "foreshadows", ["u1"]),
-      edge("edge_c", "e2", "e3", "causes", ["u3"]),
+      edge("edge_d", "e2", "e3", "causes", ["u4"]),
     ];
 
     expect(dedupeEdges(edges)).toEqual([
-      { ...edges[0]!, evidenceUnitIds: ["u1", "u2"] },
-      edges[3],
+      { ...edges[0]!, evidenceUnitIds: ["u1", "u3"] },
+      edges[1],
+      edges[4],
     ]);
   });
 
@@ -923,5 +944,37 @@ describe("final ID cleanup", () => {
     };
 
     expect(cleanupCandidateIds(cleanupCandidateIds(candidate))).toEqual(candidate);
+  });
+
+  it("reserves unsuffixed ids first so a legitimate a-2 keeps its exact id", () => {
+    const candidate: StoryMapContentCandidate = {
+      title: "T",
+      logline: "L",
+      characters: [
+        character("char_a__c2", "甲"),
+        character("char_a", "甲"),
+        character("char_a-2", "甲"),
+      ],
+      events: [{ ...event("event_x__c2", "u1", ["char_a__c2"]), sequence: 1 }],
+      edges: [],
+      endingCandidates: [
+        { id: "ending_x", targetEventId: "event_x__c2", requirement: "结局", evidenceUnitIds: ["u1"] },
+      ],
+    };
+
+    const cleaned = cleanupCandidateIds(candidate);
+
+    expect(cleaned.characters.map((item) => item.id)).toEqual([
+      "char_a-3",
+      "char_a",
+      "char_a-2",
+    ]);
+    expect(cleaned.events[0]).toMatchObject({
+      id: "event_x",
+      participants: ["char_a-3"],
+    });
+    expect(cleaned.endingCandidates[0]).toMatchObject({
+      targetEventId: "event_x",
+    });
   });
 });
