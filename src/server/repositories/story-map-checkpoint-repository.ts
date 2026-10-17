@@ -12,6 +12,8 @@ import { storyMapChunkCheckpoints } from "@/server/db/schema";
  *
  * 检查点粒度是单个分块的一个阶段（extract / glean）：阶段一完成就追加一行，
  * 崩溃后即使只完成了抽取、还没补抽，也能在下一次 attempt 复用抽取结果。
+ * 每行记录产生该阶段结果的 `generation_run_id`，复用时可把原始 Run 带入生成结果；
+ * 迁移 0009 之前写入的旧行该字段为 null。
  * 行永不被 UPDATE；key 不匹配的旧行只是不再命中。
  */
 export const STORY_MAP_CHECKPOINT_STAGES = ["extract", "glean"] as const;
@@ -30,6 +32,8 @@ export type StoredStoryMapChunkCheckpoint = {
   stage: StoryMapCheckpointStage;
   resultJson: string;
   modelCalls: number;
+  /** 产生该阶段结果的 Generation Run；迁移前写入的旧行为 null。 */
+  generationRunId: string | null;
 };
 
 /**
@@ -97,6 +101,7 @@ export function listStoryMapChunkCheckpoints(input: {
       stage: row.stage,
       resultJson: row.resultJson,
       modelCalls: row.modelCalls,
+      generationRunId: row.generationRunId,
     }));
 }
 
@@ -130,6 +135,8 @@ export function saveStoryMapChunkCheckpoint(input: {
   stage: StoryMapCheckpointStage;
   result: unknown;
   modelCalls: number;
+  /** 产生该阶段结果的 Generation Run；重试复用时据此恢复来源。 */
+  generationRunId: string;
   now?: string;
 }): void {
   if (!Number.isInteger(input.modelCalls) || input.modelCalls < 0) {
@@ -148,6 +155,7 @@ export function saveStoryMapChunkCheckpoint(input: {
       stage: input.stage,
       resultJson: JSON.stringify(input.result),
       modelCalls: input.modelCalls,
+      generationRunId: input.generationRunId,
       createdAt: input.now ?? new Date().toISOString(),
     })
     .run();

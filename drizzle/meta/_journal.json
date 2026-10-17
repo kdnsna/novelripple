@@ -64,6 +64,13 @@
       "when": 1786480000000,
       "tag": "0008_story_map_chunk_checkpoints",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786483600000,
+      "tag": "0009_story_map_checkpoint_provenance",
+      "breakpoints": true
     }
   ]
 }

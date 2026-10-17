@@ -122,8 +122,16 @@ export async function runStoryMapGenerationJob(jobId: string): Promise<void> {
       runGroupId,
       previousModelCalls,
       onModelCall: (modelCallsThisAttempt) => {
-        // 预算必须在 provider 调用前持久化；写失败直接 fail closed。
-        updateJobModelCalls({ id: jobId, modelCalls: modelCallsThisAttempt });
+        // 预算必须在 provider 调用前持久化。任务已不是 running（例如被 stale
+        // recovery 标为 interrupted）或写入抛错时，不能继续发出未计费的调用：
+        // 直接抛出，让管线在真正调用 provider 之前中止。
+        const billed = updateJobModelCalls({
+          id: jobId,
+          modelCalls: modelCallsThisAttempt,
+        });
+        if (!billed) {
+          throw new Error("任务已不再运行，模型调用预算无法写入");
+        }
       },
       onProgress: (progress) => {
         try {

@@ -114,6 +114,13 @@ export const storyMapChunkCheckpoints = sqliteTable(
     stage: text("stage", { enum: ["extract", "glean"] }).notNull(),
     resultJson: text("result_json").notNull(),
     modelCalls: integer("model_calls").notNull(),
+    /**
+     * 产生该阶段结果的 Generation Run；迁移 0009 之前写入的旧行没有该字段。
+     * 复用检查点时应把原始 run id 带回生成结果，保持证据/来源可追踪。
+     */
+    generationRunId: text("generation_run_id").references(
+      () => generationRuns.id,
+    ),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [

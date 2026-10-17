@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-10-17
-- 范围：P0 — Story Map 生成从 60–80 秒同步 Server Action 改为 SQLite 持久化的可恢复后台任务；Phase 2 收尾补充分块检查点与跨 attempt 调用预算。不改变 Source、Story Map Artifact、Evidence、候选先于提交或 fail-closed 合同
+- 范围：P0 — Story Map 生成从 60–80 秒同步 Server Action 改为 SQLite 持久化的可恢复后台任务；Phase 2 收尾补充分块检查点、检查点来源与跨 attempt 调用预算。不改变 Source、Story Map Artifact、Evidence、候选先于提交或 fail-closed 合同
 
 ## 背景
 
@@ -34,7 +34,7 @@ Zod 行 Schema 位于 `src/domain/schemas/job.ts`，Repository 位于 `src/serve
 
 `startStoryMapGenerationJob(projectId, sourceId)` 在同一个 project + kind + source 下先查 `queued`/`running` 任务；存在则直接返回它，不创建第二行，也不启动第二个 Runner。Server Action 只在新建任务时用 Next.js `after()` 调度 `runStoryMapGenerationJob`，因此响应不等待模型；`after()` 在 Node 自托管与本地开发中继续执行到完成。
 
-Runner 用条件更新认领任务（只有 `queued` 能变成 `running`），每 15 秒刷新一次心跳；管线每进入一个阶段或完成一个分块就写入进度。成功时写入 `result.artifactId`，失败时用 `storyMapGenerationErrorMessage` 脱敏后写入 `error`。所有状态更新都带当前状态条件，避免中断后又被迟到的回调覆盖。
+Runner 用条件更新认领任务（只有 `queued` 能变成 `running`），每 15 秒刷新一次心跳；管线每进入一个阶段或完成一个分块就写入进度。成功时写入 `result.artifactId`，失败时用 `storyMapGenerationErrorMessage` 脱敏后写入 `error`。所有状态更新都带当前状态条件，避免中断后又被迟到的回调覆盖。每次 provider 调用前的预算写入也是硬条件：`updateJobModelCalls` 返回 `null`（任务已不是 `running`）或抛错时，Runner 立即中止生成，不再发出未计费的模型调用；任务保持 `interrupted` / `failed` 并只保留脱敏错误。
 
 ### 3. 进度回调不改变生成语义
 
@@ -91,6 +91,7 @@ queued → chunking → extract(0..n) → glean(0..n) → names → endings → 
 | `stage` | `extract` / `glean` |
 | `result_json` | 该阶段通过 Schema 与 Unit 引用校验后的结构化候选 |
 | `model_calls` | 产生该阶段结果实际消耗的模型调用数（含 repair） |
+| `generation_run_id` | 产生该阶段结果的 Generation Run（迁移 0009 新增；旧行为 `null`） |
 | `created_at` | 追加时间 |
 
 检查点粒度是**单个分块的一个阶段**：抽取一完成就追加 `extract` 行，补抽完成再追加 `glean` 行。这样在“抽取全部完成、补抽进行到一半”时崩溃，重试仍可复用所有已完成抽取，只补做缺失的补抽。`checkpoint_key` 包含：
@@ -101,6 +102,18 @@ queued → chunking → extract(0..n) → glean(0..n) → names → endings → 
 - `modelConfig.model` 与 `providerName`（模型或 provider 身份变化即失效）。
 
 不存 Prompt、原文、`exactQuote`、模型 raw output 或修复前后文本；`result_json` 只等于管线本来就会留在内存里的 `StoryMapExtractionCandidate` / `StoryMapGleaningCandidate`。行只 INSERT，不 UPDATE；key 不匹配的旧行保留但不再命中。
+
+#### 8.1b 检查点来源与 run id 顺序
+
+迁移 `drizzle/0009_story_map_checkpoint_provenance.sql` 给检查点表增加可空列 `generation_run_id`。每次保存 `extract` / `glean` 行时写入 `generateStructured` 返回的 `generationRunId`；迁移前写入的旧行保持 `null`，不会伪造来源。
+
+生成结果中的 `extractorRunIds` / `gleaningRunIds` 按**分块顺序**返回，而不是按并发完成顺序 append：
+
+- 新调用在对应分块序号写入本次 Run；
+- 复用检查点写入该行原始的 `generation_run_id`，因此重试后的结果仍能追溯到真正产生该分块结果的那次运行；
+- 迁移前没有 run id 的旧检查点无法恢复原始 Run，会被略过，不会填入本次 Run 冒充来源。
+
+复用判定仍以 `checkpoint_key + stage` 和阶段校验为准；来源字段只用于追踪，不参与 key，也不放宽 fail-closed 校验。
 
 #### 8.2 重试创建新任务并共享 run group
 
@@ -132,6 +145,8 @@ Runner 只加载同一 `projectId + runGroupId` 的检查点；同一 key + stag
 #### 8.4 预算跨 attempt 累计
 
 `jobs` 新增 `model_calls` 列，表示**本 attempt** 已发起的 provider 调用数（含 repair 与瞬时网络重试）。Runner 在每次 provider 调用前同步写入；进程之后崩溃也不会漏算已经消耗的调用。
+
+写入必须 fail closed：`updateJobModelCalls` 只在任务仍为 `running` 时成功，任务被 stale recovery 标为 `interrupted` 后会返回 `null`。Runner 必须把 `null` 或写入异常当成生成失败，在真正调用 provider 之前抛出；否则后续调用会绕过预算。此时任务已不是 `running`，不能再被改写成 `succeeded`，只保留 `interrupted` / `failed` 与脱敏错误；任务行的 `model_calls` 停在最后一次成功落库的调用数，与实际已发出的 provider 调用一致。
 
 - 预检：`同一 run group 此前 attempt 的 model_calls 总和 + 本次预计剩余基础调用`（缺失的抽取 + 缺失的补抽 + 3 次全局调用）超过 `STORY_MAP_MAX_MODEL_CALLS` 时，在任何模型调用前 fail closed。
 - 运行中：计数器从“此前 attempt 总和”起算，每次真实尝试先累加再检查；超过上限时沿用既有错误文案并立即失败。
@@ -170,6 +185,8 @@ Runner 只加载同一 `projectId + runGroupId` 的检查点；同一 key + stag
 | 复用失败行或缓存整次生成的最终 Artifact | 失败行不可变；最终 Artifact 依赖全局轮次和当时模型，无法安全复用。只缓存已验证的分块阶段结果，并让全局轮次重跑，才能保持同一 merge 路径 |
 | 只按 Source ID 复用检查点 | Source 不可变，但 Prompt、分块计划和模型都可能变化；key 必须覆盖全部决定输出的输入，否则会静默复用旧结果 |
 | 用检查点行求和作为唯一预算来源 | 模型调用可能已完成但结果尚未写入检查点（崩溃窗口）；必须同时记录任务 attempt 的 `model_calls`，预算才能覆盖真实消耗 |
+| 忽略预算写入返回的 `null` 继续调用 | 任务已被 stale recovery 标为 `interrupted` 时，后续调用不再计入任何 attempt，预算与审计都会失真；必须在 provider 调用前中止 |
+| 按并发完成顺序记录检查点 run id | 分块并发的完成顺序不稳定，run id 列表会与分块/证据顺序错位；必须按分块序号记录 |
 | 重试默认从头开始（fresh） | 会丢弃已验证分块、重复付费，也违背“重试只补缺失阶段”的目标；默认 `resume`，仅当用户明确选择或同一 group 预算耗尽时才 `fresh` |
 | 预算耗尽后允许 resume 重置计数 | 会让“调用预算”不再可信，重试可以通过反复新建任务行无限调用模型；只允许显式 `fresh` 开启新 run group 与新预算 |
 
@@ -188,5 +205,7 @@ Runner 只加载同一 `projectId + runGroupId` 的检查点；同一 key + stag
 - 用户点击生成后立即看到阶段与分块计数；刷新页面继续显示，服务重启后看到 `interrupted` 和“重试”。
 - 重试只重跑未完成的抽取/补抽分块；已完成阶段直接复用，进度显示 `已复用 N/M 个分块`。人名、结局、合并仍重跑，但调用数与之前 attempt 一起计入上限；超出时在任何越界调用前 fail closed。预算耗尽后，用户仍可通过“从头重新生成”显式开启新的 run group 与预算，Source 不会被永久锁死。
 - 任务历史只追加，失败原因经过脱敏；Source、Artifact 和 Story Map 合同不变。
+- 每个检查点绑定产生它的 Generation Run；重试复用的分块仍保留原始 run id，抽取/补抽 run id 列表按分块顺序而非并发完成顺序返回。
+- 预算写入失败或被中断时不会再继续发出未计费调用；任务保持 `interrupted` / `failed`，不会因迟到回调变成 `succeeded`。
 - 生成仍要求至少一个存活的 Node 进程执行 Runner。若未来改为多实例或 Serverless，需要把 Runner 移到独立 Worker/队列，并重新评估心跳与单飞；当前明确不支持该部署形态。
 - 进度是辅助信息：写入失败不会中止已经开始的生成，但任务最终状态仍由 Artifact 写入成功决定。

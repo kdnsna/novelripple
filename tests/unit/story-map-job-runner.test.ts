@@ -22,9 +22,12 @@ import {
 import {
   createJob,
   getJob,
+  INTERRUPTED_JOB_ERROR,
+  interruptStaleJobs,
   listProjectJobs,
   markJobFailed,
   markJobRunning,
+  sumRunGroupModelCalls,
   updateJobModelCalls,
 } from "@/server/repositories/job-repository";
 import { listStoryMapChunkCheckpoints } from "@/server/repositories/story-map-checkpoint-repository";
@@ -111,6 +114,86 @@ describe("in-process Story Map job runner", () => {
         runGroupId: job!.input.runGroupId!,
       }).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("aborts before the next provider call when the job is interrupted mid-run", async () => {
+    const fixture = await loadRippleFixture();
+    const project = createProject({
+      title: "Job runner interrupted billing",
+    });
+    const source = importProjectSource({
+      projectId: project.id,
+      fileName: "ripple-001.md",
+      bytes: new TextEncoder().encode(fixture.source.originalText),
+    }).source;
+    const chunkCount = deriveEvidenceUnitChunks(
+      deriveEvidenceUnits(source),
+    ).length;
+    resetJobRecoveryForTests();
+    const started = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: source.id,
+    });
+
+    const originalGenerate = MockAIProvider.prototype.generate;
+    const generateSpy = vi.spyOn(MockAIProvider.prototype, "generate");
+    let extractCalls = 0;
+    let gleanCalls = 0;
+    generateSpy.mockImplementation(async function (
+      this: MockAIProvider,
+      request,
+    ) {
+      const response = await originalGenerate.call(this, request);
+      if (request.prompt.includes("<story_chunk")) {
+        extractCalls += 1;
+        // 抽取全部完成后模拟 stale recovery 把仍在跑的任务标为 interrupted。
+        // 下一次 provider 调用前的计费写入会因此返回 null。
+        if (extractCalls === chunkCount) {
+          interruptStaleJobs({
+            staleBefore: new Date(Date.now() + 60_000).toISOString(),
+          });
+        }
+      }
+      if (request.prompt.includes("<previous_extraction>")) {
+        gleanCalls += 1;
+      }
+      return response;
+    });
+
+    try {
+      await runStoryMapGenerationJob(started.job.id);
+    } finally {
+      generateSpy.mockRestore();
+    }
+
+    const job = getJob(started.job.id)!;
+    // 计费写不进去时，补抽调用一次都没有真正发出。
+    expect(extractCalls).toBe(chunkCount);
+    expect(gleanCalls).toBe(0);
+    expect(job).toMatchObject({
+      status: "interrupted",
+      error: INTERRUPTED_JOB_ERROR,
+      result: null,
+    });
+    // 任务行保留最后一次成功落库的调用数，run group 总数与实际 provider 调用一致。
+    expect(job.modelCalls).toBe(chunkCount);
+    expect(
+      sumRunGroupModelCalls({
+        projectId: project.id,
+        runGroupId: job.input.runGroupId!,
+        excludeJobId: job.id,
+      }),
+    ).toBe(0);
+    expect(
+      listProjectJobs(project.id, "story_map_generation")
+        .filter(
+          (candidate) =>
+            (candidate.input.runGroupId ?? candidate.id) ===
+            job.input.runGroupId,
+        )
+        .reduce((total, candidate) => total + candidate.modelCalls, 0),
+    ).toBe(chunkCount);
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([]);
   });
 
   it("fails a resume at the exhausted budget before any provider call while fresh succeeds", async () => {

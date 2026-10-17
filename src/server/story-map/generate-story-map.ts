@@ -174,21 +174,40 @@ export async function generateStoryMap(input: {
 
   const reusedExtractions = new Map<number, StoryMapExtractionCandidate>();
   const reusedGleanings = new Map<number, StoryMapGleaningCandidate>();
+  // 复用检查点时保留产生它的原始 run id；迁移前写入的旧行没有 run id。
+  const reusedExtractionRunIds = new Map<number, string | null>();
+  const reusedGleaningRunIds = new Map<number, string | null>();
   chunks.forEach((chunk, index) => {
     const context = chunkContexts[index]!;
+    const extractionCheckpoint = checkpointByKeyStage.get(
+      `${checkpointKeys[index]}:extract`,
+    );
     const extraction = parseCheckpointResult(
-      checkpointByKeyStage.get(`${checkpointKeys[index]}:extract`),
+      extractionCheckpoint,
       StoryMapExtractionCandidateSchema,
       (value) => validateChunkExtraction(value, context.allowed),
     );
     if (!extraction) return;
     reusedExtractions.set(chunk.index, extraction);
+    reusedExtractionRunIds.set(
+      chunk.index,
+      extractionCheckpoint?.generationRunId ?? null,
+    );
+    const gleaningCheckpoint = checkpointByKeyStage.get(
+      `${checkpointKeys[index]}:glean`,
+    );
     const gleaning = parseCheckpointResult(
-      checkpointByKeyStage.get(`${checkpointKeys[index]}:glean`),
+      gleaningCheckpoint,
       StoryMapGleaningCandidateSchema,
       (value) => validateChunkGleaning(value, extraction, context.allowed),
     );
-    if (gleaning) reusedGleanings.set(chunk.index, gleaning);
+    if (gleaning) {
+      reusedGleanings.set(chunk.index, gleaning);
+      reusedGleaningRunIds.set(
+        chunk.index,
+        gleaningCheckpoint?.generationRunId ?? null,
+      );
+    }
   });
   const reusedExtractionCount = reusedExtractions.size;
   const reusedGleaningCount = reusedGleanings.size;
@@ -302,7 +321,11 @@ export async function generateStoryMap(input: {
     total: chunks.length,
   });
   let extractionCompleted = reusedExtractionCount;
-  const extractorRunIds: string[] = [];
+  // 按分块序号预填：复用分块保留原始 run id，新调用在下方按同一序号覆盖。
+  // 数组不能按完成顺序 push，否则并发完成顺序会打乱来源追踪。
+  const extractorRunIds: Array<string | null> = chunks.map(
+    (chunk) => reusedExtractionRunIds.get(chunk.index) ?? null,
+  );
   const extractions = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, async (context, index, signal) => {
     const reused = reusedExtractions.get(context.chunk.index);
     if (reused) return reused;
@@ -327,8 +350,9 @@ export async function generateStoryMap(input: {
       stage: "extract",
       result: result.value,
       modelCalls: result.modelCalls,
+      generationRunId: result.generation.runId,
     });
-    extractorRunIds.push(result.generation.runId);
+    extractorRunIds[context.chunk.index] = result.generation.runId;
     extractionCompleted += 1;
     emitProgress({ stage: "extract", completed: extractionCompleted, total: chunks.length });
     return result.value;
@@ -341,7 +365,9 @@ export async function generateStoryMap(input: {
     total: chunks.length,
   });
   let gleaningCompleted = reusedGleaningCount;
-  const gleaningRunIds: string[] = [];
+  const gleaningRunIds: Array<string | null> = chunks.map(
+    (chunk) => reusedGleaningRunIds.get(chunk.index) ?? null,
+  );
   const gleanings = await mapWithConcurrency(chunkContexts, CHUNK_CONCURRENCY, async (context, index, signal) => {
     const reused = reusedGleanings.get(context.chunk.index);
     if (reused) return reused;
@@ -374,8 +400,9 @@ export async function generateStoryMap(input: {
       stage: "glean",
       result: result.value,
       modelCalls: result.modelCalls,
+      generationRunId: result.generation.runId,
     });
-    gleaningRunIds.push(result.generation.runId);
+    gleaningRunIds[context.chunk.index] = result.generation.runId;
     gleaningCompleted += 1;
     emitProgress({ stage: "glean", completed: gleaningCompleted, total: chunks.length });
     return result.value;
@@ -507,9 +534,14 @@ export async function generateStoryMap(input: {
     generation: {
       chunkCount: chunks.length,
       reusedChunks,
-      // 复用检查点的分块没有新的 Generation Run；这里只记录本次真实产生的运行。
-      extractorRunIds,
-      gleaningRunIds,
+      // 按分块顺序记录产生该分块抽取/补抽结果的 Run；复用检查点时包含原始
+      // run id（迁移前写入、没有 run id 的旧检查点无法伪造，会被略过）。
+      extractorRunIds: extractorRunIds.filter(
+        (runId): runId is string => runId !== null,
+      ),
+      gleaningRunIds: gleaningRunIds.filter(
+        (runId): runId is string => runId !== null,
+      ),
       namesRunId: roster.generation.runId,
       endingsRunId: endingPass.generation.runId,
       reconcilerRunId: merge.generation.runId,

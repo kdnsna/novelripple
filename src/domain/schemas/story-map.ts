@@ -144,7 +144,14 @@ export const StoryMapContentCandidateSchema = z
   })
   .strict();
 
-// ── 分块抽取管线的中间候选（只存在于生成过程中，不持久化）──
+// ── 分块抽取管线的中间候选 ──
+//
+// 抽取（StoryMapExtractionCandidate）与补抽（StoryMapGleaningCandidate）在通过
+// Schema 与当前分块 Unit 引用校验后，会作为只追加的 checkpoint 行持久化到
+// `story_map_chunk_checkpoints.result_json`，并记录产生它的 generation_run_id，
+// 供同一 run group 的后续 attempt 复用。检查点不保存 Prompt、原文、模型 raw
+// output 或 repair 前的候选；人名 / 结局 / 合并轮次不落检查点。它们都不是最终
+// Story Map：只有通过 merge、Evidence 解析和领域校验的结果才写入不可变 Artifact。
 
 /** “还漏了什么”补抽：只返回新增内容，可以为空。 */
 export const StoryMapGleaningCandidateSchema = z
