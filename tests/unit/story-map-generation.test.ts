@@ -165,7 +165,11 @@ describe("chunked Story Map recall pipeline", () => {
       fixture.storyMap.characters.map((character) => character.id).sort(),
     );
     expect(storyMap.edges).toHaveLength(fixture.storyMap.edges.length);
-    expect(storyMap.endingCandidates).toHaveLength(4);
+    // 夹具的 3 条故事级结局都指向 event_12，确定性去重只保留第一条。
+    expect(storyMap.endingCandidates.map((ending) => ending.id)).toEqual([
+      "ending_truth_public",
+      "ending_ledger_archived",
+    ]);
     expect(validateStoryMap(storyMap, source)).toEqual([]);
     expect(getProjectSource(project.id, source.id)).toEqual(sourceBefore);
 
@@ -323,6 +327,47 @@ describe("chunked Story Map recall pipeline", () => {
     );
     expect(storyMap.events.map((event) => event.sequence)).toEqual(
       storyMap.events.map((_, index) => index + 1),
+    );
+    expect(validateStoryMap(storyMap, source)).toEqual([]);
+  });
+
+  it("cleans chunk suffixes from the final ids and rewrites every reference", async () => {
+    const { project, source, responses } = await createContext();
+    const first = JSON.parse(responses[0]!) as {
+      characters: { id: string }[];
+      events: { id: string; evidenceUnitIds: string[] }[];
+    };
+    const second = JSON.parse(responses[1]!) as {
+      events: { id: string }[];
+    };
+    const firstIds = new Set(first.events.map((event) => event.id));
+    const duplicated = second.events.find((event) => !firstIds.has(event.id))!;
+    const firstUnit = first.events[0]!.evidenceUnitIds[0]!;
+    const firstCharacter = first.characters[0]!.id;
+    const edited = edit(responses, 0, (extraction) => {
+      extraction.events.push({
+        id: duplicated.id,
+        title: "相邻片段再次描述的同一事件",
+        summary: "同一事件在相邻片段被再次描述",
+        sequence: extraction.events.length + 1,
+        participants: [firstCharacter],
+        stateChanges: [],
+        evidenceKind: "fact",
+        evidenceUnitIds: [firstUnit],
+      });
+    });
+
+    const result = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider: new MockAIProvider(edited),
+      modelConfig,
+    });
+    const storyMap = result.artifact.storyMap;
+
+    expect(JSON.stringify(storyMap)).not.toContain("__c");
+    expect(storyMap.events.map((event) => event.id)).toEqual(
+      expect.arrayContaining([duplicated.id, `${duplicated.id}-2`]),
     );
     expect(validateStoryMap(storyMap, source)).toEqual([]);
   });

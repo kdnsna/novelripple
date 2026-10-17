@@ -186,7 +186,7 @@ export const StoryMapEndingPassCandidateSchema = z
   })
   .strict();
 
-/** 最终合并：指出跨块重复事件、补充跨块因果边，并给出全书标题与梗概。 */
+/** 最终合并：指出重复或粒度过细的同场景事件、重复结局，补充跨块因果边，并给出全书标题与梗概。 */
 export const StoryMapMergeCandidateSchema = z
   .object({
     title: z.string().min(1),
@@ -196,6 +196,14 @@ export const StoryMapMergeCandidateSchema = z
         .object({
           keepEventId: z.string().min(1),
           duplicateEventIds: z.array(z.string().min(1)).min(1),
+        })
+        .strict(),
+    ),
+    duplicateEndingGroups: z.array(
+      z
+        .object({
+          keepEndingId: z.string().min(1),
+          duplicateEndingIds: z.array(z.string().min(1)).min(1),
         })
         .strict(),
     ),

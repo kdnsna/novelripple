@@ -212,6 +212,7 @@ describe("chunk candidate assembly", () => {
         title: "T",
         logline: "L",
         duplicateEventGroups: [{ keepEventId: "e2", duplicateEventIds: ["e2_dup"] }],
+        duplicateEndingGroups: [],
         edges: [{ id: "y", from: "e1", to: "e2_dup", type: "enables", explanation: "y", confidence: 0.8, confirmed: false, evidenceUnitIds: ["u1"] }],
       },
     );
@@ -247,6 +248,7 @@ describe("chunk candidate assembly", () => {
         title: "T",
         logline: "L",
         duplicateEventGroups: [{ keepEventId: "e2", duplicateEventIds: ["e2_dup"] }],
+        duplicateEndingGroups: [],
         edges: [
           { id: "edge_c", from: "e1", to: "e2", type: "causes", explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u1"] },
         ],
@@ -275,6 +277,7 @@ describe("chunk candidate assembly", () => {
       title: "T",
       logline: "L",
       duplicateEventGroups: [],
+      duplicateEndingGroups: [],
       edges: [
         { id: "edge_ok", from: "e1", to: "e2", type: "causes" as const, explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u3", "u5"] },
       ],
@@ -312,6 +315,7 @@ describe("chunk candidate assembly", () => {
         { keepEventId: "e1", duplicateEventIds: ["e2"] },
         { keepEventId: "e2", duplicateEventIds: ["e9"] },
       ],
+      duplicateEndingGroups: [],
       edges: [],
     });
     expect(result.success).toBe(false);

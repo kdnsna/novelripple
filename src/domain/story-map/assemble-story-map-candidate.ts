@@ -472,6 +472,32 @@ export function applyMerge(
     }
   });
   const existingEdgeIds = new Set(pool.edges.map((item) => item.id));
+  const endingIds = new Set(endings.map((item) => item.id));
+  const duplicateEndingOf = new Map<string, string>();
+  const endingKeepers = new Set<string>();
+  merge.duplicateEndingGroups.forEach((group, index) => {
+    const path = `duplicateEndingGroups.${index}`;
+    if (!endingIds.has(group.keepEndingId)) {
+      issues.push({ path: `${path}.keepEndingId`, message: `未知结局候选：${group.keepEndingId}` });
+    }
+    if (endingKeepers.has(group.keepEndingId) || duplicateEndingOf.has(group.keepEndingId)) {
+      issues.push({ path: `${path}.keepEndingId`, message: `结局候选出现在多个合并组：${group.keepEndingId}` });
+    }
+    endingKeepers.add(group.keepEndingId);
+    for (const duplicateId of group.duplicateEndingIds) {
+      if (!endingIds.has(duplicateId)) {
+        issues.push({ path: `${path}.duplicateEndingIds`, message: `未知结局候选：${duplicateId}` });
+      }
+      if (
+        duplicateId === group.keepEndingId ||
+        duplicateEndingOf.has(duplicateId) ||
+        endingKeepers.has(duplicateId)
+      ) {
+        issues.push({ path: `${path}.duplicateEndingIds`, message: `结局候选出现在多个合并组：${duplicateId}` });
+      }
+      duplicateEndingOf.set(duplicateId, group.keepEndingId);
+    }
+  });
   merge.edges.forEach((edge, index) => {
     if (existingEdgeIds.has(edge.id)) {
       issues.push({ path: `edges.${index}.id`, message: `边 ID 已存在：${edge.id}` });
@@ -520,49 +546,156 @@ export function applyMerge(
     return { ...event, sequence: index + 1 };
   });
 
-  const seenEdges = new Map<string, StoryMapCandidateEdge>();
-  const edges: StoryMapCandidateEdge[] = [];
-  for (const edge of [...pool.edges, ...merge.edges]) {
-    const from = resolve(edge.from);
-    const to = resolve(edge.to);
-    if (from === to) continue;
-    const key = `${from}|${to}|${edge.type}`;
-    const existing = seenEdges.get(key);
-    if (existing) {
-      // 同一 from|to|type 的边（含经 duplicateEventGroups 归并的边）合并证据，不只是留第一条。
-      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
-      continue;
-    }
-    const kept = { ...edge, from, to };
-    seenEdges.set(key, kept);
-    edges.push(kept);
-  }
+  // 同一 (from, to) 的边折叠为一条：保留最早出现的类型/说明，证据取并集。
+  const edges = dedupeEdges([...pool.edges, ...merge.edges], resolve);
 
-  const endingByKey = new Map<string, StoryMapCandidateEnding>();
-  const endingCandidates: StoryMapCandidateEnding[] = [];
-  for (const ending of endings) {
-    const resolved = { ...ending, targetEventId: resolve(ending.targetEventId) };
-    const key = `${resolved.targetEventId}|${resolved.requirement}`;
-    const existing = endingByKey.get(key);
-    if (existing) {
-      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...resolved.evidenceUnitIds]);
-      continue;
-    }
-    endingByKey.set(key, resolved);
-    endingCandidates.push(resolved);
+  // 显式结局合并组先按“保留项文字 + 全组证据”归并，再做同目标/同人物结局去重。
+  const endingById = new Map(endings.map((ending) => [ending.id, ending]));
+  const endingGroupEvidence = new Map<string, string[]>();
+  for (const group of merge.duplicateEndingGroups) {
+    const keeper = endingById.get(group.keepEndingId)!;
+    const members = [keeper, ...group.duplicateEndingIds.map((id) => endingById.get(id)!)];
+    endingGroupEvidence.set(
+      group.keepEndingId,
+      unique(members.flatMap((ending) => ending.evidenceUnitIds)),
+    );
   }
+  const endingsBeforeDedupe: StoryMapCandidateEnding[] = [];
+  for (const ending of endings) {
+    if (duplicateEndingOf.has(ending.id)) continue;
+    const evidence = endingGroupEvidence.get(ending.id);
+    endingsBeforeDedupe.push({
+      ...ending,
+      targetEventId: resolve(ending.targetEventId),
+      ...(evidence ? { evidenceUnitIds: evidence } : {}),
+    });
+  }
+  const endingCandidates = dedupeEndings(endingsBeforeDedupe);
 
   return {
     success: true,
-    candidate: {
+    candidate: cleanupCandidateIds({
       title: merge.title,
       logline: merge.logline,
       characters: pool.characters,
       events,
       edges,
       endingCandidates,
-    },
+    }),
   };
+}
+
+/**
+ * 合并后去重因果边：丢弃自环（含端点经事件合并后相同的边）；同一 (from, to)
+ * 只保留第一条边的类型与说明，证据按出现顺序取并集。
+ */
+export function dedupeEdges(
+  edges: readonly StoryMapCandidateEdge[],
+  resolveEventId: (id: string) => string = (id) => id,
+): StoryMapCandidateEdge[] {
+  const seen = new Map<string, StoryMapCandidateEdge>();
+  const result: StoryMapCandidateEdge[] = [];
+  for (const edge of edges) {
+    const from = resolveEventId(edge.from);
+    const to = resolveEventId(edge.to);
+    if (from === to) continue;
+    const key = `${from}|${to}`;
+    const existing = seen.get(key);
+    if (existing) {
+      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
+      continue;
+    }
+    const kept = { ...edge, from, to };
+    seen.set(key, kept);
+    result.push(kept);
+  }
+  return result;
+}
+
+/**
+ * 结局去重：
+ * - 同一 `targetEventId` 的故事级结局只保留第一条，证据取并集；
+ * - 人物结局按 `【人物结局】<name>：` 中的人物名折叠，每个名字只保留第一条。
+ */
+export function dedupeEndings(
+  endings: readonly StoryMapCandidateEnding[],
+  resolveEventId: (id: string) => string = (id) => id,
+): StoryMapCandidateEnding[] {
+  const storyEndings = new Map<string, StoryMapCandidateEnding>();
+  const characterEndings = new Map<string, StoryMapCandidateEnding>();
+  const result: StoryMapCandidateEnding[] = [];
+  for (const ending of endings) {
+    const resolved = { ...ending, targetEventId: resolveEventId(ending.targetEventId) };
+    const characterName = characterEndingName(ending.requirement);
+    const bucket = characterName === null ? storyEndings : characterEndings;
+    const key = characterName === null ? resolved.targetEventId : characterName;
+    const existing = bucket.get(key);
+    if (existing) {
+      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...resolved.evidenceUnitIds]);
+      continue;
+    }
+    bucket.set(key, resolved);
+    result.push(resolved);
+  }
+  return result;
+}
+
+function characterEndingName(requirement: string): string | null {
+  if (!requirement.startsWith(CHARACTER_ENDING_PREFIX)) return null;
+  const rest = requirement.slice(CHARACTER_ENDING_PREFIX.length);
+  const separator = rest.indexOf("：");
+  if (separator <= 0) return null;
+  return rest.slice(0, separator).trim();
+}
+
+/**
+ * 去掉汇总阶段为块内冲突 ID 加的 `__c<chunk>` 后缀，并重写所有引用。
+ * 碰撞时第一条保留裸 ID，后续依次改为 `<id>-2`、`<id>-3`…。
+ */
+export function cleanupCandidateIds(
+  candidate: StoryMapContentCandidate,
+): StoryMapContentCandidate {
+  const characterIds = assignFinalIds(candidate.characters.map((item) => item.id));
+  const eventIds = assignFinalIds(candidate.events.map((item) => item.id));
+  const edgeIds = assignFinalIds(candidate.edges.map((item) => item.id));
+  const endingIds = assignFinalIds(candidate.endingCandidates.map((item) => item.id));
+  return {
+    ...candidate,
+    characters: candidate.characters.map((character) => ({
+      ...character,
+      id: characterIds.get(character.id)!,
+    })),
+    events: candidate.events.map((event) => ({
+      ...event,
+      id: eventIds.get(event.id)!,
+      participants: unique(event.participants.map((id) => characterIds.get(id) ?? id)),
+    })),
+    edges: candidate.edges.map((edge) => ({
+      ...edge,
+      id: edgeIds.get(edge.id)!,
+      from: eventIds.get(edge.from) ?? edge.from,
+      to: eventIds.get(edge.to) ?? edge.to,
+    })),
+    endingCandidates: candidate.endingCandidates.map((ending) => ({
+      ...ending,
+      id: endingIds.get(ending.id)!,
+      targetEventId: eventIds.get(ending.targetEventId) ?? ending.targetEventId,
+    })),
+  };
+}
+
+function assignFinalIds(ids: readonly string[]): Map<string, string> {
+  const used = new Set<string>();
+  const mapping = new Map<string, string>();
+  for (const id of ids) {
+    const bare = id.replace(/__c\d+(?:_\d+)?$/, "");
+    let candidate = bare;
+    let counter = 2;
+    while (used.has(candidate)) candidate = `${bare}-${counter++}`;
+    used.add(candidate);
+    mapping.set(id, candidate);
+  }
+  return mapping;
 }
 
 function duplicates(values: string[]): string[] {

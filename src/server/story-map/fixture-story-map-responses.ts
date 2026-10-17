@@ -92,6 +92,7 @@ export function buildFixtureStoryMapResponses(
     title: storyMap.title,
     logline: storyMap.logline,
     duplicateEventGroups: [],
+    duplicateEndingGroups: [],
     edges: storyMap.edges
       .filter((edge) => !inChunkEdgeIds.has(edge.id))
       .map(({ evidence, ...edge }) => ({ ...edge, evidenceUnitIds: toUnitIds(evidence) })),
