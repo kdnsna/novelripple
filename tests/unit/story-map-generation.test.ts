@@ -138,7 +138,7 @@ describe("chunked Story Map recall pipeline", () => {
   });
 
   it("creates a valid ripple-001 draft Artifact through every stage with traceable runs", async () => {
-    const { fixture, project, source, chunks, responses } = await createContext();
+    const { fixture, project, source, units, chunks, responses } = await createContext();
     const sourceBefore = structuredClone(source);
     const provider = new MockAIProvider(responses);
 
@@ -165,7 +165,13 @@ describe("chunked Story Map recall pipeline", () => {
       fixture.storyMap.characters.map((character) => character.id).sort(),
     );
     expect(storyMap.edges).toHaveLength(fixture.storyMap.edges.length);
-    expect(storyMap.endingCandidates).toHaveLength(4);
+    // 故事级结局只在目标事件与规范化要求都相同时去重；夹具的 3 条 event_12 结局结果不同，全部保留。
+    expect(storyMap.endingCandidates.map((ending) => ending.id)).toEqual([
+      "ending_truth_public",
+      "ending_ledger_archived",
+      "ending_clock_moves",
+      "ending_xucheng_leaves",
+    ]);
     expect(validateStoryMap(storyMap, source)).toEqual([]);
     expect(getProjectSource(project.id, source.id)).toEqual(sourceBefore);
 
@@ -174,15 +180,30 @@ describe("chunked Story Map recall pipeline", () => {
     expect(firstChunk?.prompt).toContain("<story_chunk");
     expect(firstChunk?.prompt).toContain(`evidence_unit:${source.id}:`);
     expect(firstChunk?.prompt).toContain("不得返回 `exactQuote`");
-    expect(firstChunk?.prompt).toContain("<name_hints>");
+    expect(firstChunk?.prompt).not.toContain("<name_hints>");
+    expect(firstChunk?.prompt).toContain("kind");
     expect(firstChunk?.prompt).not.toContain(chunks[1]!.coreUnitIds.at(-1));
     expect(secondChunk?.prompt).toContain('"ownership":"context"');
     const stage = stageIndex(chunks.length);
     expect(provider.requests[stage.glean(0)]?.prompt).toContain("<previous_extraction>");
+    expect(provider.requests[stage.glean(0)]?.prompt).toContain("<uncovered_name_hints>");
     expect(provider.requests[stage.names]?.prompt).toContain("<character_candidates>");
     expect(provider.requests[stage.names]?.prompt).not.toContain("<story_chunk");
     expect(provider.requests[stage.endings]?.prompt).toContain("<story_ending_text");
     expect(provider.requests[stage.merge]?.prompt).toContain("duplicateEventGroups");
+    const unitTextById = new Map(units.map((unit) => [unit.id, unit.text]));
+    const totalCoreChars = chunks.reduce(
+      (total, chunk) =>
+        total +
+        chunk.coreUnitIds.reduce((sum, id) => sum + unitTextById.get(id)!.length, 0),
+      0,
+    );
+    const lowerTarget = Math.max(3, Math.round(totalCoreChars / 1000));
+    const upperTarget = Math.max(lowerTarget, Math.round(totalCoreChars / 600));
+    const mergePrompt = provider.requests[stage.merge]?.prompt;
+    expect(mergePrompt).toContain("<granularity_hint>");
+    expect(mergePrompt).toContain(`"coreTextChars":${totalCoreChars}`);
+    expect(mergePrompt).toContain(`"targetEventRange":[${lowerTarget},${upperTarget}]`);
 
     const runs = listProjectGenerationRuns(project.id);
     const describeRun = (run: { kind: string; promptVersion: string; status: string }) =>
@@ -196,6 +217,45 @@ describe("chunked Story Map recall pipeline", () => {
     ].map((parts) => parts.join("|")).sort());
   });
 
+  it("drops group candidates before the names pass and removes them from event participants", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const stage = stageIndex(chunks.length);
+    const firstExtraction = JSON.parse(responses[0]!) as {
+      events: { id: string; participants: string[] }[];
+    };
+    const targetEvent = firstExtraction.events[0]!;
+    const expectedParticipants = [...targetEvent.participants];
+    const edited = edit(responses, 0, (extraction) => {
+      extraction.characters.push({
+        id: "char_crowd",
+        name: "围观的人群",
+        aliases: [],
+        role: "supporting",
+        initialState: "在码头围观",
+        kind: "group",
+      });
+      extraction.events[0].participants.push("char_crowd");
+    });
+
+    const provider = new MockAIProvider(edited);
+    const result = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider,
+      modelConfig,
+    });
+
+    const namesPrompt = provider.requests[stage.names]?.prompt;
+    expect(namesPrompt).not.toContain("char_crowd");
+    expect(namesPrompt).not.toContain("围观的人群");
+    const storyMap = result.artifact.storyMap;
+    expect(storyMap.characters.map((character) => character.id)).not.toContain("char_crowd");
+    expect(storyMap.events.find((event) => event.id === targetEvent.id)?.participants).toEqual(
+      expectedParticipants,
+    );
+    expect(validateStoryMap(storyMap, source)).toEqual([]);
+  });
+
   it("keeps what gleaning, the names pass, the endings pass and the merge add", async () => {
     const { project, source, chunks, responses } = await createContext();
     const stage = stageIndex(chunks.length);
@@ -206,8 +266,9 @@ describe("chunked Story Map recall pipeline", () => {
         id: "char_harbor_clerk",
         name: "港务书记员",
         aliases: [],
-        role: "supporting",
+        role: "minor",
         initialState: "在港务处值班",
+        kind: "individual",
       });
       gleaning.events.push(
         {
@@ -238,7 +299,7 @@ describe("chunked Story Map recall pipeline", () => {
         id: "char_clerk",
         name: "港务书记员",
         aliases: ["书记员"],
-        role: "supporting",
+        role: "minor",
         initialState: "在港务处值班",
         mergedFrom: ["char_harbor_clerk"],
       });
@@ -267,6 +328,9 @@ describe("chunked Story Map recall pipeline", () => {
     const storyMap = result.artifact.storyMap;
 
     expect(storyMap.characters.map((c) => c.id)).toContain("char_clerk");
+    expect(
+      storyMap.characters.find((c) => c.id === "char_clerk")?.role,
+    ).toBe("minor");
     expect(storyMap.characters.find((c) => c.id === "char_shenyan")?.aliases).toContain("沈老");
     const clerkEvent = storyMap.events.find((event) => event.id === "event_clerk_note");
     expect(clerkEvent?.participants).toEqual(["char_clerk", "char_shenyan"]);
@@ -281,6 +345,47 @@ describe("chunked Story Map recall pipeline", () => {
     );
     expect(storyMap.events.map((event) => event.sequence)).toEqual(
       storyMap.events.map((_, index) => index + 1),
+    );
+    expect(validateStoryMap(storyMap, source)).toEqual([]);
+  });
+
+  it("cleans chunk suffixes from the final ids and rewrites every reference", async () => {
+    const { project, source, responses } = await createContext();
+    const first = JSON.parse(responses[0]!) as {
+      characters: { id: string }[];
+      events: { id: string; evidenceUnitIds: string[] }[];
+    };
+    const second = JSON.parse(responses[1]!) as {
+      events: { id: string }[];
+    };
+    const firstIds = new Set(first.events.map((event) => event.id));
+    const duplicated = second.events.find((event) => !firstIds.has(event.id))!;
+    const firstUnit = first.events[0]!.evidenceUnitIds[0]!;
+    const firstCharacter = first.characters[0]!.id;
+    const edited = edit(responses, 0, (extraction) => {
+      extraction.events.push({
+        id: duplicated.id,
+        title: "相邻片段再次描述的同一事件",
+        summary: "同一事件在相邻片段被再次描述",
+        sequence: extraction.events.length + 1,
+        participants: [firstCharacter],
+        stateChanges: [],
+        evidenceKind: "fact",
+        evidenceUnitIds: [firstUnit],
+      });
+    });
+
+    const result = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider: new MockAIProvider(edited),
+      modelConfig,
+    });
+    const storyMap = result.artifact.storyMap;
+
+    expect(JSON.stringify(storyMap)).not.toContain("__c");
+    expect(storyMap.events.map((event) => event.id)).toEqual(
+      expect.arrayContaining([duplicated.id, `${duplicated.id}-2`]),
     );
     expect(validateStoryMap(storyMap, source)).toEqual([]);
   });
@@ -479,6 +584,27 @@ describe("chunked Story Map recall pipeline", () => {
     } finally {
       restoreEnvironment("STORY_MAP_MAX_MODEL_CALLS", previousCalls);
       restoreEnvironment("STORY_MAP_MAX_CHUNKS", previousChunks);
+    }
+  });
+
+  it("validates explicitly passed limits before any model call", async () => {
+    const { project, source } = await createContext();
+    const invalidValues = [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY];
+
+    for (const value of invalidValues) {
+      for (const key of ["maxChunks", "maxModelCalls"] as const) {
+        const provider = new MockAIProvider([]);
+        await expect(
+          generateStoryMap({
+            projectId: project.id,
+            sourceId: source.id,
+            provider,
+            modelConfig,
+            limits: { [key]: value },
+          }),
+        ).rejects.toThrow(`limits.${key} 必须是正整数`);
+        expect(provider.requests).toHaveLength(0);
+      }
     }
   });
 

@@ -52,7 +52,9 @@ export function buildFixtureStoryMapResponses(
     return StoryMapExtractionCandidateSchema.parse({
       title: storyMap.title,
       logline: storyMap.logline,
-      characters: storyMap.characters.filter((character) => participantIds.has(character.id)),
+      characters: storyMap.characters
+        .filter((character) => participantIds.has(character.id))
+        .map((character) => ({ ...character, kind: "individual" as const })),
       events,
       edges,
     });
@@ -77,6 +79,7 @@ export function buildFixtureStoryMapResponses(
     characters: storyMap.characters
       .filter((character) => mergedFrom.has(character.id))
       .map((character) => ({ ...character, mergedFrom: mergedFrom.get(character.id)! })),
+    rejectedCandidateIds: [],
   });
   const endings = StoryMapEndingPassCandidateSchema.parse({
     additionalEvents: [],
@@ -90,6 +93,7 @@ export function buildFixtureStoryMapResponses(
     title: storyMap.title,
     logline: storyMap.logline,
     duplicateEventGroups: [],
+    duplicateEndingGroups: [],
     edges: storyMap.edges
       .filter((edge) => !inChunkEdgeIds.has(edge.id))
       .map(({ evidence, ...edge }) => ({ ...edge, evidenceUnitIds: toUnitIds(evidence) })),

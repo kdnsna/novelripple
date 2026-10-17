@@ -90,6 +90,42 @@ describe("Evidence Unit chunking", () => {
     expect(chunks).toHaveLength(1);
   });
 
+  it("starts a new chunk when the next paragraph would push core past the max", () => {
+    const units = syntheticUnits([2_999, 12_000]);
+    const chunks = deriveEvidenceUnitChunks(units);
+
+    expect(chunks.map((chunk) => chunk.coreUnitIds)).toEqual([
+      [units[0]!.id],
+      [units[1]!.id],
+    ]);
+  });
+
+  it("does not fold a short tail when the merged core would exceed the max", () => {
+    const units = syntheticUnits([8_999, 500]);
+    const chunks = deriveEvidenceUnitChunks(units);
+
+    expect(chunks.map((chunk) => chunk.coreUnitIds)).toEqual([
+      [units[0]!.id],
+      [units[1]!.id],
+    ]);
+  });
+
+  it("keeps every multi-paragraph chunk core within the max", () => {
+    const units = syntheticUnits([2_999, 12_000, 4_000, 4_000, 2_000]);
+    const chunks = deriveEvidenceUnitChunks(units);
+    const byId = new Map(units.map((unit) => [unit.id, unit]));
+
+    for (const chunk of chunks) {
+      const coreLength = chunk.coreUnitIds
+        .map((id) => byId.get(id)!.text.length)
+        .reduce((total, length) => total + length, 0);
+      if (chunk.coreUnitIds.length > 1) {
+        expect(coreLength).toBeLessThanOrEqual(CHUNK_MAX_CHARS);
+      }
+    }
+    expect(chunks).toHaveLength(4);
+  });
+
   it("splits the public fixture into more than one chunk", async () => {
     const fixture = await loadRippleFixture();
     const chunks = deriveEvidenceUnitChunks(deriveEvidenceUnits(fixture.source));
@@ -125,7 +161,7 @@ function extraction(partial: Partial<StoryMapExtractionCandidate>): StoryMapExtr
   return {
     title: "t",
     logline: "l",
-    characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s" }],
+    characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s", kind: "individual" }],
     events: [event("e1", "u1")],
     edges: [],
     ...partial,
@@ -137,8 +173,8 @@ describe("chunk candidate assembly", () => {
     const issues = validateChunkExtraction(
       extraction({
         characters: [
-          { id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s" },
-          { id: "b", name: "乙", aliases: [], role: "supporting", initialState: "s" },
+          { id: "a", name: "甲", aliases: [], role: "protagonist", initialState: "s", kind: "individual" as const },
+          { id: "b", name: "乙", aliases: [], role: "supporting", initialState: "s", kind: "individual" as const },
         ],
         events: [event("e1", "u9")],
       }),
@@ -183,11 +219,11 @@ describe("chunk candidate assembly", () => {
       ["e1__c2", ["a__c2"]],
     ]);
 
-    const incomplete = { characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s", mergedFrom: ["a"] }] };
+    const incomplete = { characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s", mergedFrom: ["a"] }], rejectedCandidateIds: [] };
     expect(validateRoster(incomplete, pool).map((issue) => issue.message)).toEqual([
       "人物候选没有归入任何人物：a__c2",
     ]);
-    const roster = { characters: [{ ...incomplete.characters[0]!, mergedFrom: ["a", "a__c2"] }] };
+    const roster = { characters: [{ ...incomplete.characters[0]!, mergedFrom: ["a", "a__c2"] }], rejectedCandidateIds: [] };
     expect(validateRoster(roster, pool)).toEqual([]);
     const merged = applyRoster(pool, roster);
     expect(merged.events.map((e) => e.participants)).toEqual([["a"], ["a"]]);
@@ -212,6 +248,7 @@ describe("chunk candidate assembly", () => {
         title: "T",
         logline: "L",
         duplicateEventGroups: [{ keepEventId: "e2", duplicateEventIds: ["e2_dup"] }],
+        duplicateEndingGroups: [],
         edges: [{ id: "y", from: "e1", to: "e2_dup", type: "enables", explanation: "y", confidence: 0.8, confirmed: false, evidenceUnitIds: ["u1"] }],
       },
     );
@@ -247,6 +284,7 @@ describe("chunk candidate assembly", () => {
         title: "T",
         logline: "L",
         duplicateEventGroups: [{ keepEventId: "e2", duplicateEventIds: ["e2_dup"] }],
+        duplicateEndingGroups: [],
         edges: [
           { id: "edge_c", from: "e1", to: "e2", type: "causes", explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u1"] },
         ],
@@ -275,6 +313,7 @@ describe("chunk candidate assembly", () => {
       title: "T",
       logline: "L",
       duplicateEventGroups: [],
+      duplicateEndingGroups: [],
       edges: [
         { id: "edge_ok", from: "e1", to: "e2", type: "causes" as const, explanation: "x", confidence: 1, confirmed: false, evidenceUnitIds: ["u3", "u5"] },
       ],
@@ -312,6 +351,7 @@ describe("chunk candidate assembly", () => {
         { keepEventId: "e1", duplicateEventIds: ["e2"] },
         { keepEventId: "e2", duplicateEventIds: ["e9"] },
       ],
+      duplicateEndingGroups: [],
       edges: [],
     });
     expect(result.success).toBe(false);

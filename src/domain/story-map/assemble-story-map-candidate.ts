@@ -1,5 +1,6 @@
 import type {
   Character,
+  StoryMapCandidateCharacter,
   StoryMapCandidateEdge,
   StoryMapCandidateEnding,
   StoryMapCandidateEvent,
@@ -10,6 +11,7 @@ import type {
   StoryMapMergeCandidate,
   StoryMapRosterCandidate,
 } from "@/domain/schemas";
+import { isCollectiveName } from "@/domain/source/name-candidates";
 
 /**
  * 分块 Story Map 管线的确定性组装与校验。
@@ -32,14 +34,21 @@ export type ChunkCandidate = {
 
 export type PooledEvent = StoryMapCandidateEvent & { chunkIndex: number };
 
+/**
+ * 池中人物：抽取/补抽候选带 kind，人名归并后变为最终 Character（不再带 kind）。
+ */
+export type PooledCharacter = Character & {
+  kind?: StoryMapCandidateCharacter["kind"];
+};
+
 export type StoryMapPool = {
-  characters: Character[];
+  characters: PooledCharacter[];
   events: PooledEvent[];
   edges: StoryMapCandidateEdge[];
 };
 
 type LocalGraph = {
-  characters: Character[];
+  characters: PooledCharacter[];
   events: StoryMapCandidateEvent[];
   edges: StoryMapCandidateEdge[];
 };
@@ -80,10 +89,11 @@ export function validateChunkGleaning(
     edges: [...extraction.edges, ...gleaning.edges],
   };
   issues.push(...validateLocalGraph(gleaning, combined, allowedUnitIds));
-  // 补抽新增的人物也必须参与本块某个事件。
+  // 补抽新增的人物也必须参与本块某个事件；群体候选随后会在人名轮前被丢弃，
+  // 不要求它出现在事件参与者里。
   const participants = new Set(combined.events.flatMap((event) => event.participants));
   gleaning.characters.forEach((character, index) => {
-    if (!participants.has(character.id)) {
+    if (!participants.has(character.id) && !isGroupCharacter(character)) {
       issues.push({
         path: `characters.${index}`,
         message: `人物必须至少参与一个有 Evidence 的 Event：${character.id}`,
@@ -129,7 +139,7 @@ function validateLocalGraph(
   if (graph === scope) {
     const participants = new Set(graph.events.flatMap((event) => event.participants));
     graph.characters.forEach((character, index) => {
-      if (!participants.has(character.id)) {
+      if (!participants.has(character.id) && !isGroupCharacter(character)) {
         issues.push({
           path: `characters.${index}`,
           message: `人物必须至少参与一个有 Evidence 的 Event：${character.id}`,
@@ -224,6 +234,89 @@ function claim(id: string, suffix: string, used: Set<string>): string {
   return candidate;
 }
 
+// ── 群体过滤 ──
+
+/**
+ * 群体 / 家族 / 机构候选：模型标为 group，或名字呈确定性群体特征。
+ * 安全网不依赖提示词是否被遵守。
+ */
+export function isGroupCharacter(
+  character: Pick<PooledCharacter, "name" | "kind">,
+): boolean {
+  return character.kind === "group" || isCollectiveName(character.name);
+}
+
+/**
+ * 从池中丢弃指定人物候选，并从事件参与者中移除。
+ * 最小例外：某事件只剩被丢弃的参与者时，保留第一个，避免事件失去全部参与者。
+ */
+export function dropCandidates(
+  pool: StoryMapPool,
+  droppedIds: ReadonlySet<string>,
+): StoryMapPool {
+  if (droppedIds.size === 0) return pool;
+  const keptIds = new Set<string>();
+  const events = pool.events.map((event) => {
+    const participants = event.participants.filter((id) => !droppedIds.has(id));
+    if (participants.length === 0 && event.participants.length > 0) {
+      const kept = event.participants[0]!;
+      keptIds.add(kept);
+      return { ...event, participants: [kept] };
+    }
+    return participants.length === event.participants.length
+      ? event
+      : { ...event, participants };
+  });
+  return {
+    ...pool,
+    characters: pool.characters.filter(
+      (character) => !droppedIds.has(character.id) || keptIds.has(character.id),
+    ),
+    events,
+  };
+}
+
+/**
+ * 在人名归并前丢弃群体候选，并从事件参与者中移除。
+ * 最小例外：某事件只剩群体参与者时，保留第一个群体，避免事件失去全部参与者。
+ */
+export function dropGroupCandidates(pool: StoryMapPool): StoryMapPool {
+  return dropCandidates(
+    pool,
+    new Set(pool.characters.filter(isGroupCharacter).map((character) => character.id)),
+  );
+}
+
+const AUTHORIAL_NARRATOR_MARKERS = [
+  "旁白",
+  "叙述",
+  "叙事",
+  "作者",
+  "笔者",
+  "说书",
+  "画外音",
+];
+
+/**
+ * 人名轮允许拒绝的候选：漏网的群体/家族/机构，以及只评论、不参与情节的
+ * 作者叙事者。参与事件的具体个体即使无名、只短暂出现或处于边缘，也必须
+ * 合并为 `role: "minor"`，不能通过 `rejectedCandidateIds` 丢掉。
+ */
+export function canRejectRosterCandidate(
+  candidate: Pick<PooledCharacter, "id" | "name" | "kind">,
+  eventParticipants: ReadonlySet<string>,
+): boolean {
+  if (isGroupCharacter(candidate)) return true;
+  if (eventParticipants.has(candidate.id)) return false;
+  return isAuthorialNarratorName(candidate.name);
+}
+
+function isAuthorialNarratorName(value: string): boolean {
+  const name = value.normalize("NFKC").trim().toLowerCase();
+  if (name === "narrator") return true;
+  return AUTHORIAL_NARRATOR_MARKERS.some((marker) => name.includes(marker));
+}
+
 // ── 人名轮次 ──
 
 export function validateRoster(
@@ -246,9 +339,9 @@ export function validateRoster(
           message: `mergedFrom 引用了未知人物候选：${candidateId}`,
         });
       } else {
-        const candidateName = candidate.name.trim();
-        const mergedName = character.name.trim();
-        const aliases = character.aliases.map((alias) => alias.trim());
+        const candidateName = normalizeRosterName(candidate.name);
+        const mergedName = normalizeRosterName(character.name);
+        const aliases = character.aliases.map(normalizeRosterName);
         if (candidateName !== mergedName && !aliases.includes(candidateName)) {
           issues.push({
             path: `characters.${index}.mergedFrom.${mergedIndex}`,
@@ -260,6 +353,17 @@ export function validateRoster(
       }
       assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
     });
+  });
+  roster.rejectedCandidateIds.forEach((candidateId, index) => {
+    const candidate = poolById.get(candidateId);
+    if (!candidate) {
+      issues.push({
+        path: `rejectedCandidateIds.${index}`,
+        message: `rejectedCandidateIds 引用了未知人物候选：${candidateId}`,
+      });
+    }
+    // 不能拒绝的具体人物不再报错：applyRoster 会确定性地降级为 minor 人物。
+    assigned.set(candidateId, (assigned.get(candidateId) ?? 0) + 1);
   });
   for (const id of poolIds) {
     const count = assigned.get(id) ?? 0;
@@ -284,20 +388,85 @@ export function applyRoster(
   for (const character of roster.characters) {
     for (const candidateId of character.mergedFrom) mapping.set(candidateId, character.id);
   }
+  const rosterIds = new Set(roster.characters.map((character) => character.id));
+  const poolById = new Map(pool.characters.map((character) => [character.id, character]));
+  const eventParticipants = new Set(
+    pool.events.flatMap((event) => event.participants),
+  );
+  const rejectedIds = new Set<string>();
+  const demotedRejected: StoryMapPool["characters"] = [];
+  for (const candidateId of new Set(roster.rejectedCandidateIds)) {
+    const candidate = poolById.get(candidateId);
+    if (!candidate) continue;
+    if (canRejectRosterCandidate(candidate, eventParticipants)) {
+      rejectedIds.add(candidateId);
+      continue;
+    }
+    // 不能拒绝的具体人物确定性地降级为独立 minor 人物，保留名字与别名；
+    // 其事件参与关系也保持不变。
+    if (rosterIds.has(candidateId)) continue;
+    const { kind: _kind, ...character } = candidate;
+    void _kind;
+    demotedRejected.push({ ...character, role: "minor" });
+  }
+  // 只移除真正可拒绝的候选；只剩被拒参与者的事件按最小例外保留第一个。
+  const withoutRejected = dropCandidates(pool, rejectedIds);
+  const keptRejected = withoutRejected.characters
+    .filter((character) => rejectedIds.has(character.id))
+    .map(({ kind: _kind, ...character }) => {
+      void _kind;
+      return character;
+    });
   return {
-    characters: roster.characters.map((character) => ({
-      id: character.id,
-      name: character.name,
-      aliases: character.aliases,
-      role: character.role,
-      initialState: character.initialState,
-    })),
-    events: pool.events.map((event) => ({
+    characters: [
+      ...roster.characters.map((character) => ({
+        id: character.id,
+        name: character.name,
+        aliases: collectMergedAliases(character, poolById),
+        role: character.role,
+        initialState: character.initialState,
+      })),
+      ...demotedRejected,
+      ...keptRejected,
+    ],
+    events: withoutRejected.events.map((event) => ({
       ...event,
       participants: unique(event.participants.map((id) => mapping.get(id) ?? id)),
     })),
     edges: pool.edges,
   };
+}
+
+/** 最终人物的别名上限；人名轮给出的别名优先保留。 */
+const MAX_CHARACTER_ALIASES = 12;
+
+/**
+ * 合并后人物的别名 = 人名轮别名 ∪ 每个 mergedFrom 候选的 name 与 aliases。
+ * 保持出现顺序，按人名比较键去重；去掉空串、与最终 name 等价的写法和群体名。
+ */
+function collectMergedAliases(
+  character: StoryMapRosterCandidate["characters"][number],
+  poolById: ReadonlyMap<string, PooledCharacter>,
+): string[] {
+  const seen = new Set([normalizeRosterName(character.name)]);
+  const aliases: string[] = [];
+  const push = (value: string) => {
+    if (aliases.length >= MAX_CHARACTER_ALIASES) return;
+    const alias = value.trim();
+    if (!alias || isCollectiveName(alias)) return;
+    const key = normalizeRosterName(alias);
+    if (seen.has(key)) return;
+    seen.add(key);
+    aliases.push(alias);
+  };
+  for (const alias of character.aliases) push(alias);
+  for (const candidateId of character.mergedFrom) {
+    const candidate = poolById.get(candidateId);
+    if (!candidate) continue;
+    push(candidate.name);
+    for (const alias of candidate.aliases) push(alias);
+  }
+  return aliases;
 }
 
 // ── 结局轮次 ──
@@ -420,6 +589,32 @@ export function applyMerge(
     }
   });
   const existingEdgeIds = new Set(pool.edges.map((item) => item.id));
+  const endingIds = new Set(endings.map((item) => item.id));
+  const duplicateEndingOf = new Map<string, string>();
+  const endingKeepers = new Set<string>();
+  merge.duplicateEndingGroups.forEach((group, index) => {
+    const path = `duplicateEndingGroups.${index}`;
+    if (!endingIds.has(group.keepEndingId)) {
+      issues.push({ path: `${path}.keepEndingId`, message: `未知结局候选：${group.keepEndingId}` });
+    }
+    if (endingKeepers.has(group.keepEndingId) || duplicateEndingOf.has(group.keepEndingId)) {
+      issues.push({ path: `${path}.keepEndingId`, message: `结局候选出现在多个合并组：${group.keepEndingId}` });
+    }
+    endingKeepers.add(group.keepEndingId);
+    for (const duplicateId of group.duplicateEndingIds) {
+      if (!endingIds.has(duplicateId)) {
+        issues.push({ path: `${path}.duplicateEndingIds`, message: `未知结局候选：${duplicateId}` });
+      }
+      if (
+        duplicateId === group.keepEndingId ||
+        duplicateEndingOf.has(duplicateId) ||
+        endingKeepers.has(duplicateId)
+      ) {
+        issues.push({ path: `${path}.duplicateEndingIds`, message: `结局候选出现在多个合并组：${duplicateId}` });
+      }
+      duplicateEndingOf.set(duplicateId, group.keepEndingId);
+    }
+  });
   merge.edges.forEach((edge, index) => {
     if (existingEdgeIds.has(edge.id)) {
       issues.push({ path: `edges.${index}.id`, message: `边 ID 已存在：${edge.id}` });
@@ -468,49 +663,187 @@ export function applyMerge(
     return { ...event, sequence: index + 1 };
   });
 
-  const seenEdges = new Map<string, StoryMapCandidateEdge>();
-  const edges: StoryMapCandidateEdge[] = [];
-  for (const edge of [...pool.edges, ...merge.edges]) {
-    const from = resolve(edge.from);
-    const to = resolve(edge.to);
-    if (from === to) continue;
-    const key = `${from}|${to}|${edge.type}`;
-    const existing = seenEdges.get(key);
-    if (existing) {
-      // 同一 from|to|type 的边（含经 duplicateEventGroups 归并的边）合并证据，不只是留第一条。
-      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
-      continue;
-    }
-    const kept = { ...edge, from, to };
-    seenEdges.set(key, kept);
-    edges.push(kept);
-  }
+  // 同一 (from, to) 的边折叠为一条：保留最早出现的类型/说明，证据取并集。
+  const edges = dedupeEdges([...pool.edges, ...merge.edges], resolve);
 
-  const endingByKey = new Map<string, StoryMapCandidateEnding>();
-  const endingCandidates: StoryMapCandidateEnding[] = [];
-  for (const ending of endings) {
-    const resolved = { ...ending, targetEventId: resolve(ending.targetEventId) };
-    const key = `${resolved.targetEventId}|${resolved.requirement}`;
-    const existing = endingByKey.get(key);
-    if (existing) {
-      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...resolved.evidenceUnitIds]);
-      continue;
-    }
-    endingByKey.set(key, resolved);
-    endingCandidates.push(resolved);
+  // 显式结局合并组先按“保留项文字 + 全组证据”归并，再做同目标同要求/同人物结局去重。
+  const endingById = new Map(endings.map((ending) => [ending.id, ending]));
+  const endingGroupEvidence = new Map<string, string[]>();
+  for (const group of merge.duplicateEndingGroups) {
+    const keeper = endingById.get(group.keepEndingId)!;
+    const members = [keeper, ...group.duplicateEndingIds.map((id) => endingById.get(id)!)];
+    endingGroupEvidence.set(
+      group.keepEndingId,
+      unique(members.flatMap((ending) => ending.evidenceUnitIds)),
+    );
   }
+  const endingsBeforeDedupe: StoryMapCandidateEnding[] = [];
+  for (const ending of endings) {
+    if (duplicateEndingOf.has(ending.id)) continue;
+    const evidence = endingGroupEvidence.get(ending.id);
+    endingsBeforeDedupe.push({
+      ...ending,
+      targetEventId: resolve(ending.targetEventId),
+      ...(evidence ? { evidenceUnitIds: evidence } : {}),
+    });
+  }
+  const endingCandidates = dedupeEndings(endingsBeforeDedupe);
 
   return {
     success: true,
-    candidate: {
+    candidate: cleanupCandidateIds({
       title: merge.title,
       logline: merge.logline,
       characters: pool.characters,
       events,
       edges,
       endingCandidates,
-    },
+    }),
   };
+}
+
+/**
+ * 合并后去重因果边：丢弃自环（含端点经事件合并后相同的边）；同一
+ * (from, to, type) 只保留第一条边的说明，证据按出现顺序取并集。
+ * 不同 type 各自保留，避免 enables / foreshadows 被 causes 吞掉。
+ */
+export function dedupeEdges(
+  edges: readonly StoryMapCandidateEdge[],
+  resolveEventId: (id: string) => string = (id) => id,
+): StoryMapCandidateEdge[] {
+  const seen = new Map<string, StoryMapCandidateEdge>();
+  const result: StoryMapCandidateEdge[] = [];
+  for (const edge of edges) {
+    const from = resolveEventId(edge.from);
+    const to = resolveEventId(edge.to);
+    if (from === to) continue;
+    const key = `${from}|${to}|${edge.type}`;
+    const existing = seen.get(key);
+    if (existing) {
+      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
+      continue;
+    }
+    const kept = { ...edge, from, to };
+    seen.set(key, kept);
+    result.push(kept);
+  }
+  return result;
+}
+
+/**
+ * 结局去重：
+ * - 故事级结局只在 `targetEventId` 相同且规范化后的 `requirement` 文本相同时折叠，
+ *   证据取并集；同一目标事件下的不同结局（例如不同人物的去向）各自保留；
+ * - 人物结局按 `【人物结局】<name>：` 中的人物名折叠，每个名字只保留第一条。
+ */
+export function dedupeEndings(
+  endings: readonly StoryMapCandidateEnding[],
+  resolveEventId: (id: string) => string = (id) => id,
+): StoryMapCandidateEnding[] {
+  const storyEndings = new Map<string, StoryMapCandidateEnding>();
+  const characterEndings = new Map<string, StoryMapCandidateEnding>();
+  const result: StoryMapCandidateEnding[] = [];
+  for (const ending of endings) {
+    const resolved = { ...ending, targetEventId: resolveEventId(ending.targetEventId) };
+    const characterName = characterEndingName(ending.requirement);
+    const bucket = characterName === null ? storyEndings : characterEndings;
+    const key =
+      characterName === null
+        ? `${resolved.targetEventId}\u0000${normalizeEndingRequirement(resolved.requirement)}`
+        : characterName;
+    const existing = bucket.get(key);
+    if (existing) {
+      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...resolved.evidenceUnitIds]);
+      continue;
+    }
+    bucket.set(key, resolved);
+    result.push(resolved);
+  }
+  return result;
+}
+
+/** 结局要求文本的确定性比较键：去首尾空白、折叠空白、去掉句末标点。 */
+function normalizeEndingRequirement(requirement: string): string {
+  return requirement
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[\s。．.！!？?；;，,、…~～]+$/u, "");
+}
+
+function characterEndingName(requirement: string): string | null {
+  if (!requirement.startsWith(CHARACTER_ENDING_PREFIX)) return null;
+  const rest = requirement.slice(CHARACTER_ENDING_PREFIX.length);
+  const separator = rest.indexOf("：");
+  if (separator <= 0) return null;
+  return rest.slice(0, separator).trim();
+}
+
+/**
+ * 去掉汇总阶段为块内冲突 ID 加的 `__c<chunk>` 后缀，并重写所有引用。
+ * 无后缀 ID 先保留原值（如合法的 `a-2`）；后缀 ID 再占用裸 ID，被占用时
+ * 依次改为 `<id>-2`、`<id>-3`…，并跳过所有已使用的 ID。
+ */
+export function cleanupCandidateIds(
+  candidate: StoryMapContentCandidate,
+): StoryMapContentCandidate {
+  const characterIds = assignFinalIds(candidate.characters.map((item) => item.id));
+  const eventIds = assignFinalIds(candidate.events.map((item) => item.id));
+  const edgeIds = assignFinalIds(candidate.edges.map((item) => item.id));
+  const endingIds = assignFinalIds(candidate.endingCandidates.map((item) => item.id));
+  return {
+    ...candidate,
+    characters: candidate.characters.map((character) => ({
+      ...character,
+      id: characterIds.get(character.id)!,
+    })),
+    events: candidate.events.map((event) => ({
+      ...event,
+      id: eventIds.get(event.id)!,
+      participants: unique(event.participants.map((id) => characterIds.get(id) ?? id)),
+    })),
+    edges: candidate.edges.map((edge) => ({
+      ...edge,
+      id: edgeIds.get(edge.id)!,
+      from: eventIds.get(edge.from) ?? edge.from,
+      to: eventIds.get(edge.to) ?? edge.to,
+    })),
+    endingCandidates: candidate.endingCandidates.map((ending) => ({
+      ...ending,
+      id: endingIds.get(ending.id)!,
+      targetEventId: eventIds.get(ending.targetEventId) ?? ending.targetEventId,
+    })),
+  };
+}
+
+function assignFinalIds(ids: readonly string[]): Map<string, string> {
+  const used = new Set<string>();
+  const mapping = new Map<string, string>();
+  const hasChunkSuffix = (id: string) => /__c\d+(?:_\d+)?$/.test(id);
+
+  // 先保留所有本来就没有块后缀的 ID（包括合法的 `a-2`），再加后缀 ID。
+  for (const id of ids) {
+    if (hasChunkSuffix(id)) continue;
+    let candidate = id;
+    let counter = 2;
+    while (used.has(candidate)) candidate = `${id}-${counter++}`;
+    used.add(candidate);
+    mapping.set(id, candidate);
+  }
+  for (const id of ids) {
+    if (!hasChunkSuffix(id)) continue;
+    const bare = id.replace(/__c\d+(?:_\d+)?$/, "");
+    let candidate = bare;
+    let counter = 2;
+    while (used.has(candidate)) candidate = `${bare}-${counter++}`;
+    used.add(candidate);
+    mapping.set(id, candidate);
+  }
+  return mapping;
+}
+
+/** 人名比较键：NFKC 统一全/半角，忽略大小写与多余空白。 */
+function normalizeRosterName(value: string): string {
+  return value.normalize("NFKC").toLowerCase().trim().replace(/\s+/gu, " ");
 }
 
 function duplicates(values: string[]): string[] {

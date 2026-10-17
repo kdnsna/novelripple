@@ -93,6 +93,27 @@ describe("core domain schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts the minor role while keeping old artifacts with old roles readable", () => {
+    const withMinor = structuredClone(storyMapCandidate);
+    withMinor.characters[0]!.role = "minor";
+
+    expect(schemas.StoryMapSchema.safeParse(withMinor).success).toBe(true);
+    expect(schemas.StoryMapSchema.safeParse(storyMapCandidate).success).toBe(
+      true,
+    );
+    expect(
+      schemas.StoryMapRevisionChangeSchema.parse({
+        type: "update_character",
+        characterId: "character_1",
+        role: "minor",
+      }),
+    ).toEqual({
+      type: "update_character",
+      characterId: "character_1",
+      role: "minor",
+    });
+  });
+
   it("keeps old Story Map review JSON readable and defines only the M1-04 correction operations", () => {
     expect(
       schemas.StoryMapReviewSchema.parse({ evidenceConfirmations: [] }),

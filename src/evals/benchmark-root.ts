@@ -10,7 +10,9 @@ export type BenchmarkRootSelection = {
 
 export type BenchmarkRootErrorCode =
   | "benchmark_root_not_found"
-  | "benchmark_root_not_directory";
+  | "benchmark_root_not_directory"
+  | "benchmark_root_is_filesystem_root"
+  | "benchmark_root_inside_repository";
 
 export class BenchmarkRootError extends Error {
   constructor(readonly code: BenchmarkRootErrorCode) {
@@ -70,7 +72,12 @@ export async function resolveBenchmarkRoot(input: {
   publicRoot: string;
   privateRoot: string;
   extraPrivateRoot?: string;
+  /** 仓库根目录；默认当前工作目录，测试可注入。 */
+  repositoryRoot?: string;
 }): Promise<BenchmarkRootSelection | null> {
+  const repositoryRoot = await realpath(
+    path.resolve(input.repositoryRoot ?? process.cwd()),
+  );
   let publicRoot: string;
   try {
     publicRoot = await realpath(input.publicRoot);
@@ -87,6 +94,7 @@ export async function resolveBenchmarkRoot(input: {
 
   const extraPrivateRoot = await resolveExtraPrivateRoot(
     input.extraPrivateRoot,
+    repositoryRoot,
   );
 
   return selectBenchmarkRoot({
@@ -99,6 +107,7 @@ export async function resolveBenchmarkRoot(input: {
 
 async function resolveExtraPrivateRoot(
   value: string | undefined,
+  repositoryRoot: string,
 ): Promise<string | undefined> {
   const requested = value?.trim();
   if (!requested) return undefined;
@@ -117,5 +126,30 @@ async function resolveExtraPrivateRoot(
   if (!entry.isDirectory()) {
     throw new BenchmarkRootError("benchmark_root_not_directory");
   }
+  assertExtraPrivateRootAllowed(resolved, repositoryRoot);
   return resolved;
+}
+
+/**
+ * NOVELRIPPLE_BENCH_ROOT 只能指向仓库外，或仓库内被 Git 忽略的
+ * `benchmarks/private`；否则私有正文可能被误放进受版本控制的工作区。
+ */
+function assertExtraPrivateRootAllowed(
+  resolved: string,
+  repositoryRoot: string,
+): void {
+  if (resolved === path.parse(resolved).root) {
+    throw new BenchmarkRootError("benchmark_root_is_filesystem_root");
+  }
+  const allowedPrivateRoot = path.join(
+    repositoryRoot,
+    "benchmarks",
+    "private",
+  );
+  if (
+    isPathInside(repositoryRoot, resolved) &&
+    !isPathInside(allowedPrivateRoot, resolved)
+  ) {
+    throw new BenchmarkRootError("benchmark_root_inside_repository");
+  }
 }

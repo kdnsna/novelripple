@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseArgs } from "node:util";
 import { promisify } from "node:util";
 
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -13,6 +12,10 @@ import {
   resolveBenchmarkRoot,
   type BenchmarkRootSelection,
 } from "../src/evals/benchmark-root";
+import {
+  M1BaselineArgumentError,
+  parseM1BaselineArguments,
+} from "../src/evals/m1-baseline-arguments";
 import {
   InstrumentedAIProvider,
   M1BaselineStoryReportSchema,
@@ -26,6 +29,8 @@ import {
   type M1BaselineSuiteReport,
   type M1BenchmarkManifest,
 } from "../src/evals/m1-baseline";
+import { parseM1Gold, type M1Gold } from "../src/evals/m1-gold";
+import type { M1GoldMatch } from "../src/evals/m1-gold-matcher";
 import {
   createConfiguredAIProvider,
   readConfiguredAI,
@@ -43,6 +48,7 @@ type LoadedBenchmark = {
   manifest: M1BenchmarkManifest;
   sourceBytes: Uint8Array;
   fileName: string;
+  gold: M1Gold | null;
 };
 
 const execFileAsync = promisify(execFile);
@@ -69,7 +75,9 @@ let reportDirectory: string | undefined;
 let report: M1BaselineSuiteReport | undefined;
 
 try {
-  const manifestPaths = parseManifestArguments();
+  const { manifestPaths, tuning } = parseM1BaselineArguments(
+    process.argv.slice(2),
+  );
   const jsonSchema = JSON.parse(await readFile(manifestSchemaPath, "utf8")) as unknown;
   const benchmarks: LoadedBenchmark[] = [];
   for (const manifestPath of manifestPaths) {
@@ -77,7 +85,12 @@ try {
       await loadBenchmark(manifestPath, jsonSchema, extraPrivateBenchmarkRoot),
     );
   }
-  assertM1BaselineSuite(benchmarks.map((item) => item.manifest));
+  if (!tuning) {
+    assertM1BaselineSuite(benchmarks.map((item) => item.manifest));
+  } else if (benchmarks.some((item) => item.manifest.unseenByPromptAuthors)) {
+    // 调参运行不得使用 unseen 作品，否则它就不再是 unseen。
+    throw new BaselineSetupError("tuning_must_not_use_unseen_story");
+  }
 
   let config: ConfiguredAI;
   try {
@@ -113,7 +126,7 @@ try {
   }
   report = M1BaselineSuiteReportSchema.parse({
     schemaVersion: 1,
-    kind: "m1_unoptimized_baseline",
+    kind: tuning ? "m1_tuning" : "m1_unoptimized_baseline",
     commitSha,
     evaluatedAt,
     status: stories.some((story) => story.status === "failed")
@@ -212,11 +225,58 @@ async function loadBenchmark(
   if (manifest.visibility !== selection.visibility) {
     throw new BaselineSetupError("manifest_visibility_mismatch");
   }
+  const gold =
+    selection.visibility === "private"
+      ? await loadStoryGold({
+          storyDirectory,
+          benchmarkRoot,
+          manifestId: manifest.id,
+        })
+      : null;
   return {
     manifest,
     sourceBytes,
     fileName: path.basename(sourcePath),
+    gold,
   };
+}
+
+async function loadStoryGold(input: {
+  storyDirectory: string;
+  benchmarkRoot: string;
+  manifestId: string;
+}): Promise<M1Gold | null> {
+  const requestedPath = path.join(input.storyDirectory, "gold.json");
+  let goldPath: string;
+  try {
+    goldPath = await realpath(requestedPath);
+  } catch {
+    return null;
+  }
+  if (
+    !isPathInside(input.storyDirectory, goldPath) ||
+    !isPathInside(input.benchmarkRoot, goldPath)
+  ) {
+    throw new BaselineSetupError("gold_outside_story_directory");
+  }
+
+  let rawGold: unknown;
+  try {
+    rawGold = JSON.parse(await readFile(goldPath, "utf8")) as unknown;
+  } catch {
+    throw new BaselineSetupError("gold_invalid");
+  }
+
+  let gold: M1Gold;
+  try {
+    gold = parseM1Gold(rawGold);
+  } catch {
+    throw new BaselineSetupError("gold_invalid");
+  }
+  if (gold.storyId !== input.manifestId) {
+    throw new BaselineSetupError("gold_story_mismatch");
+  }
+  return gold;
 }
 
 async function runStoryMapBaseline(
@@ -247,6 +307,7 @@ async function runStoryMapBaseline(
       manifest: benchmark.manifest,
       source: imported.source,
       storyMap: generated.artifact.storyMap,
+      ...(benchmark.gold ? { gold: benchmark.gold } : {}),
     });
     return M1BaselineStoryReportSchema.parse({
       ...storyIdentity(benchmark.manifest, config),
@@ -341,21 +402,6 @@ function validationRuns(projectId: string) {
   }));
 }
 
-function parseManifestArguments(): string[] {
-  const { values } = parseArgs({
-    options: {
-      manifest: { type: "string", multiple: true },
-    },
-    strict: true,
-    allowPositionals: false,
-  });
-  const manifests = values.manifest ?? [];
-  if (manifests.length < 3) {
-    throw new BaselineSetupError("at_least_three_manifests_required");
-  }
-  return manifests;
-}
-
 async function readCommitSha(): Promise<string> {
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
     cwd: repositoryRoot,
@@ -378,6 +424,7 @@ function elapsedMilliseconds(startedAt: number): number {
 
 function safeFailureCode(error: unknown): string {
   if (error instanceof BaselineSetupError) return error.code;
+  if (error instanceof M1BaselineArgumentError) return error.code;
   if (error instanceof Error && error.name === "StructuredGenerationError") {
     return "schema_validation_failed";
   }
@@ -385,20 +432,77 @@ function safeFailureCode(error: unknown): string {
 }
 
 function printReport(value: M1BaselineSuiteReport, reportPath: string): void {
-  console.log("NovelRipple M1 unoptimized baseline");
+  console.log(
+    value.kind === "m1_tuning"
+      ? "NovelRipple M1 tuning run (not a formal baseline)"
+      : "NovelRipple M1 unoptimized baseline",
+  );
   console.log(`Commit: ${value.commitSha}`);
   console.log(`Status: ${value.status}`);
   for (const story of value.stories) {
+    const goldMatch = story.storyMap?.goldMatch;
+    const goldSummary = goldMatch
+      ? `; ${formatGoldMatch(goldMatch)}`
+      : "; goldMatch=not_available";
+    const tieredIdentity = story.storyMap?.tieredIdentity;
+    const tieredSummary = tieredIdentity
+      ? `; tieredIdentityR=${formatRateValue(tieredIdentity.recall)}; tieredIdentityP=${formatRateValue(tieredIdentity.precision)}; tieredIdentityF1=${formatRateValue(tieredIdentity.f1)}; minorCandidates=${tieredIdentity.minorCandidateTotal}`
+      : "";
     console.log(
-      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}`,
+      `${story.storyId} [${story.storyClass}]: ${story.status}; mode=${story.structuredOutputMode}; extractor=${story.compatibility.extractor.firstPassValidation}/${story.compatibility.extractor.repair}; reconciler=${story.compatibility.reconciler.firstPassValidation}/${story.compatibility.reconciler.repair}; evidence=${formatOptionalRate(story.compatibility.evidenceValidity)}; artifact=${story.compatibility.storyMapArtifactCreated}; inputTokens=${story.generation.inputTokens ?? "unreported"}; outputTokens=${story.generation.outputTokens ?? "unreported"}; wallMs=${story.wallClockDurationMs}${goldSummary}${tieredSummary}`,
     );
   }
   console.log(`Sanitized JSON: ${reportPath}`);
   console.log("下一步：使用 eval.db 完成人工 revision/确认与 strict/open Ripple；不得把正文复制到报告。 ");
 }
 
+function formatGoldMatch(goldMatch: M1GoldMatch): string {
+  const chance = goldMatch.chanceBaseline;
+  const pair = (loose: number, strict: number) => ({ loose, strict });
+  const section = (
+    name: string,
+    loose: number,
+    strict: number,
+    matchedChance: { loose: number; strict: number },
+    denseChance: { loose: number; strict: number },
+  ) =>
+    `gold${name} loose=${formatRateValue(loose)} strict=${formatRateValue(strict)} ` +
+    `chance(loose/strict)=${formatRateValue(matchedChance.loose)}/${formatRateValue(matchedChance.strict)} ` +
+    `dense(loose/strict)=${formatRateValue(denseChance.loose)}/${formatRateValue(denseChance.strict)}`;
+  return [
+    section(
+      "Events",
+      goldMatch.events.f1,
+      goldMatch.strict.events.f1,
+      pair(chance.matched.loose.events.f1, chance.matched.strict.events.f1),
+      pair(chance.dense.loose.events.f1, chance.dense.strict.events.f1),
+    ),
+    section(
+      "Edges",
+      goldMatch.edges.f1,
+      goldMatch.strict.edges.f1,
+      pair(chance.matched.loose.edges.f1, chance.matched.strict.edges.f1),
+      pair(chance.dense.loose.edges.f1, chance.dense.strict.edges.f1),
+    ),
+    section(
+      "Endings",
+      goldMatch.endings.f1,
+      goldMatch.strict.endings.f1,
+      pair(chance.matched.loose.endings.f1, chance.matched.strict.endings.f1),
+      pair(chance.dense.loose.endings.f1, chance.dense.strict.endings.f1),
+    ),
+    `goldHardRecall=${formatRate(goldMatch.edges.hardRecall)}`,
+    `goldNonInterpretiveRecall=${formatRate(goldMatch.endings.nonInterpretiveRecall)}`,
+    `lenientIdentityF1=${formatRateValue(goldMatch.lenientIdentity.f1)}`,
+  ].join("; ");
+}
+
 function formatRate(value: { matched: number; total: number; rate: number }) {
   return `${value.matched}/${value.total} (${(value.rate * 100).toFixed(1)}%)`;
+}
+
+function formatRateValue(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 function formatOptionalRate(

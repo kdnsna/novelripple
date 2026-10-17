@@ -120,13 +120,31 @@ Golden 没有穷举全文所有合理事件。因此，有合法 Source Evidence
 
 M1 使用 [`benchmarks/m1/`](../benchmarks/m1/) 定义的 Story A、B、C。三篇作品必须分别运行并单独报告，不允许只用聚合结果掩盖单篇失败；至少一篇必须满足真正未见作品条件。公共作品可提交脱敏报告，私人作品的正文、manifest、原始输出和本地报告只保存在被 Git 忽略的 `benchmarks/private/` 或 `.data/evals/`。
 
+`NOVELRIPPLE_BENCH_ROOT` 的 realpath 只能是仓库外目录，或 Git 忽略的 `<repo>/benchmarks/private` 及其子目录；文件系统根和仓库内其它路径（如 `docs/`、`src/`）会在运行前被拒绝。
+
 完成报告使用 [`M1 人工评测模板`](evals/m1-review-template.md)。每次运行创建新报告，不覆盖旧报告；报告只记录稳定 ID、计数、比例、评分和简短理由。
 
 `npm run eval:m1:baseline -- --manifest <A> --manifest <B> --manifest <C>` 是 M1 的显式、非 CI baseline 入口。它必须使用 Story A/B/C、至少一篇经 Prompt 作者确认的 unseen 作品和真实 OpenAI-compatible 配置，直接运行当前生产 Story Map 管线。每次新建 `.data/evals/m1-baseline/<run-id>/metrics.json` 与 `eval.db`；Gold 只在 candidate 完整生成后评分。自动报告中的 Event recall、Ending Candidate recall 和 Edge 队列在独立人工复核前保持 `null` / pending，不得把字符串近似或被测模型自评冒充人工事实。
 
+### 自动 Gold 匹配（loose 邻近信号 / strict 内容匹配 / chance 基线）
+
+私有 Benchmark（`benchmarks/private/` 或 `NOVELRIPPLE_BENCH_ROOT` 指向的根）可以在 manifest 同目录放一份 `gold.json`。baseline 在运行前加载并校验它，candidate 完整生成后只用它评分；公共根不读取 gold。报告只写入稳定 ID、计数与比例，不写入 gold 文本。
+
+自动匹配同时报告 loose、strict 与 chance baseline，只用于调参观察，**不得作为放行门禁**：
+
+- **loose**（顶层 `events` / `edges` / `endings`，保持旧行为）：Event 的候选 Evidence 偏移映射到 Unit；与 gold 事件的最小 Unit 距离不超过 `UNIT_WINDOW`（2）且人物有交集才算候选匹配，再按共享 Unit、距离、共享人物和 ID 做一对一贪心。Causal Edge 经同一 Event 匹配映射到 gold，方向必须一致；任意 edge type 都算命中。Ending 的候选自身或目标事件 Unit 距 gold 结局不超过 2 且人物有交集。loose 只说明“位置接近”，不比较文本内容。
+- **strict**（`strict` 块）：Event 要求至少一个候选 Evidence Unit 与 gold Unit **精确相等**（`STRICT_UNIT_WINDOW = 0`），人物交集规则与 loose 相同，并要求内容信号 `contentScore = |bigrams(gold.label) ∩ bigrams(candidate title + summary)| / |bigrams(gold.label)|` 不低于导出的 `STRICT_CONTENT_SCORE`（0.25）。bigram 在去掉空白、标点和符号后计算：CJK 按字符 bigram，ASCII 先转小写。strict 事件按 `(contentScore desc, Unit distance asc)` 做一对一贪心。strict Edge 只使用 strict Event 映射，其余规则与 loose 相同；strict Ending 要求候选 Unit 等于 gold Ending Unit，或通过 strict 匹配到的目标事件 gold Unit 成立，并且 `gold.label` 与候选 `requirement` 的 `contentScore ≥ 0.25`。
+- **chance baseline**（`chanceBaseline`）：纯确定性、不调用模型。`matched` 使用与 gold 相同的事件数，把 Evidence Unit 均匀铺满全篇，按 gold 的 Edge 数上限串联相邻事件，并把与 gold 相同数量的结局均匀放在最后 20% 的 Unit；`dense` 每 3 个 Unit 放一个空事件。两者都使用全部 gold 人物作为参与者，事件标题为“事件 n”、摘要/结局要求不含内容，并分别用 loose 与 strict 评分（F1/P/R 分 events / edges / endings）。
+- **只有 strict 减去对应 chance baseline 才能作为抽取质量证据**：loose F1 只是 Unit 邻近信号，内容无关的 dummy Story Map 也可能把它刷高；chance baseline 给出“不比较内容也能碰巧得到多少分”。因此不允许只用 loose 的 events/edges/endings F1 声称抽取质量提升。
+- 控制台每篇打印 `goldEvents loose=F1 strict=F1 chance(loose/strict)=x/y dense(loose/strict)=x/y`，edges / endings 同样；完整 F1/P/R 见报告里的 `chanceBaseline`。
+- 严格人物 identity 数字保持不变；lenient identity 只把匹配 gold `mentionedOnly` 的候选从 precision 分母中排除。
+- 分层人物 identity（`tieredIdentity`）：minor 候选不计入 precision 分母，也不为 precision 分子贡献命中；recall 仍按任何候选（含 minor）匹配 expected；同时报告 `minorCandidateTotal`。该块在旧报告中可缺失，baseline 控制台摘要打印 `tieredIdentityF1`。
+
+`npm run eval:m1:baseline -- --tuning --manifest <A> [--manifest <B>]` 是调参入口：只允许 1—2 篇，跳过正式 baseline 的 A/B/C 与 unseen 断言，报告 `kind: "m1_tuning"`。未加 `--tuning` 时行为不变，仍要求三篇正式 baseline。
+
 M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级路径；baseline 必须记录实际的 `json_schema`、`json_object` 或 `prompt_json` 模式。Story Map Candidate 的 Evidence Unit ID 只负责让模型选择证据，最终 Evidence 仍由服务端确定性解析为现有 `SourceReference[]` 并接受全部领域校验。
 
-当前生产 Story Map 管线（Phase 1 分块召回）使用五个版本化 Prompt：`story-map-chunk.v1`、`story-map-glean.v1`、`story-map-names.v1`、`story-map-endings.v1`、`story-map-merge.v1`。历史报告中的 `story-map.v2` + `story-map-reconcile.v2` 只代表旧的两步式管线，不用于新运行。
+当前生产 Story Map 管线（Phase 1 分块召回）使用五个版本化 Prompt：`story-map-chunk.v2`、`story-map-glean.v2`、`story-map-names.v2`、`story-map-endings.v2`、`story-map-merge.v2`。历史报告中的 `story-map.v2` + `story-map-reconcile.v2` 只代表旧的两步式管线，不用于新运行。
 
 ### 指标口径
 
@@ -216,6 +234,8 @@ M1-02A 允许端点配置显式选择 `json_object`，但它不是自动降级�
 - `.data/evals/m1-eval/<run-id>/metrics.json`（`kind: "m1_dashboard"`，被 Git 忽略）；
 - `docs/evals/runs/m1-dashboard-<timestamp>-<random>-<sha>.md`（脱敏，可提交）；
 - 指定 `--report-dir <dir>` 时，Markdown 改写到 `<dir>/<run-id>/report.md`，与 `metrics.json` 同目录。
+
+任一篇 manifest 为 `visibility: "private"`，或来自 `NOVELRIPPLE_BENCH_ROOT` / `benchmarks/private` 时，整次运行按 private 处理：不再写入 `docs/evals/runs/`，Markdown 默认与 `metrics.json` 同目录，私有 benchmark ID 脱敏为 `private:<storyClass>`；此时 `--report-dir` 只允许仓库外路径，或位于 Git 忽略的仓库内路径（脚本用 `git check-ignore -q` 判断），其它仓库内目录（包括 `docs/`）都会被拒绝。
 
 `<run-id>` 精确到毫秒并带随机后缀，重复运行不会互相覆盖。人工评分文件缺失记为 `not_measured`；文件存在但 JSON 非法或对应 Story 未通过 Schema 校验时命令报错并以非零退出。manifest 必须提供正整数 `characterCount`（或 `characterCountByClass` / `scale.characters`），否则同样报错，避免静默套用错误的修正成本档位。
 

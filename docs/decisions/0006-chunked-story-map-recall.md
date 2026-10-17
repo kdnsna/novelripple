@@ -42,7 +42,7 @@ Phase 1 落地后的召回安全加固，不改变调用结构、Schema 或最�
 
 1. **错并防护**：`validateRoster` 要求每个 `mergedFrom` 候选的 `name` 等于合并后人物的 `name` 或出现在其 `aliases` 中（去空白比较）；不满足时要求一次 repair，仍失败即 fail closed。
 2. **快速失败与调用预算**：分块并发在第一处失败后不再调度新任务，并通过可选 `AbortSignal` 中止在途 provider 请求。预计基础调用为 `2 × 块数 + 3`，最坏（每个调用 repair 一次）翻倍；新增 `STORY_MAP_MAX_MODEL_CALLS`（默认 120，正整数）与 `STORY_MAP_MAX_CHUNKS`（默认 50，正整数）。超限在任何模型调用前直接失败；运行中按真实尝试（含 repair）计数，超过预算立即失败。
-3. **去重保留证据**：同一 `from|to|type` 的因果边、同一 `targetEventId|requirement` 的结局去重时，把重复项的 `evidenceUnitIds` 按顺序合并进保留项，包括经 `duplicateEventGroups` 归并的边。
+3. **去重保留证据**：同一 `from|to|type` 的因果边、同一 `targetEventId` 且规范化后 `requirement` 相同的结局去重时，把重复项的 `evidenceUnitIds` 按顺序合并进保留项，包括经 `duplicateEventGroups` 归并的边；人物结局按人物名去重。
 4. **超长自然段**：分块时先丢弃最旧的上下文 Unit，避免 core+context 超过块上限；单个 Unit 超过导出的 `CHUNK_HARD_MAX_CHARS`（默认 `2 × CHUNK_MAX_CHARS`）时，在任何模型调用前失败，不切分自然段，保持 Unit ID 稳定。
 5. **合并轮证据范围**：合并返回的边证据必须来自该轮看到的事件、已有边和结局的证据 Unit 并集，而不是“全书某处存在”；校验在 `applyMerge` 内以带路径的 issue 返回。
 

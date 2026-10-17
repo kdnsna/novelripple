@@ -18,6 +18,7 @@ export const CharacterSchema = z
       "protagonist",
       "antagonist",
       "supporting",
+      "minor",
       "deceased",
     ]),
     initialState: z.string().min(1),
@@ -113,33 +114,52 @@ const storyMapContentShape = {
 
 export const StoryMapContentSchema = z.object(storyMapContentShape).strict();
 
+/**
+ * 分块抽取 / 补抽阶段的人物候选：模型必须区分「具体个体」与「群体/家族/机构」。
+ * 只存在于生成过程中；最终的 CharacterSchema 不增加 kind。
+ */
+export const StoryMapCandidateCharacterSchema = CharacterSchema.extend({
+  kind: z.enum(["individual", "group"]),
+}).strict();
+
+const storyMapCandidateGraphShape = {
+  title: z.string().min(1),
+  logline: z.string().min(1),
+  events: z.array(StoryMapCandidateEventSchema).min(1),
+  edges: z.array(StoryMapCandidateEdgeSchema),
+};
+
 export const StoryMapExtractionCandidateSchema = z
   .object({
-    title: z.string().min(1),
-    logline: z.string().min(1),
-    characters: z.array(CharacterSchema).min(1),
-    events: z.array(StoryMapCandidateEventSchema).min(1),
-    edges: z.array(StoryMapCandidateEdgeSchema),
+    ...storyMapCandidateGraphShape,
+    characters: z.array(StoryMapCandidateCharacterSchema).min(1),
   })
   .strict();
 
-export const StoryMapContentCandidateSchema =
-  StoryMapExtractionCandidateSchema.extend({
+export const StoryMapContentCandidateSchema = z
+  .object({
+    ...storyMapCandidateGraphShape,
+    characters: z.array(CharacterSchema).min(1),
     endingCandidates: z.array(StoryMapCandidateEndingSchema).min(1),
-  });
+  })
+  .strict();
 
 // ── 分块抽取管线的中间候选（只存在于生成过程中，不持久化）──
 
 /** “还漏了什么”补抽：只返回新增内容，可以为空。 */
 export const StoryMapGleaningCandidateSchema = z
   .object({
-    characters: z.array(CharacterSchema),
+    characters: z.array(StoryMapCandidateCharacterSchema),
     events: z.array(StoryMapCandidateEventSchema),
     edges: z.array(StoryMapCandidateEdgeSchema),
   })
   .strict();
 
-/** 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物。 */
+/**
+ * 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物，
+ * 或明确列入 `rejectedCandidateIds`（只允许漏网的群体/家族/机构，以及只评论的
+ * 作者叙事者；短暂、无名、边缘或不确定的具体人物应合并为 `role: "minor"`）。
+ */
 export const StoryMapRosterCandidateSchema = z
   .object({
     characters: z
@@ -149,6 +169,7 @@ export const StoryMapRosterCandidateSchema = z
         }).strict(),
       )
       .min(1),
+    rejectedCandidateIds: z.array(z.string().min(1)),
   })
   .strict();
 
@@ -171,7 +192,7 @@ export const StoryMapEndingPassCandidateSchema = z
   })
   .strict();
 
-/** 最终合并：指出跨块重复事件、补充跨块因果边，并给出全书标题与梗概。 */
+/** 最终合并：指出重复或粒度过细的同场景事件、重复结局，补充跨块因果边，并给出全书标题与梗概。 */
 export const StoryMapMergeCandidateSchema = z
   .object({
     title: z.string().min(1),
@@ -181,6 +202,14 @@ export const StoryMapMergeCandidateSchema = z
         .object({
           keepEventId: z.string().min(1),
           duplicateEventIds: z.array(z.string().min(1)).min(1),
+        })
+        .strict(),
+    ),
+    duplicateEndingGroups: z.array(
+      z
+        .object({
+          keepEndingId: z.string().min(1),
+          duplicateEndingIds: z.array(z.string().min(1)).min(1),
         })
         .strict(),
     ),
@@ -200,6 +229,9 @@ export const StoryMapSchema = z
   .strict();
 
 export type Character = z.infer<typeof CharacterSchema>;
+export type StoryMapCandidateCharacter = z.infer<
+  typeof StoryMapCandidateCharacterSchema
+>;
 export type Event = z.infer<typeof EventSchema>;
 export type StoryEdge = z.infer<typeof StoryEdgeSchema>;
 export type StoryMapContent = z.infer<typeof StoryMapContentSchema>;

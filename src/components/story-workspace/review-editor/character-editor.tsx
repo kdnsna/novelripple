@@ -107,6 +107,7 @@ export function CharacterEditor({
               <option value="protagonist">主角</option>
               <option value="antagonist">对抗者</option>
               <option value="supporting">配角</option>
+              <option value="minor">次要人物</option>
               <option value="deceased">已故人物</option>
             </select>
           </label>
@@ -256,6 +257,7 @@ function roleLabel(
     protagonist: "主角",
     antagonist: "对抗者",
     supporting: "配角",
+    minor: "次要人物",
     deceased: "已故人物",
   }[role];
 }
