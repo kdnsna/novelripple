@@ -13,13 +13,20 @@ import type { M1Gold } from "./m1-gold";
 export const UNIT_WINDOW = 2;
 /** 严格（strict）匹配要求候选 Evidence Unit 与 gold Unit 精确相等。 */
 export const STRICT_UNIT_WINDOW = 0;
-/** 严格匹配的内容信号下限：gold label 与候选文本的内容 F1 至少 0.2。 */
-export const STRICT_CONTENT_F1 = 0.2;
+/**
+ * 严格匹配的内容召回下限：gold label 很短，候选是更长的转述，由 recall 承载命中。
+ */
+export const STRICT_CONTENT_RECALL = 0.2;
+/**
+ * 严格匹配的内容精确率下限：拒绝整段抄原文与堆砌
+ * （复制一段源文的 precision 通常低于 0.05）。
+ */
+export const STRICT_CONTENT_PRECISION_FLOOR = 0.08;
 /** dense chance baseline：每 3 个 Unit 放一个内容无关事件。 */
 export const DENSE_BASELINE_EVENT_STRIDE = 3;
 
 /**
- * 中文高频虚词 / 填充 bigram。strict 内容 F1 会先剔除这些 token，
+ * 中文高频虚词 / 填充 bigram。strict 内容重合会先剔除这些 token，
  * 避免“他们、已经、因为”这类共同措辞制造虚假重合。
  */
 export const CJK_STOPWORD_BIGRAMS: readonly string[] = [
@@ -141,6 +148,7 @@ const ChanceBaselineSchema = z
     dense: ChanceMapScoreSchema,
     stuffing: ChanceMapScoreSchema,
     sourceCopy: ChanceMapScoreSchema,
+    goldAlignedCopy: ChanceMapScoreSchema,
   })
   .strict();
 
@@ -165,22 +173,25 @@ export type M1GoldStrictMatch = z.infer<typeof StrictGoldMatchSchema>;
 export type M1GoldChanceMatch = z.infer<typeof ChanceMatchSchema>;
 export type M1GoldChanceBaseline = z.infer<typeof ChanceBaselineSchema>;
 
-/** 匹配策略参数：loose 只看 Unit 邻近，strict 额外要求精确 Unit 与内容 F1。 */
+/** 匹配策略参数：loose 只看 Unit 邻近，strict 额外要求精确 Unit 与内容 recall + precision floor。 */
 type MatchStrategy = {
   unitWindow: number;
-  minimumContentF1: number | null;
+  minimumContentRecall: number | null;
+  contentPrecisionFloor: number | null;
   assignmentOrder: "loose" | "strict";
 };
 
 const LOOSE_STRATEGY: MatchStrategy = {
   unitWindow: UNIT_WINDOW,
-  minimumContentF1: null,
+  minimumContentRecall: null,
+  contentPrecisionFloor: null,
   assignmentOrder: "loose",
 };
 
 const STRICT_STRATEGY: MatchStrategy = {
   unitWindow: STRICT_UNIT_WINDOW,
-  minimumContentF1: STRICT_CONTENT_F1,
+  minimumContentRecall: STRICT_CONTENT_RECALL,
+  contentPrecisionFloor: STRICT_CONTENT_PRECISION_FLOOR,
   assignmentOrder: "strict",
 };
 
@@ -189,8 +200,10 @@ export type M1GoldMatchOptions = {
   looseUnitWindow?: number;
   /** 严格匹配 Unit 窗口，默认 `STRICT_UNIT_WINDOW`（0）。 */
   strictUnitWindow?: number;
-  /** 严格匹配内容 F1 下限，默认 `STRICT_CONTENT_F1`。 */
-  strictMinimumContentF1?: number;
+  /** 严格匹配内容 recall 下限，默认 `STRICT_CONTENT_RECALL`。 */
+  strictMinimumContentRecall?: number;
+  /** 严格匹配内容 precision 下限，默认 `STRICT_CONTENT_PRECISION_FLOOR`。 */
+  strictContentPrecisionFloor?: number;
 };
 
 type UnitBoundary = {
@@ -252,7 +265,7 @@ export function mapCandidateCharactersToGold(
  * 不复制任何 Gold 文本。自动匹配是近似指标，不得作为放行门禁。
  *
  * 顶层 events / edges / endings 保持旧行为（loose）；`strict` 使用精确 Unit 与
- * 内容 bigram 下限，`chanceBaseline` 用内容无关地图给出机会水平。
+ * 内容 recall + precision floor，`chanceBaseline` 用内容无关地图给出机会水平。
  */
 export function matchM1Gold(input: {
   gold: M1Gold;
@@ -310,6 +323,7 @@ export function matchM1Gold(input: {
     dense: scoreChanceMap(chanceMaps.dense),
     stuffing: scoreChanceMap(chanceMaps.stuffing),
     sourceCopy: scoreChanceMap(chanceMaps.sourceCopy),
+    goldAlignedCopy: scoreChanceMap(chanceMaps.goldAlignedCopy),
   };
   const lenientIdentity = scoreLenientIdentity({
     expectedCharacters: input.expectedCharacters ?? input.gold.characters,
@@ -338,10 +352,14 @@ function resolveStrategy(
       base.assignmentOrder === "strict"
         ? (options.strictUnitWindow ?? base.unitWindow)
         : (options.looseUnitWindow ?? base.unitWindow),
-    minimumContentF1:
+    minimumContentRecall:
       base.assignmentOrder === "strict"
-        ? (options.strictMinimumContentF1 ?? base.minimumContentF1)
-        : base.minimumContentF1,
+        ? (options.strictMinimumContentRecall ?? base.minimumContentRecall)
+        : base.minimumContentRecall,
+    contentPrecisionFloor:
+      base.assignmentOrder === "strict"
+        ? (options.strictContentPrecisionFloor ?? base.contentPrecisionFloor)
+        : base.contentPrecisionFloor,
   };
 }
 
@@ -410,53 +428,44 @@ function toUnitBoundaries(units: readonly EvidenceUnit[]): UnitBoundary[] {
   }));
 }
 
-/**
- * 旧版内容信号（保留导出供对照/测试）：去掉空白、标点和符号后做字符 bigram
- * （CJK 按字符，ASCII 先小写），返回 gold bigram 被候选文本覆盖的比例。
- * strict v2 使用 `contentF1Score`，不再使用这里的覆盖率口径。
- */
-export function contentBigramScore(
-  goldText: string,
-  candidateText: string,
-): number {
-  const goldBigrams = contentBigrams(goldText);
-  if (goldBigrams.size === 0) return 0;
-  return (
-    intersectionSize(goldBigrams, contentBigrams(candidateText)) /
-    goldBigrams.size
-  );
-}
-
-function contentBigrams(value: string): Set<string> {
-  const text = value
-    .normalize("NFC")
-    .toLowerCase()
-    .replace(/[\s\p{P}\p{S}]+/gu, "");
-  const chars = [...text];
-  const result = new Set<string>();
-  for (let index = 0; index + 1 < chars.length; index += 1) {
-    result.add(`${chars[index]}${chars[index + 1]}`);
-  }
-  return result;
-}
+export type ContentOverlap = {
+  recall: number;
+  precision: number;
+  f1: number;
+};
 
 /**
- * strict v2 内容信号：CJK 字符 bigram + 小写 ASCII 词，剔除中文停用 bigram
- * 与人物名（gold 和 candidate 的全部 name / alias）。返回 P/R 的 F1；
- * 任一侧为空则为 0，避免长候选靠覆盖率取胜。
+ * strict 内容信号：CJK 字符 bigram + 小写 ASCII 词，剔除中文停用 bigram
+ * 与人物名（gold 和 candidate 的全部 name / alias）。
+ * recall = |G∩C| / |G|，precision = |G∩C| / |C|（均为 token SET）；
+ * 任一侧为空则全部为 0。
  */
-export function contentF1Score(
+export function contentOverlap(
   goldText: string,
   candidateText: string,
   characterNames: readonly string[] = [],
-): number {
+): ContentOverlap {
   const goldTokens = new Set(contentTokens(goldText, characterNames));
   const candidateTokens = new Set(contentTokens(candidateText, characterNames));
-  if (goldTokens.size === 0 || candidateTokens.size === 0) return 0;
+  if (goldTokens.size === 0 || candidateTokens.size === 0) {
+    return { recall: 0, precision: 0, f1: 0 };
+  }
   const shared = intersectionSize(goldTokens, candidateTokens);
   const precision = divide(shared, candidateTokens.size);
   const recall = divide(shared, goldTokens.size);
-  return f1Score(precision, recall);
+  return { recall, precision, f1: f1Score(precision, recall) };
+}
+
+function passesContentCheck(
+  score: ContentOverlap | null,
+  strategy: MatchStrategy,
+): boolean {
+  if (strategy.minimumContentRecall === null) return true;
+  if (!score) return false;
+  return (
+    score.recall >= strategy.minimumContentRecall &&
+    score.precision >= (strategy.contentPrecisionFloor ?? 0)
+  );
 }
 
 function contentTokens(
@@ -560,8 +569,12 @@ function isCjkBigram(value: string): boolean {
  * - dense：每 3 个 Unit 一个空事件；
  * - stuffing：与 matched 相同布局，但标题/摘要/结局要求都填入源文最高频的 30 个
  *   非停用 bigram；
- * - sourceCopy：与 matched 相同布局，但直接复制证据 Unit 的原文。
- * 四者都使用全部 gold 人物作为参与者，并分别用 loose / strict 评分。
+ * - sourceCopy：与 matched 相同布局，但直接复制证据 Unit 的原文；
+ * - goldAlignedCopy：oracle-position 复制基线。事件与结局直接使用 gold 的证据
+ *   Unit 位置（gold 事件 / 结局自身的 Unit，按顺序去重），标题/摘要/结局要求
+ *   复制这些 Unit 的原文。它使用 gold 位置，预期高于其它基线，用来衡量“在正确
+ *   位置纯抄原文”能拿到多少分。
+ * 五者都使用全部 gold 人物作为参与者，并分别用 loose / strict 评分。
  */
 export function buildM1ChanceBaselines(input: {
   gold: M1Gold;
@@ -571,6 +584,7 @@ export function buildM1ChanceBaselines(input: {
   dense: StoryMap;
   stuffing: StoryMap;
   sourceCopy: StoryMap;
+  goldAlignedCopy: StoryMap;
 } {
   const stuffingText = mostFrequentContentBigrams(
     input.units,
@@ -617,6 +631,7 @@ export function buildM1ChanceBaselines(input: {
         endingRequirement: (_index, unit) => unit.text,
       },
     }),
+    goldAlignedCopy: buildGoldAlignedCopyBaseline(input.gold, input.units),
   };
 }
 
@@ -708,6 +723,91 @@ function buildMatchedChanceBaseline(
 
 function firstCharacters(value: string, count: number): string {
   return [...value].slice(0, count).join("");
+}
+
+/** 按 gold evidence 顺序取 Unit，并按 unit 号去重。 */
+function goldUnitsInOrder(
+  evidence: ReadonlyArray<{ unit: number }>,
+  units: readonly EvidenceUnit[],
+): EvidenceUnit[] {
+  const seen = new Set<number>();
+  const result: EvidenceUnit[] = [];
+  for (const item of evidence) {
+    if (seen.has(item.unit)) continue;
+    seen.add(item.unit);
+    const unit = units[item.unit - 1];
+    if (unit) result.push(unit);
+  }
+  return result;
+}
+
+/**
+ * oracle-position 复制基线：直接使用 gold 的事件 / 结局证据 Unit 位置，
+ * 复制这些 Unit 的原文。它预期高于其它基线，只衡量“位置正确时纯抄原文”的得分。
+ */
+function buildGoldAlignedCopyBaseline(
+  gold: M1Gold,
+  units: readonly EvidenceUnit[],
+): StoryMap {
+  const characters = chanceCharacters(gold);
+  const participants = characters.map((character) => character.id);
+  const eventUnits = gold.events.map((event) =>
+    goldUnitsInOrder(event.evidence, units),
+  );
+  const events = gold.events.map((_goldEvent, index) => {
+    const copiedUnits = eventUnits[index]!;
+    const text = copiedUnits.map((unit) => unit.text).join("");
+    return {
+      id: `gold_aligned_copy_event_${index + 1}`,
+      title: firstCharacters(text, 20),
+      summary: text,
+      sequence: index + 1,
+      participants,
+      stateChanges: [],
+      evidenceKind: "fact" as const,
+      evidence: copiedUnits.map(sourceReferenceForUnit),
+    };
+  });
+  const edgeCount = Math.min(
+    gold.causalLinks.length,
+    Math.max(0, events.length - 1),
+  );
+  const edges = Array.from({ length: edgeCount }, (_, index) => ({
+    id: `gold_aligned_copy_edge_${index + 1}`,
+    from: events[index]!.id,
+    to: events[index + 1]!.id,
+    type: "causes" as const,
+    explanation: "Gold 对齐复制基线",
+    confidence: 1,
+    confirmed: true,
+    evidence: [
+      sourceReferenceForUnit(eventUnits[index]![0] ?? units[0]!),
+    ],
+  }));
+  // 结局指向 sequence 最大的 gold 对齐事件，与 matched 基线的串联方式一致。
+  const targetEvent = events.at(-1);
+  const endingCandidates = targetEvent
+    ? gold.endings.map((ending, index) => {
+        const copiedUnits = goldUnitsInOrder(ending.evidence, units);
+        return {
+          id: `gold_aligned_copy_ending_${index + 1}`,
+          targetEventId: targetEvent.id,
+          requirement: copiedUnits.map((unit) => unit.text).join(""),
+          evidence: copiedUnits.map(sourceReferenceForUnit),
+        };
+      })
+    : [];
+
+  return chanceStoryMap({
+    id: "chance_gold_aligned_copy",
+    title: "Gold 对齐复制基线",
+    logline: "使用 gold 位置直接复制证据 Unit 原文的 oracle 基线",
+    sourceId: units[0]?.sourceId ?? "chance_source",
+    characters,
+    events,
+    edges,
+    endingCandidates,
+  });
 }
 
 function buildDenseChanceBaseline(
@@ -884,7 +984,7 @@ function compareLoosePairs(left: ScoredPair, right: ScoredPair): number {
   );
 }
 
-/** 严格匹配按内容重合优先、Unit 距离其次做一对一贪心。 */
+/** 严格匹配按内容 recall 优先、Unit 距离其次做一对一贪心。 */
 function compareStrictPairs(left: ScoredPair, right: ScoredPair): number {
   return (
     right.contentScore - left.contentScore ||
@@ -978,27 +1078,21 @@ function matchEvents(input: {
         characterIds,
       );
       if (characterIds.size > 0 && sharedCharacterCount === 0) continue;
-      const contentScore =
-        input.strategy.minimumContentF1 === null
-          ? 0
-          : contentF1Score(
-              gold.label,
-              `${candidate.title} ${candidate.summary}`,
-              characterNames,
-            );
-      if (
-        input.strategy.minimumContentF1 !== null &&
-        contentScore < input.strategy.minimumContentF1
-      ) {
-        continue;
-      }
+      const content = input.strategy.minimumContentRecall === null
+        ? null
+        : contentOverlap(
+            gold.label,
+            `${candidate.title} ${candidate.summary}`,
+            characterNames,
+          );
+      if (!passesContentCheck(content, input.strategy)) continue;
       pairs.push({
         candidateId: candidate.id,
         goldId: gold.id,
         sharedUnitCount: sharedUnitCount(candidateUnits, goldUnits),
         distance,
         sharedCharacterCount,
-        contentScore,
+        contentScore: content?.recall ?? 0,
       });
     }
   }
@@ -1098,7 +1192,7 @@ function matchEndings(input: {
       input.sourceId,
     );
     // strict 只看结局自身的 Evidence Unit；loose 仍允许通过目标事件定位。
-    if (input.strategy.minimumContentF1 === null && targetEvent) {
+    if (input.strategy.minimumContentRecall === null && targetEvent) {
       for (const unit of referenceUnits(
         targetEvent.evidence,
         input.units,
@@ -1141,23 +1235,17 @@ function matchEndings(input: {
         goldCharacterIds,
       );
       if (goldCharacterIds.size > 0 && sharedCharacterCount === 0) continue;
-      const contentScore =
-        input.strategy.minimumContentF1 === null
-          ? 0
-          : contentF1Score(gold.label, ending.requirement, characterNames);
-      if (
-        input.strategy.minimumContentF1 !== null &&
-        contentScore < input.strategy.minimumContentF1
-      ) {
-        continue;
-      }
+      const content = input.strategy.minimumContentRecall === null
+        ? null
+        : contentOverlap(gold.label, ending.requirement, characterNames);
+      if (!passesContentCheck(content, input.strategy)) continue;
       pairs.push({
         candidateId: ending.id,
         goldId: gold.id,
         sharedUnitCount: sharedUnitCount(candidateUnits, goldUnits),
         distance,
         sharedCharacterCount,
-        contentScore,
+        contentScore: content?.recall ?? 0,
       });
     }
   }

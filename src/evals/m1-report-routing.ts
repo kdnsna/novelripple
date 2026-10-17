@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import { isPathInside } from "@/evals/benchmark-root";
@@ -39,6 +39,11 @@ export type M1ReportRoutingInput = {
    * 对不存在的报告目录，会先 realpath 最深的已存在祖先，再拼回剩余部分。
    */
   realpath?: (path: string) => string;
+  /**
+   * 判断路径是否为符号链接；默认 `fs.lstatSync`。用于识别目标尚不存在的
+   * 悬空符号链接，避免把链接位置当成真实落盘位置。
+   */
+  lstat?: (path: string) => { isSymbolicLink(): boolean };
 };
 
 export type M1ReportRouting = {
@@ -52,7 +57,8 @@ export type M1ReportRouting = {
 };
 
 export type M1ReportRoutingErrorCode =
-  | "report_dir_inside_repository_for_private_run";
+  | "report_dir_inside_repository_for_private_run"
+  | "report_dir_dangling_symlink";
 
 export class M1ReportRoutingError extends Error {
   constructor(readonly code: M1ReportRoutingErrorCode) {
@@ -64,10 +70,13 @@ export class M1ReportRoutingError extends Error {
 /**
  * realpath 一个可能尚不存在的路径：找到最深的已存在祖先做 realpath，
  * 再把不存在的剩余片段拼回去。这样符号链接无法绕过后续的仓库内/忽略检查。
+ * 若向上遇到的路径片段本身是符号链接、但 realpath 失败（悬空链接），
+ * 则 fail closed，抛出 `report_dir_dangling_symlink`，不把链接位置当作目标。
  */
 export function resolveRealpathWithMissingTail(
   candidate: string,
   realpath: (path: string) => string = realpathSync,
+  lstat: (path: string) => { isSymbolicLink(): boolean } = lstatSync,
 ): string {
   const absolute = path.resolve(candidate);
   const missing: string[] = [];
@@ -76,6 +85,15 @@ export function resolveRealpathWithMissingTail(
     try {
       return path.join(realpath(current), ...missing.reverse());
     } catch {
+      let danglingSymlink = false;
+      try {
+        danglingSymlink = lstat(current).isSymbolicLink();
+      } catch {
+        // 该路径片段不存在，继续向上找已存在的祖先。
+      }
+      if (danglingSymlink) {
+        throw new M1ReportRoutingError("report_dir_dangling_symlink");
+      }
       const parent = path.dirname(current);
       if (parent === current) return absolute;
       missing.push(path.basename(current));
@@ -109,6 +127,7 @@ export function resolveM1ReportRouting(
     ? resolveRealpathWithMissingTail(
         input.reportDir,
         input.realpath ?? realpathSync,
+        input.lstat ?? lstatSync,
       )
     : undefined;
 
@@ -118,6 +137,7 @@ export function resolveM1ReportRouting(
     const repositoryRoot = resolveRealpathWithMissingTail(
       input.repositoryRoot,
       input.realpath ?? realpathSync,
+      input.lstat ?? lstatSync,
     );
     if (
       isPathInside(repositoryRoot, resolvedReportDir) &&

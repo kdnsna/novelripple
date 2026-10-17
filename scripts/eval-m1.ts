@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import {
   mkdir,
   readFile,
@@ -286,6 +286,7 @@ async function main() {
     ...(extraPrivateRoot ? { extraPrivateRoot } : {}),
     isGitIgnored: isGitIgnored,
     realpath: (candidate) => realpathSync(candidate),
+    lstat: (candidate) => lstatSync(candidate),
   });
 
   // 2. 人工输入（缺失 = null，计入 missingData）

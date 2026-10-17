@@ -471,12 +471,14 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
     denseChance: { loose: number; strict: number },
     stuffingChance: { loose: number; strict: number },
     sourceCopyChance: { loose: number; strict: number },
+    goldAlignedCopyChance: { loose: number; strict: number },
   ) =>
     `gold${name} loose=${formatRateValue(loose)} strict=${formatRateValue(strict)} ` +
     `chance(loose/strict)=${formatRateValue(matchedChance.loose)}/${formatRateValue(matchedChance.strict)} ` +
     `dense(loose/strict)=${formatRateValue(denseChance.loose)}/${formatRateValue(denseChance.strict)} ` +
     `stuffing(loose/strict)=${formatRateValue(stuffingChance.loose)}/${formatRateValue(stuffingChance.strict)} ` +
-    `sourceCopy(loose/strict)=${formatRateValue(sourceCopyChance.loose)}/${formatRateValue(sourceCopyChance.strict)}`;
+    `sourceCopy(loose/strict)=${formatRateValue(sourceCopyChance.loose)}/${formatRateValue(sourceCopyChance.strict)} ` +
+    `goldAlignedCopy(loose/strict)=${formatRateValue(goldAlignedCopyChance.loose)}/${formatRateValue(goldAlignedCopyChance.strict)}`;
   return [
     section(
       "Events",
@@ -486,6 +488,10 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
       pair(chance.dense.loose.events.f1, chance.dense.strict.events.f1),
       pair(chance.stuffing.loose.events.f1, chance.stuffing.strict.events.f1),
       pair(chance.sourceCopy.loose.events.f1, chance.sourceCopy.strict.events.f1),
+      pair(
+        chance.goldAlignedCopy.loose.events.f1,
+        chance.goldAlignedCopy.strict.events.f1,
+      ),
     ),
     section(
       "Edges",
@@ -495,6 +501,10 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
       pair(chance.dense.loose.edges.f1, chance.dense.strict.edges.f1),
       pair(chance.stuffing.loose.edges.f1, chance.stuffing.strict.edges.f1),
       pair(chance.sourceCopy.loose.edges.f1, chance.sourceCopy.strict.edges.f1),
+      pair(
+        chance.goldAlignedCopy.loose.edges.f1,
+        chance.goldAlignedCopy.strict.edges.f1,
+      ),
     ),
     section(
       "Endings",
@@ -504,6 +514,10 @@ function formatGoldMatch(goldMatch: M1GoldMatch): string {
       pair(chance.dense.loose.endings.f1, chance.dense.strict.endings.f1),
       pair(chance.stuffing.loose.endings.f1, chance.stuffing.strict.endings.f1),
       pair(chance.sourceCopy.loose.endings.f1, chance.sourceCopy.strict.endings.f1),
+      pair(
+        chance.goldAlignedCopy.loose.endings.f1,
+        chance.goldAlignedCopy.strict.endings.f1,
+      ),
     ),
     `goldHardRecall=${formatRate(goldMatch.edges.hardRecall)}`,
     `goldNonInterpretiveRecall=${formatRate(goldMatch.endings.nonInterpretiveRecall)}`,
