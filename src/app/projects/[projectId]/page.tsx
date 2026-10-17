@@ -24,11 +24,12 @@ import {
   getStoryMapArtifact,
   listStoryMapArtifactsForSource,
 } from "@/server/repositories/story-map-artifact-repository";
-import { listRippleSuggestionsArtifactsForStoryMap } from "@/server/repositories/ripple-suggestions-repository";
+import { listRippleSuggestionsBatchesForStoryMap } from "@/server/repositories/ripple-suggestions-repository";
 import {
   listImpactPlanArtifactsForStoryMap,
   listProjectWorldlines,
 } from "@/server/repositories/ripple-repository";
+import { resolveRippleSuggestionMaxBatches } from "@/server/ripple/ripple-suggestion-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -88,12 +89,10 @@ export default async function ProjectPage({
   const selectedImpactPlanArtifacts = selectedArtifact
     ? listImpactPlanArtifactsForStoryMap(project.id, selectedArtifact.id)
     : [];
-  const initialRippleSuggestions = selectedArtifact
-    ? listRippleSuggestionsArtifactsForStoryMap(
-        project.id,
-        selectedArtifact.id,
-      )[0] ?? null
-    : null;
+  const initialRippleSuggestionBatches = selectedArtifact
+    ? listRippleSuggestionsBatchesForStoryMap(project.id, selectedArtifact.id)
+    : [];
+  const rippleSuggestionBatchLimit = resolveRippleSuggestionMaxBatches();
   const selectedContinuationTrees = selectedWorldlines.map((worldline) => {
     const artifacts = listContinuationArtifactsForWorldline(worldline.id);
     return buildContinuationTreeView(worldline.id, [
@@ -190,9 +189,10 @@ export default async function ProjectPage({
             }))}
             initialContinuationTrees={selectedContinuationTrees}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
-            initialRippleSuggestions={initialRippleSuggestions}
+            initialRippleSuggestionBatches={initialRippleSuggestionBatches}
             initialWorldlines={selectedWorldlines}
             projectId={project.id}
+            rippleSuggestionBatchLimit={rippleSuggestionBatchLimit}
             source={selectedSource}
           />
         </>

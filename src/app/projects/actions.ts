@@ -281,6 +281,8 @@ export async function generateRippleSuggestionsAction(
     .object({
       projectId: ProjectIdSchema,
       storyMapArtifactId: z.string().min(1),
+      // 只有显式「换一批」才携带；自动首次加载沿用服务端复用路径。
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
     })
     .strict()
     .safeParse(input);
@@ -496,6 +498,8 @@ function rippleErrorMessage(error: unknown): string {
     "Mock AI 只接受公开基准故事 ripple-001",
     "Mock AI 找不到匹配",
     "Mock AI 的 Anchor 选择不匹配",
+    "换一批上限",
+    "还没有首批",
   ];
   return safeFragments.some((fragment) => error.message.includes(fragment))
     ? error.message

@@ -86,3 +86,21 @@ confirmed 之后的下游检查一行未改：Ripple Suggestions 生成器、Imp
 - 下游 confirmed 检查、Source/Evidence 校验、不可变 Artifact、Worldline 隔离与 fail closed 全部保持不变。
 - 自动建议生成会给每个没有 Suggestions 的 confirmed revision 增加一次模型调用；这是现有生成器的一次调用，不新增 Prompt 或并发路径。如果调用失败，用户仍可从时间线自己选事件继续。
 - 读者文案与内部枚举分离；日志、Schema、API 与世界线记录仍使用 `strict` / `open`。
+
+## Addendum（W4）：建议批次与显式「换一批」
+
+- `ripple_suggestions` Artifact 新增可选 `batchIndex` / `refreshOf` / `idempotencyKey`，旧行按批次 0 解析；Artifact 仍然只插入、不 UPDATE。
+- 自动加载继续复用最新批次；只有用户显式点击「换一批」才创建新批次。客户端在点击时生成幂等键，服务端用 `(storyMapArtifactId, batchIndex, idempotencyKey)` 派生目标 Artifact id，并按该 id 使用 in-flight 锁合并并发请求；相同键的重试返回同一行且不调用模型。
+- 每个 revision 的批次数上限由 `RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION`（默认 5，正整数）控制，按已持久化批次在模型调用前检查；达到上限时 fail closed 并禁用按钮。
+- 换批 Prompt（`ripple-suggestions.v4`）携带之前批次的建议 Event id 与标题；模型重复推荐已建议事件时仍保存该批次，不静默重试。
+- 界面提供 `‹ 1/2 ›` 批次切换与「换一批」；切回旧批次只读已有 Artifact，关闭/重开面板不会自动生成新批次。
+- 本轮未新增数据库表或依赖；批次元数据保存在既有 `artifacts.data_json` 中。
+
+### Open-source preflight（W4）
+
+检索日期：2026-10-17。本轮受任务约束不执行网络访问，也不复制第三方代码；结论基于仓库现有能力：
+
+- 复用已有的 immutable Artifact 行、`crypto.createHash` 确定性 id、进程内 `runWithInFlightLock`、Zod `.default()` 兼容解析与 `story-map-limits.ts` 的正整数 env 校验模式。
+- 未引入批次/状态管理库：批次导航是单个 React 状态，幂等键使用浏览器原生 `crypto.randomUUID()`。
+- 未新增表：`batchIndex` / `refreshOf` / `idempotencyKey` 都存放在既有 `artifacts.data_json`，旧行按批次 0 解析。
+- 新依赖：**none**。

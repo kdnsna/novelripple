@@ -379,6 +379,15 @@ export const RippleSuggestionsArtifactSchema = z
     kind: z.literal("ripple_suggestions"),
     schemaVersion: z.literal(1),
     suggestions: z.array(RippleSuggestionSchema).min(1).max(3),
+    /**
+     * 建议批次。旧行没有该字段，解析为批次 0（最初的唯一一组建议）。
+     * 行只追加：每次显式「换一批」写入新的 batchIndex，旧批次保持可读。
+     */
+    batchIndex: z.number().int().nonnegative().default(0),
+    /** 本次换批所基于的上一批 Artifact；批次 0 为 null。 */
+    refreshOf: z.string().min(1).nullable().default(null),
+    /** 客户端每次点击生成的幂等键；旧批次没有。 */
+    idempotencyKey: z.string().trim().min(1).max(200).nullable().default(null),
     basedOnArtifactId: z.string().min(1),
     generationRunId: z.string().min(1),
     createdAt: z.iso.datetime(),
@@ -390,6 +399,37 @@ export const RippleSuggestionsArtifactSchema = z
         code: "custom",
         path: ["basedOnArtifactId"],
         message: "Ripple Suggestions 必须直接基于 confirmed Story Map Artifact",
+      });
+    }
+    if (artifact.batchIndex === 0) {
+      if (artifact.refreshOf !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["refreshOf"],
+          message: "首批建议不能引用上一批",
+        });
+      }
+      if (artifact.idempotencyKey !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["idempotencyKey"],
+          message: "首批建议不是换批请求，不能携带幂等键",
+        });
+      }
+      return;
+    }
+    if (artifact.refreshOf === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["refreshOf"],
+        message: "换批建议必须引用上一批 Artifact",
+      });
+    }
+    if (artifact.idempotencyKey === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["idempotencyKey"],
+        message: "换批建议必须携带幂等键",
       });
     }
   });

@@ -199,7 +199,7 @@ async function evaluateStory(
       suggestionsStage = {
         ...successfulStage(
           result.generation,
-          "ripple-suggestions.v3",
+          "ripple-suggestions.v4",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
         ),
@@ -208,7 +208,7 @@ async function evaluateStory(
     } catch (error) {
       suggestionsStage = {
         ...failedStage(
-          "ripple-suggestions.v3",
+          "ripple-suggestions.v4",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
           error,
@@ -427,7 +427,7 @@ function failedStory(
     status: "failed",
     confirmedStoryMapMatched: false,
     suggestions: {
-      ...notRunStage("ripple-suggestions.v3"),
+      ...notRunStage("ripple-suggestions.v4"),
       suggestionCount: null,
       failureCode: failureCode ?? "pipeline_failed",
     },

@@ -169,7 +169,11 @@ Ripple Preview 只保存 `candidate` Impact Plan Artifact 与对应 Generation R
 
 ## Ripple Suggestions 与反馈谱系
 
-Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。同一 confirmed Story Map revision 已有 Suggestions 时，后续请求直接复用最新一组 Artifact，不再次调用模型；同一进程内按 Story Map Artifact id 合并并发请求。失败后只有用户显式重试才会再次生成。
+Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。
+
+同一 confirmed Story Map revision 的建议按批次追加：自动加载只复用最新批次，不再次调用模型；只有用户显式点击「换一批」才创建新的 `batchIndex`（0 为最初自动生成的一组），旧批次永不覆盖或删除，界面可切回任意批次。换批请求携带客户端在点击时创建的幂等键；Artifact id 由 `(storyMapArtifactId, batchIndex, idempotencyKey)` 确定性派生，并在同一进程内按该目标 id 合并并发请求。相同键的重试/并发请求返回同一 Artifact，不增加模型调用；同一 revision 的不同键按批次串行分配，避免写入重复 `batchIndex`。`refreshOf` 记录上一批 Artifact。旧行没有批次字段时解析为批次 0，不迁移历史数据。
+
+每个 revision 的批次数由 `RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION` 控制（默认 5，必须是正整数，否则 fail closed）；上限按已持久化批次在任何 Prompt 读取与模型调用前检查，达到后返回友好错误并禁用换批按钮。换批的 Prompt 会接收之前批次的建议 Event id 与标题，优先提出不同瞬间；如果模型仍只返回已建议过的 Event，批次照常保存，不因“重复”而静默重试或再次计费。每次换批仍创建独立 Generation Run 并在成功后绑定 Artifact。
 
 Impact Plan 反馈重生成是完整的新 Generation Run 与完整 `ImpactPlanModelOutput`，不是局部 patch 或聊天。每次反馈产生新的不可变 `candidate` revision，并保存 `lineage`：父 candidate Artifact、反馈文本、新 Generation Run、同一 Story Map Artifact、同一 Divergence、同一 mode 与同一 Anchors。这些字段由服务端从父 candidate 冻结，客户端不可替换；原 candidate 与任何已接受版本保持不变。只有用户明确接受的一个候选谱系才能创建 Worldline。
 
