@@ -50,6 +50,13 @@
       "when": 1786470000000,
       "tag": "0006_worldline_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786473600000,
+      "tag": "0007_background_jobs",
+      "breakpoints": true
     }
   ]
 }

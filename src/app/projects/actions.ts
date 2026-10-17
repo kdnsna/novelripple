@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { z } from "zod";
 
 import {
@@ -20,6 +21,10 @@ import {
   generateConfiguredContinuationScene,
 } from "@/server/continuation/generate-configured-continuation";
 import {
+  runStoryMapGenerationJob,
+  startStoryMapGenerationJob,
+} from "@/server/jobs/story-map-generation-job";
+import {
   generateConfiguredImpactPlan,
   regenerateConfiguredImpactPlanFromFeedback,
 } from "@/server/ripple/generate-configured-impact-plan";
@@ -33,7 +38,6 @@ import {
   createStoryMapRevision,
 } from "@/server/repositories/story-map-artifact-repository";
 import { acceptImpactPlan } from "@/server/repositories/ripple-repository";
-import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 
 const ProjectTitleSchema = z.string().trim().min(1).max(200);
 const ProjectIdSchema = z.string().min(1);
@@ -118,7 +122,7 @@ export async function importProjectSourceAction(
   redirect(`/projects/${parsedProjectId.data}?${query}`);
 }
 
-export async function generateStoryMapAction(
+export async function startStoryMapGenerationAction(
   projectId: string,
   sourceId: string,
   _previousState: ProjectActionState,
@@ -132,23 +136,20 @@ export async function generateStoryMapAction(
     .safeParse({ projectId, sourceId });
   if (!parsed.success) return { error: "Story Map 生成参数无效。" };
 
-  let artifactId: string;
+  let started: ReturnType<typeof startStoryMapGenerationJob>;
   try {
-    artifactId = (
-      await generateConfiguredStoryMap({
-        projectId: parsed.data.projectId,
-        sourceId: parsed.data.sourceId,
-      })
-    ).artifact.id;
-  } catch (error) {
-    return { error: storyMapGenerationErrorMessage(error) };
+    started = startStoryMapGenerationJob(parsed.data);
+  } catch {
+    return { error: "Story Map 生成任务创建失败，请重试。" };
   }
 
-  const query = new URLSearchParams({
-    source: parsed.data.sourceId,
-    artifact: artifactId,
-    generated: "created",
-  });
+  // 单飞：已有 queued/running 任务时只回到该任务，不启动第二个 Runner。
+  if (started.created) {
+    const jobId = started.job.id;
+    after(() => runStoryMapGenerationJob(jobId));
+  }
+
+  const query = new URLSearchParams({ source: parsed.data.sourceId });
   revalidatePath(`/projects/${parsed.data.projectId}`);
   redirect(`/projects/${parsed.data.projectId}?${query}`);
 }
@@ -386,21 +387,6 @@ function sourceImportErrorMessage(error: unknown): string {
   return safeMessages.includes(error.message)
     ? error.message
     : "Source 导入失败，请重试。";
-}
-
-function storyMapGenerationErrorMessage(error: unknown): string {
-  if (error instanceof z.ZodError) {
-    return "AI 配置不完整：请设置供应商、模型与结构化输出模式。";
-  }
-  if (!(error instanceof Error)) return "Story Map 生成失败，未保存 Artifact。";
-  const safeMessages = [
-    "找不到指定的 Source",
-    "Mock AI 只能用于测试或本地验证",
-    "Mock AI 只接受公开基准故事 ripple-001",
-  ];
-  return safeMessages.includes(error.message)
-    ? error.message
-    : "Story Map 生成失败，未保存 Artifact。";
 }
 
 function continuationErrorMessage(error: unknown): string {

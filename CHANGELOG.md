@@ -7,6 +7,8 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Added / 新增
 
+- P0 可恢复后台任务：新增 `jobs` 表与 `GET /api/jobs/[jobId]`，Story Map 生成在 `after()` 中由进程内 Runner 执行；任务记录阶段与分块计数、心跳、Artifact ID 和脱敏错误，刷新可恢复，服务重启遗留任务标为 `interrupted`，重试创建新行。Resumable background jobs: a new `jobs` table plus `GET /api/jobs/[jobId]`; Story Map generation runs in an in-process runner scheduled by `after()`, records stage/chunk progress, heartbeat, artifact id and sanitized errors, survives refreshes, marks previous-process jobs `interrupted`, and retries by appending a new row.
+- Story Map 管线新增可选 `onProgress`（默认 no-op），只观察阶段与计数，不改变 Prompt、校验、输出或模型调用次数。The Story Map pipeline now accepts an optional `onProgress` observer (default no-op) that cannot change prompts, validation, outputs or model-call counts.
 - P0 场景节点树：续写 Artifact 升级到 `schemaVersion: 2`；方向批次记录 `parentSceneId` / `batchIndex`，场景节点记录父节点、深度、`origin` / `attemptIndex` 与 ≤200 字摘要；任一场景可继续、同方向重试生成兄弟场景、「换一批」创建新批次，旧行永不 UPDATE。P0 scene node tree: v2 continuation artifacts add parent, depth, origin/attemptIndex and a ≤200-character summary; any scene can be continued, retry creates a sibling, and a new batch preserves old rows.
 - 确定性幂等 ID 与 v1 兼容：方向/场景 ID 由内容身份派生，重复请求返回同一行；v1 方向视为根批次 0，v1 场景归一化为根节点，历史数据不迁移。Deterministic content-addressed IDs and v1 compatibility: duplicate requests are idempotent; v1 rows stay readable as root nodes without migration.
 - 路径状态隔离：当前状态 = accepted Impact Plan 基础 Delta 沿根→当前节点折叠，兄弟分支互不可见；断裂父子链、跨世界线父节点或深度不连续 fail closed。Path-state isolation: the base delta is folded only along root→node, so sibling state never leaks; broken chains, cross-worldline parents and depth gaps fail closed.
@@ -41,6 +43,7 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 
 ### Changed / 变更
 
+- Story Map 生成由同步 Server Action 改为单飞后台任务 + 1 秒轮询进度；删除旧的同步 `generateStoryMapAction` 路径，成功后的页面结果与旧流程一致（打开新的候选 Story Map）。Story Map generation moved from a synchronous server action to a single-flight background job with 1-second polling; the old synchronous `generateStoryMapAction` path is removed and the success page is unchanged.
 - 续写面板从单场景线性阅读改为场景树：展示当前路径、用 `‹ 2/3 ›` 切换兄弟场景、继续、重试本幕、换一批，并可查看上下文清单。The continuation panel is now a scene-tree reader with current path, sibling switching, continue, retry, new batch and a context manifest viewer.
 - 评测门禁改为非阻塞的质量仪表盘（ADR 0005）。Evaluation gate became a non-blocking quality dashboard (ADR 0005).
 - M1 仪表盘遇到任一篇 private manifest（或来自 `NOVELRIPPLE_BENCH_ROOT`）时不再写入 `docs/evals/runs/`：报告默认与 `metrics.json` 同落在 `.data/evals/`；`--report-dir` 只允许仓库外或 Git 忽略的仓库内路径（脚本用 `git check-ignore -q` 判断），并把私有 benchmark ID 脱敏为 `private:<storyClass>`。Private M1 dashboard runs no longer write into `docs/evals/runs/`: reports stay next to `metrics.json` under `.data/evals/`; `--report-dir` is allowed only outside the repository or in a git-ignored in-repo path (checked with `git check-ignore -q`), and private benchmark IDs are redacted as `private:<storyClass>`.

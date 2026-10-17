@@ -285,6 +285,117 @@ input:focus-visible,
   line-height: 1.65;
 }
 
+.story-map-job-card {
+  display: grid;
+  width: min(1180px, calc(100% - 48px));
+  margin: 0 auto 24px;
+  padding: 26px 28px;
+  gap: 14px;
+}
+
+.story-map-job-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.story-map-job-heading h2 {
+  margin: 7px 0 0;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.story-map-job-current {
+  margin: 0;
+  color: var(--rust-dark);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.job-status-pill {
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.job-status-queued,
+.job-status-running {
+  border-color: var(--gold);
+  background: var(--gold-tint);
+  color: var(--rust-dark);
+}
+
+.job-status-succeeded {
+  border-color: var(--sage-haze);
+  background: var(--sage-mist);
+  color: var(--sage-deep);
+}
+
+.job-status-failed,
+.job-status-interrupted {
+  border-color: var(--danger-soft);
+  background: var(--danger-tint);
+  color: var(--rust-deep);
+}
+
+.story-map-job-stages {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  list-style: none;
+}
+
+.story-map-job-stage {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.story-map-job-stage.is-active {
+  border-color: var(--rust);
+  background: var(--paper-blush);
+  color: var(--rust-dark);
+  font-weight: 800;
+}
+
+.story-map-job-stage.is-done {
+  border-color: var(--sage-haze);
+  background: var(--sage-mist);
+  color: var(--sage-deep);
+}
+
+.story-map-job-meter {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--paper-sand);
+}
+
+.story-map-job-meter > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--rust), var(--gold));
+  transition: width 240ms ease;
+}
+
+.story-map-job-retry {
+  display: grid;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  gap: 10px;
+}
+
 .persisted-source {
   min-width: 0;
   padding: 34px;

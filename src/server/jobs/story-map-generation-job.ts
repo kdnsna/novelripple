@@ -1,0 +1,103 @@
+import type { Job } from "@/domain/schemas";
+import { ensureJobRecovery } from "@/server/jobs/job-recovery";
+import {
+  createJob,
+  findActiveJob,
+  getJob,
+  markJobFailed,
+  markJobRunning,
+  markJobSucceeded,
+  touchJobHeartbeat,
+  updateJobProgress,
+} from "@/server/repositories/job-repository";
+import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
+import { storyMapGenerationErrorMessage } from "@/server/story-map/story-map-generation-error";
+
+const STORY_MAP_JOB_KIND = "story_map_generation" as const;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+export type StartStoryMapGenerationJobResult = {
+  job: Job;
+  created: boolean;
+};
+
+/**
+ * 单飞启动：同一 project + source 已有 queued/running 任务时直接返回它。
+ * 返回值只负责建行；真正的后台执行由 server action 用 after() 调度，
+ * 这样同步调用路径（包括仓库测试）不会意外启动模型。
+ */
+export function startStoryMapGenerationJob(input: {
+  projectId: string;
+  sourceId: string;
+}): StartStoryMapGenerationJobResult {
+  ensureJobRecovery();
+  const existing = findActiveJob({
+    projectId: input.projectId,
+    kind: STORY_MAP_JOB_KIND,
+    sourceId: input.sourceId,
+  });
+  if (existing) return { job: existing, created: false };
+
+  return {
+    job: createJob({
+      projectId: input.projectId,
+      kind: STORY_MAP_JOB_KIND,
+      input: { sourceId: input.sourceId },
+    }),
+    created: true,
+  };
+}
+
+/**
+ * 进程内 Runner：认领任务、持续刷新心跳、把管线进度写入 job 行。
+ * 任何失败都经过 storyMapGenerationErrorMessage 脱敏后写入 error；
+ * 任务行本身只前进一次状态，重试必须创建新行。
+ */
+export async function runStoryMapGenerationJob(jobId: string): Promise<void> {
+  const queued = getJob(jobId);
+  if (!queued || queued.status !== "queued") return;
+
+  const running = markJobRunning({ id: jobId });
+  if (!running) return;
+
+  const heartbeat = setInterval(() => {
+    try {
+      touchJobHeartbeat({ id: jobId });
+    } catch {
+      console.warn("[story-map-job] 心跳写入失败");
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
+
+  try {
+    updateJobProgress({
+      id: jobId,
+      progress: { stage: "chunking", completed: 0, total: 0 },
+    });
+
+    const result = await generateConfiguredStoryMap({
+      projectId: running.projectId,
+      sourceId: running.input.sourceId,
+      onProgress: (progress) => {
+        try {
+          updateJobProgress({ id: jobId, progress });
+        } catch {
+          // 进度是辅助信息；写入失败不能让已经开始的生成半途失败。
+          console.warn("[story-map-job] 进度写入失败");
+        }
+      },
+    });
+
+    markJobSucceeded({
+      id: jobId,
+      result: { artifactId: result.artifact.id },
+    });
+  } catch (error) {
+    markJobFailed({
+      id: jobId,
+      error: storyMapGenerationErrorMessage(error),
+    });
+  } finally {
+    clearInterval(heartbeat);
+  }
+}

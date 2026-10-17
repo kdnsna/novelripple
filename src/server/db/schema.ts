@@ -62,6 +62,31 @@ export const generationRuns = sqliteTable(
   (table) => [index("generation_runs_project_kind_idx").on(table.projectId, table.kind)],
 );
 
+export const jobs = sqliteTable(
+  "jobs",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    inputJson: text("input_json").notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "succeeded", "failed", "interrupted"],
+    }).notNull(),
+    progressJson: text("progress_json").notNull(),
+    resultJson: text("result_json"),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    heartbeatAt: text("heartbeat_at").notNull(),
+  },
+  (table) => [
+    index("jobs_project_kind_idx").on(table.projectId, table.kind),
+    index("jobs_status_heartbeat_idx").on(table.status, table.heartbeatAt),
+  ],
+);
+
 export const artifacts = sqliteTable(
   "artifacts",
   {

@@ -11,7 +11,10 @@ async function createConfirmedFixtureProject(page: Page, title: string) {
   );
   await page.getByRole("button", { name: "导入 Source" }).click();
   await page.getByRole("button", { name: "生成 Story Map" }).click();
-  await expect(page.getByText("Story Map v1 · draft")).toBeVisible();
+  await expect(page.getByTestId("story-map-job-progress")).toBeVisible();
+  await expect(page.getByText("Story Map v1 · draft")).toBeVisible({
+    timeout: 15_000,
+  });
   await page.getByRole("button", { name: "查看完整图" }).click();
   await page.getByTestId("event-node-event_07").click();
   await expect(page.getByRole("heading", { name: "许澄交出红账" })).toBeVisible();

@@ -192,7 +192,10 @@ async function createFixtureStoryMap(page: Page, projectTitle: string) {
   await page.getByRole("button", { name: "导入 Source" }).click();
   await expect(page.getByRole("status")).toContainText("Source 导入成功");
   await page.getByRole("button", { name: "生成 Story Map" }).click();
-  await expect(page.getByText("Story Map v1 · draft")).toBeVisible();
+  await expect(page.getByTestId("story-map-job-progress")).toBeVisible();
+  await expect(page.getByText("Story Map v1 · draft")).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 async function clickRevisionAction(page: Page, action: ReturnType<Page["locator"]>) {
