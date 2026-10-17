@@ -128,6 +128,66 @@ export const StoryMapContentCandidateSchema =
     endingCandidates: z.array(StoryMapCandidateEndingSchema).min(1),
   });
 
+// ── 分块抽取管线的中间候选（只存在于生成过程中，不持久化）──
+
+/** “还漏了什么”补抽：只返回新增内容，可以为空。 */
+export const StoryMapGleaningCandidateSchema = z
+  .object({
+    characters: z.array(CharacterSchema),
+    events: z.array(StoryMapCandidateEventSchema),
+    edges: z.array(StoryMapCandidateEdgeSchema),
+  })
+  .strict();
+
+/** 人名轮次：把各块的人物候选归并成最终名单；每个候选必须恰好归入一个人物。 */
+export const StoryMapRosterCandidateSchema = z
+  .object({
+    characters: z
+      .array(
+        CharacterSchema.extend({
+          mergedFrom: z.array(z.string().min(1)).min(1),
+        }).strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+/** 结局轮次：故事结局 + 人物结局，必要时补充收尾事件。 */
+export const StoryMapEndingPassCandidateSchema = z
+  .object({
+    additionalEvents: z.array(StoryMapCandidateEventSchema),
+    endings: z.array(StoryMapCandidateEndingSchema).min(1),
+    characterEndings: z.array(
+      z
+        .object({
+          id: StateFactIdSchema,
+          characterId: z.string().min(1),
+          targetEventId: z.string().min(1),
+          fate: z.string().min(1),
+          ...evidenceUnitIdsShape,
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+/** 最终合并：指出跨块重复事件、补充跨块因果边，并给出全书标题与梗概。 */
+export const StoryMapMergeCandidateSchema = z
+  .object({
+    title: z.string().min(1),
+    logline: z.string().min(1),
+    duplicateEventGroups: z.array(
+      z
+        .object({
+          keepEventId: z.string().min(1),
+          duplicateEventIds: z.array(z.string().min(1)).min(1),
+        })
+        .strict(),
+    ),
+    edges: z.array(StoryMapCandidateEdgeSchema),
+  })
+  .strict();
+
 export const StoryMapSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -150,3 +210,10 @@ export type StoryMapContentCandidate = z.infer<
   typeof StoryMapContentCandidateSchema
 >;
 export type StoryMap = z.infer<typeof StoryMapSchema>;
+export type StoryMapCandidateEvent = z.infer<typeof StoryMapCandidateEventSchema>;
+export type StoryMapCandidateEdge = z.infer<typeof StoryMapCandidateEdgeSchema>;
+export type StoryMapCandidateEnding = z.infer<typeof StoryMapCandidateEndingSchema>;
+export type StoryMapGleaningCandidate = z.infer<typeof StoryMapGleaningCandidateSchema>;
+export type StoryMapRosterCandidate = z.infer<typeof StoryMapRosterCandidateSchema>;
+export type StoryMapEndingPassCandidate = z.infer<typeof StoryMapEndingPassCandidateSchema>;
+export type StoryMapMergeCandidate = z.infer<typeof StoryMapMergeCandidateSchema>;

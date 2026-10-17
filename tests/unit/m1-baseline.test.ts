@@ -279,8 +279,8 @@ describe("M1 baseline contract", () => {
       summarizeStoryMapValidation({
         calls: [
           succeededCall("story_map_extraction", "initial"),
-          succeededCall("story_map_content", "initial"),
-          succeededCall("story_map_content", "repair"),
+          succeededCall("story_map_merge", "initial"),
+          succeededCall("story_map_merge", "repair"),
         ],
         runs: [
           { kind: "story_map_extract", status: "succeeded" },

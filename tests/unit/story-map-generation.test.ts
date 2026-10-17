@@ -5,21 +5,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { validateStoryMap } from "@/domain/invariants/validate-story-map";
-import type {
-  Source,
-  SourceReference,
-  StoryMap,
-  StoryMapContentCandidate,
-  StoryMapExtractionCandidate,
-} from "@/domain/schemas";
-import {
-  StoryMapContentCandidateSchema,
-  StoryMapExtractionCandidateSchema,
-} from "@/domain/schemas";
-import {
-  deriveEvidenceUnits,
-  type EvidenceUnit,
-} from "@/domain/source/evidence-units";
+import { deriveEvidenceUnitChunks } from "@/domain/source/evidence-unit-chunks";
+import { deriveEvidenceUnits } from "@/domain/source/evidence-units";
+import { CHARACTER_ENDING_PREFIX } from "@/domain/story-map/assemble-story-map-candidate";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
@@ -30,7 +18,11 @@ import {
   importProjectSource,
 } from "@/server/repositories/project-repository";
 import { listStoryMapArtifactsForSource } from "@/server/repositories/story-map-artifact-repository";
-import { generateStoryMap } from "@/server/story-map/generate-story-map";
+import { buildFixtureStoryMapResponses } from "@/server/story-map/fixture-story-map-responses";
+import {
+  STORY_MAP_PROMPT_VERSIONS,
+  generateStoryMap,
+} from "@/server/story-map/generate-story-map";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 
 let temporaryDirectory: string;
@@ -52,83 +44,6 @@ afterAll(async () => {
   await rm(temporaryDirectory, { recursive: true });
 });
 
-function toUnitIds(reference: SourceReference, units: EvidenceUnit[]) {
-  const unit = units.find(
-    (candidate) =>
-      candidate.sectionId === reference.sectionId &&
-      candidate.start <= reference.start &&
-      candidate.end >= reference.end,
-  );
-  if (!unit) throw new Error("Fixture Evidence 缺少对应 Unit");
-  return [unit.id];
-}
-
-function withEvidenceUnitIds<T extends { evidence: SourceReference[] }>(
-  value: T,
-  units: EvidenceUnit[],
-) {
-  const { evidence, ...rest } = value;
-  return {
-    ...rest,
-    evidenceUnitIds: evidence.flatMap((reference) =>
-      toUnitIds(reference, units),
-    ),
-  };
-}
-
-function createCandidates(
-  storyMap: StoryMap,
-  source: Source,
-): {
-  extraction: StoryMapExtractionCandidate;
-  reconciled: StoryMapContentCandidate;
-} {
-  const units = deriveEvidenceUnits(source);
-  const events = storyMap.events.map((event) =>
-    withEvidenceUnitIds(event, units),
-  );
-  const edges = storyMap.edges.map((edge) =>
-    withEvidenceUnitIds(edge, units),
-  );
-  const base = {
-    title: storyMap.title,
-    logline: storyMap.logline,
-    characters: storyMap.characters,
-    events,
-    edges,
-  };
-  const duplicateEvent = {
-    ...events[5],
-    id: "event_06_duplicate",
-    participants: events[5].participants.map((participant) =>
-      participant === "char_shenyan" ? "char_shenyan_alias" : participant,
-    ),
-  };
-
-  return {
-    extraction: StoryMapExtractionCandidateSchema.parse({
-      ...base,
-      characters: [
-        ...base.characters,
-        {
-          id: "char_shenyan_alias",
-          name: "沈叔",
-          aliases: [],
-          role: "supporting",
-          initialState: "持有半把钥匙的退休守灯人",
-        },
-      ],
-      events: [...events, duplicateEvent],
-    }),
-    reconciled: StoryMapContentCandidateSchema.parse({
-      ...base,
-      endingCandidates: storyMap.endingCandidates.map((ending) => ({
-        ...withEvidenceUnitIds(ending, units),
-      })),
-    }),
-  };
-}
-
 async function createContext() {
   const fixture = await loadRippleFixture();
   const project = createProject({ title: "Story Map generation" });
@@ -137,19 +52,42 @@ async function createContext() {
     fileName: "ripple-001.md",
     bytes: new TextEncoder().encode(fixture.source.originalText),
   });
-  const candidates = createCandidates(fixture.storyMap, imported.source);
-
-  return { fixture, project, source: imported.source, ...candidates };
+  const source = imported.source;
+  const units = deriveEvidenceUnits(source);
+  const chunks = deriveEvidenceUnitChunks(units);
+  const responses = buildFixtureStoryMapResponses(source, fixture.storyMap);
+  return { fixture, project, source, units, chunks, responses };
 }
+
+/** 响应在队列中的位置：每块 extract → 每块 glean → names → endings → merge。 */
+function stageIndex(chunkCount: number) {
+  return {
+    extract: (chunk: number) => chunk,
+    glean: (chunk: number) => chunkCount + chunk,
+    names: 2 * chunkCount,
+    endings: 2 * chunkCount + 1,
+    merge: 2 * chunkCount + 2,
+  };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function edit(responses: string[], index: number, change: (value: any) => void): string[] {
+  const copy = [...responses];
+  const value = JSON.parse(copy[index]!);
+  change(value);
+  copy[index] = JSON.stringify(value);
+  return copy;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const modelConfig = {
   model: "mock-story-model",
   structuredOutputMode: "json_schema" as const,
 };
 
-describe("traceable Story Map generation pipeline", () => {
+describe("chunked Story Map recall pipeline", () => {
   it("runs the explicit deterministic Mock configuration without a real model", async () => {
-    const { project, source } = await createContext();
+    const { project, source, chunks } = await createContext();
     const previousProvider = process.env.AI_PROVIDER_NAME;
     const previousModel = process.env.OPENAI_MODEL;
     const previousMode = process.env.OPENAI_STRUCTURED_OUTPUT_MODE;
@@ -170,9 +108,10 @@ describe("traceable Story Map generation pipeline", () => {
         review: { evidenceConfirmations: [] },
         storyMap: { status: "draft" },
       });
+      expect(chunks.length).toBeGreaterThan(1);
       expect(
         listProjectGenerationRuns(project.id).map((run) => run.provider),
-      ).toEqual(["mock", "mock"]);
+      ).toEqual(Array(2 * chunks.length + 3).fill("mock"));
     } finally {
       restoreEnvironment("AI_PROVIDER_NAME", previousProvider);
       restoreEnvironment("OPENAI_MODEL", previousModel);
@@ -180,13 +119,10 @@ describe("traceable Story Map generation pipeline", () => {
     }
   });
 
-  it("creates a valid ripple-001 draft Artifact with traceable runs", async () => {
-    const { project, source, extraction, reconciled } = await createContext();
+  it("creates a valid ripple-001 draft Artifact through every stage with traceable runs", async () => {
+    const { fixture, project, source, chunks, responses } = await createContext();
     const sourceBefore = structuredClone(source);
-    const provider = new MockAIProvider([
-      JSON.stringify(extraction),
-      JSON.stringify(reconciled),
-    ]);
+    const provider = new MockAIProvider(responses);
 
     const result = await generateStoryMap({
       projectId: project.id,
@@ -201,134 +137,210 @@ describe("traceable Story Map generation pipeline", () => {
       version: 1,
       kind: "story_map",
       generationRunId: result.generation.reconcilerRunId,
-      storyMap: {
-        sourceId: source.id,
-        version: 1,
-        status: "draft",
-      },
+      storyMap: { sourceId: source.id, version: 1, status: "draft" },
     });
-    expect(result.artifact.storyMap.events).toHaveLength(12);
-    expect(result.artifact.storyMap.characters).toHaveLength(5);
-    expect(result.artifact.storyMap.characters).not.toContainEqual(
-      expect.objectContaining({ id: "char_shenyan_alias" }),
+    const storyMap = result.artifact.storyMap;
+    expect(storyMap.events.map((event) => [event.id, event.sequence])).toEqual(
+      fixture.storyMap.events.map((event) => [event.id, event.sequence]),
     );
-    expect(validateStoryMap(result.artifact.storyMap, source)).toEqual([]);
+    expect(storyMap.characters.map((character) => character.id).sort()).toEqual(
+      fixture.storyMap.characters.map((character) => character.id).sort(),
+    );
+    expect(storyMap.edges).toHaveLength(fixture.storyMap.edges.length);
+    expect(storyMap.endingCandidates).toHaveLength(4);
+    expect(validateStoryMap(storyMap, source)).toEqual([]);
     expect(getProjectSource(project.id, source.id)).toEqual(sourceBefore);
-    expect(provider.requests).toHaveLength(2);
-    expect(provider.requests[0]?.prompt).toContain("<evidence_units>");
-    expect(provider.requests[0]?.prompt).toContain(
-      `evidence_unit:${source.id}:`,
-    );
-    expect(provider.requests[0]?.prompt).toContain("不得返回 `exactQuote`");
-    expect(provider.requests[0]?.prompt).not.toContain("<normalized_text>");
-    expect(provider.requests[1]?.prompt).toContain("endingCandidates");
+
+    expect(provider.requests).toHaveLength(2 * chunks.length + 3);
+    const [firstChunk, secondChunk] = provider.requests;
+    expect(firstChunk?.prompt).toContain("<story_chunk");
+    expect(firstChunk?.prompt).toContain(`evidence_unit:${source.id}:`);
+    expect(firstChunk?.prompt).toContain("不得返回 `exactQuote`");
+    expect(firstChunk?.prompt).toContain("<name_hints>");
+    expect(firstChunk?.prompt).not.toContain(chunks[1]!.coreUnitIds.at(-1));
+    expect(secondChunk?.prompt).toContain('"ownership":"context"');
+    const stage = stageIndex(chunks.length);
+    expect(provider.requests[stage.glean(0)]?.prompt).toContain("<previous_extraction>");
+    expect(provider.requests[stage.names]?.prompt).toContain("<character_candidates>");
+    expect(provider.requests[stage.names]?.prompt).not.toContain("<story_chunk");
+    expect(provider.requests[stage.endings]?.prompt).toContain("<story_ending_text");
+    expect(provider.requests[stage.merge]?.prompt).toContain("duplicateEventGroups");
 
     const runs = listProjectGenerationRuns(project.id);
-    const extractorRun = runs.find(
-      (run) => run.id === result.generation.extractorRunId,
-    );
-    const reconcilerRun = runs.find(
-      (run) => run.id === result.generation.reconcilerRunId,
-    );
-    expect(extractorRun).toMatchObject({
-      kind: "story_map_extract",
-      promptVersion: "story-map.v2",
-      status: "succeeded",
-    });
-    expect(reconcilerRun).toMatchObject({
-      kind: "story_map_reconcile",
-      promptVersion: "story-map-reconcile.v2",
-      status: "succeeded",
-    });
+    const describeRun = (run: { kind: string; promptVersion: string; status: string }) =>
+      [run.kind, run.promptVersion, run.status].join("|");
+    expect(runs.map(describeRun).sort()).toEqual([
+      ...chunks.map(() => ["story_map_extract", STORY_MAP_PROMPT_VERSIONS.extract, "succeeded"]),
+      ...chunks.map(() => ["story_map_glean", STORY_MAP_PROMPT_VERSIONS.glean, "succeeded"]),
+      ["story_map_names", STORY_MAP_PROMPT_VERSIONS.names, "succeeded"],
+      ["story_map_endings", STORY_MAP_PROMPT_VERSIONS.endings, "succeeded"],
+      ["story_map_reconcile", STORY_MAP_PROMPT_VERSIONS.merge, "succeeded"],
+    ].map((parts) => parts.join("|")).sort());
   });
 
-  it("repairs one deterministic Reconciler failure and then persists", async () => {
-    const { project, source, extraction, reconciled } = await createContext();
-    const invalid = structuredClone(reconciled);
-    invalid.edges[0].to = "event_missing";
-    const provider = new MockAIProvider([
-      JSON.stringify(extraction),
-      JSON.stringify(invalid),
-      JSON.stringify(reconciled),
-    ]);
+  it("keeps what gleaning, the names pass, the endings pass and the merge add", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const stage = stageIndex(chunks.length);
+    const lastUnit = chunks.at(-1)!.coreUnitIds.at(-1)!;
+    const secondChunkUnit = chunks[1]!.coreUnitIds[3]!;
+    let edited = edit(responses, stage.glean(1), (gleaning) => {
+      gleaning.characters.push({
+        id: "char_harbor_clerk",
+        name: "港务书记员",
+        aliases: [],
+        role: "supporting",
+        initialState: "在港务处值班",
+      });
+      gleaning.events.push(
+        {
+          id: "event_clerk_note",
+          title: "书记员记下时间",
+          summary: "书记员记下钟楼停摆的时间",
+          sequence: 1,
+          participants: ["char_harbor_clerk", "char_shenyan"],
+          stateChanges: [],
+          evidenceKind: "fact",
+          evidenceUnitIds: [secondChunkUnit],
+        },
+        {
+          id: "event_12_again",
+          title: "结尾重述",
+          summary: "同一结尾在另一片段被再次描述",
+          sequence: 1,
+          participants: ["char_xucheng"],
+          stateChanges: ["重述"],
+          evidenceKind: "fact",
+          evidenceUnitIds: [lastUnit],
+        },
+      );
+    });
+    // 名单：把书记员候选并入一个新的正式 ID，并给沈砚加别名。
+    edited = edit(edited, stage.names, (roster) => {
+      roster.characters.push({
+        id: "char_clerk",
+        name: "港务书记员",
+        aliases: ["书记员"],
+        role: "supporting",
+        initialState: "在港务处值班",
+        mergedFrom: ["char_harbor_clerk"],
+      });
+      const shen = roster.characters.find((c: { id: string }) => c.id === "char_shenyan");
+      shen.aliases = [...new Set([...shen.aliases, "沈老"])];
+    });
+    edited = edit(edited, stage.endings, (pass) => {
+      pass.characterEndings.push({
+        id: "ending_fate_clerk",
+        characterId: "char_clerk",
+        targetEventId: "event_clerk_note",
+        fate: "继续在港务处值班",
+        evidenceUnitIds: [secondChunkUnit],
+      });
+    });
+    edited = edit(edited, stage.merge, (merge) => {
+      merge.duplicateEventGroups.push({ keepEventId: "event_12", duplicateEventIds: ["event_12_again"] });
+    });
 
     const result = await generateStoryMap({
       projectId: project.id,
       sourceId: source.id,
-      provider,
+      provider: new MockAIProvider(edited),
       modelConfig,
     });
+    const storyMap = result.artifact.storyMap;
 
-    expect(provider.requests).toHaveLength(3);
-    expect(provider.requests[2]?.repair?.validationIssues).toEqual(
-      expect.arrayContaining([expect.stringContaining("悬空引用")]),
+    expect(storyMap.characters.map((c) => c.id)).toContain("char_clerk");
+    expect(storyMap.characters.find((c) => c.id === "char_shenyan")?.aliases).toContain("沈老");
+    const clerkEvent = storyMap.events.find((event) => event.id === "event_clerk_note");
+    expect(clerkEvent?.participants).toEqual(["char_clerk", "char_shenyan"]);
+    expect(storyMap.events.map((event) => event.id)).not.toContain("event_12_again");
+    const ending = storyMap.events.find((event) => event.id === "event_12")!;
+    expect(ending.stateChanges).toContain("重述");
+    expect(storyMap.endingCandidates).toContainEqual(
+      expect.objectContaining({
+        id: "ending_fate_clerk",
+        requirement: `${CHARACTER_ENDING_PREFIX}港务书记员：继续在港务处值班`,
+      }),
     );
-    expect(
-      listProjectGenerationRuns(project.id).find(
-        (run) => run.id === result.generation.reconcilerRunId,
-      ),
-    ).toMatchObject({ status: "succeeded" });
-    expect(result.artifact.storyMap.sourceId).toBe(source.id);
+    expect(storyMap.events.map((event) => event.sequence)).toEqual(
+      storyMap.events.map((_, index) => index + 1),
+    );
+    expect(validateStoryMap(storyMap, source)).toEqual([]);
   });
 
-  it("fails closed after one invalid repair and creates no Artifact", async () => {
-    const { project, source, extraction, reconciled } = await createContext();
-    const firstInvalid = structuredClone(reconciled);
-    firstInvalid.events[0].participants.push("char_missing");
-    const secondInvalid = structuredClone(reconciled);
-    secondInvalid.endingCandidates[0].targetEventId = "event_missing";
-    const provider = new MockAIProvider([
-      JSON.stringify(extraction),
-      JSON.stringify(firstInvalid),
-      JSON.stringify(secondInvalid),
-      JSON.stringify(reconciled),
-    ]);
+  it("repairs a chunk that cites a paragraph outside the chunk, then fails closed if the repair is still invalid", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const outside = chunks[1]!.coreUnitIds.at(-1)!;
+    const invalid = edit(responses, 0, (extraction) => {
+      extraction.events[0].evidenceUnitIds = [outside];
+    })[0]!;
+    const provider = new MockAIProvider([invalid, invalid, ...responses.slice(1)]);
 
     await expect(
-      generateStoryMap({
-        projectId: project.id,
-        sourceId: source.id,
-        provider,
-        modelConfig,
-      }),
+      generateStoryMap({ projectId: project.id, sourceId: source.id, provider, modelConfig }),
     ).rejects.toThrow("Structured generation failed schema validation");
 
-    expect(provider.requests).toHaveLength(3);
-    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([]);
-    expect(
-      listProjectGenerationRuns(project.id).map((run) => ({
-        kind: run.kind,
-        status: run.status,
-      })),
-    ).toEqual(
-      expect.arrayContaining([
-        { kind: "story_map_extract", status: "succeeded" },
-        { kind: "story_map_reconcile", status: "failed" },
-      ]),
+    expect(provider.requests[0]?.repair).toBeUndefined();
+    const repaired = provider.requests.find((request) => request.repair);
+    expect(repaired?.repair?.validationIssues).toEqual(
+      expect.arrayContaining([expect.stringContaining("本阶段未提供的 Unit")]),
     );
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([]);
+    expect(listProjectGenerationRuns(project.id).map((run) => run.kind)).not.toContain(
+      "story_map_reconcile",
+    );
+  });
+
+  it("repairs a names pass that drops a character candidate", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const stage = stageIndex(chunks.length);
+    const invalid = edit(responses, stage.names, (roster) => {
+      roster.characters[0].mergedFrom = ["char_unknown"];
+    })[stage.names]!;
+    const queue = [...responses];
+    queue.splice(stage.names, 0, invalid);
+    const provider = new MockAIProvider(queue);
+
+    const result = await generateStoryMap({ projectId: project.id, sourceId: source.id, provider, modelConfig });
+
+    expect(provider.requests[stage.names + 1]?.repair?.validationIssues).toEqual(
+      expect.arrayContaining([expect.stringContaining("没有归入任何人物")]),
+    );
+    expect(result.artifact.storyMap.characters).toHaveLength(5);
+  });
+
+  it("repairs one invalid merge and fails closed after a second invalid merge", async () => {
+    const { project, source, chunks, responses } = await createContext();
+    const stage = stageIndex(chunks.length);
+    const dangling = edit(responses, stage.merge, (merge) => {
+      merge.edges[0].to = "event_missing";
+    })[stage.merge]!;
+
+    const repairedProvider = new MockAIProvider([...responses.slice(0, stage.merge), dangling, responses[stage.merge]!]);
+    const repaired = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider: repairedProvider,
+      modelConfig,
+    });
+    expect(repairedProvider.requests.at(-1)?.repair?.validationIssues).toEqual(
+      expect.arrayContaining([expect.stringContaining("悬空引用")]),
+    );
+    expect(repaired.artifact.storyMap.sourceId).toBe(source.id);
+
+    const failingProvider = new MockAIProvider([...responses.slice(0, stage.merge), dangling, dangling]);
+    const before = listStoryMapArtifactsForSource(project.id, source.id).length;
+    await expect(
+      generateStoryMap({ projectId: project.id, sourceId: source.id, provider: failingProvider, modelConfig }),
+    ).rejects.toThrow("Structured generation failed schema validation");
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toHaveLength(before);
   });
 
   it("creates a new versioned Artifact when the same Source is rerun", async () => {
-    const { project, source, extraction, reconciled } = await createContext();
-    const provider = new MockAIProvider([
-      JSON.stringify(extraction),
-      JSON.stringify(reconciled),
-      JSON.stringify(extraction),
-      JSON.stringify(reconciled),
-    ]);
+    const { project, source, responses } = await createContext();
+    const provider = new MockAIProvider([...responses, ...responses]);
 
-    const first = await generateStoryMap({
-      projectId: project.id,
-      sourceId: source.id,
-      provider,
-      modelConfig,
-    });
-    const second = await generateStoryMap({
-      projectId: project.id,
-      sourceId: source.id,
-      provider,
-      modelConfig,
-    });
+    const first = await generateStoryMap({ projectId: project.id, sourceId: source.id, provider, modelConfig });
+    const second = await generateStoryMap({ projectId: project.id, sourceId: source.id, provider, modelConfig });
 
     expect(first.artifact.version).toBe(1);
     expect(second.artifact).toMatchObject({
@@ -336,10 +348,7 @@ describe("traceable Story Map generation pipeline", () => {
       kind: "story_map_revision",
       basedOnArtifactId: first.artifact.id,
     });
-    expect(second.artifact.id).not.toBe(first.artifact.id);
-    expect(listStoryMapArtifactsForSource(project.id, source.id)).toHaveLength(
-      2,
-    );
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toHaveLength(2);
   });
 });
 
