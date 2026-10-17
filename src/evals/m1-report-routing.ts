@@ -113,8 +113,14 @@ export function resolveM1ReportRouting(
     : undefined;
 
   if (privateRun && reportDirProvided && resolvedReportDir) {
+    // 仓库根同样 realpath，两侧口径一致；否则经符号链接传入的仓库根会让
+    // 仓库内的真实路径被误判为仓库外。
+    const repositoryRoot = resolveRealpathWithMissingTail(
+      input.repositoryRoot,
+      input.realpath ?? realpathSync,
+    );
     if (
-      isPathInside(input.repositoryRoot, resolvedReportDir) &&
+      isPathInside(repositoryRoot, resolvedReportDir) &&
       input.isGitIgnored?.(resolvedReportDir) !== true
     ) {
       throw new M1ReportRoutingError(

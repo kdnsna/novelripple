@@ -183,4 +183,28 @@ describe("M1 report routing", () => {
       await rm(temp, { recursive: true, force: true });
     }
   });
+
+  it("realpaths the repository root too, so a symlinked root cannot hide an in-repo report dir", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "m1-report-routing-"));
+    try {
+      const repo = path.join(temp, "repo");
+      const tracked = path.join(repo, "docs");
+      await mkdir(tracked, { recursive: true });
+      const repoLink = path.join(temp, "repo-link");
+      await symlink(repo, repoLink, "dir");
+
+      expect(() =>
+        resolveM1ReportRouting({
+          repositoryRoot: repoLink,
+          stories: [story({ visibility: "private" })],
+          reportDir: path.join(realpathSync(tracked), "run"),
+          reportDirProvided: true,
+          isGitIgnored: () => false,
+          realpath: (candidate) => realpathSync(candidate),
+        }),
+      ).toThrow(M1ReportRoutingError);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
 });
