@@ -90,34 +90,43 @@ describe("buildPathSummary", () => {
     expect(summary.watermarkSceneId).toBe("scene_v2");
   });
 
-  it("drops the oldest lines first and prepends the omission marker", () => {
-    const summary = buildPathSummary({ pathNodes: path, maxChars: 34 });
+  it("keeps the newest line verbatim and compresses older lines", () => {
+    const summary = buildPathSummary({ pathNodes: path, maxChars: 40 });
 
     expect(summary.text).toBe(
       [
-        "（更早的 1 幕已省略）",
+        "更早剧情（第 1–1 幕）：钟楼初见",
         "第 2 幕：雨夜相约——两人约定次日再见。",
       ].join("\n"),
     );
-    expect(summary.coveredSceneIds).toEqual(["scene_2"]);
+    expect(summary.coveredSceneIds).toEqual(["scene_1", "scene_2"]);
     expect(summary.watermarkSceneId).toBe("scene_2");
     expect(summary.truncated).toBe(true);
   });
 
-  it("can drop every summarised line but still reports truncation", () => {
-    const summary = buildPathSummary({ pathNodes: path, maxChars: 30 });
+  it("compresses all summarised lines into one marker when nothing else fits", () => {
+    const summary = buildPathSummary({ pathNodes: path, maxChars: 34 });
 
-    expect(summary).toEqual({
-      text: "（更早的 2 幕已省略）",
-      coveredSceneIds: [],
-      watermarkSceneId: null,
-      truncated: true,
-    });
+    expect(summary.text).toBe(
+      "更早剧情（第 1–2 幕）：钟楼初见；雨夜相约",
+    );
+    expect(summary.coveredSceneIds).toEqual(["scene_1", "scene_2"]);
+    expect(summary.watermarkSceneId).toBe("scene_2");
+    expect(summary.truncated).toBe(true);
   });
 
-  it("fails closed when even the omission marker cannot fit", () => {
+  it("truncates compressed titles by whole titles only", () => {
+    const summary = buildPathSummary({ pathNodes: path, maxChars: 22 });
+
+    expect(summary.text).toBe("更早剧情（第 1–2 幕）：钟楼初见");
+    // 第二条标题没有被切成半截。
+    expect(summary.text).not.toContain("雨夜");
+    expect(summary.coveredSceneIds).toEqual(["scene_1", "scene_2"]);
+  });
+
+  it("fails closed when even the compressed marker cannot fit", () => {
     expect(() =>
-      buildPathSummary({ pathNodes: path, maxChars: 5 }),
+      buildPathSummary({ pathNodes: path, maxChars: 13 }),
     ).toThrow("路径摘要预算过小");
   });
 

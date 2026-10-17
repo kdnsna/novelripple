@@ -25,26 +25,40 @@ P0 要在不改变不可变 Artifact、candidate-first、世界线隔离和 fail
 
 accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 `baseDelta` 依次折叠根→当前节点路径上的每个 `statePatch`。折叠不读取兄弟分支、路径外场景或未来节点。路径必须属于同一 Worldline、父子链连续、深度逐级加一，否则 fail closed。因此“旧节点不可变”带来的结论是：改写旧内容只能创建兄弟节点，兄弟分支的状态永远不会互相污染。
 
-### 3. 上下文按固定六段组装
+### 3. 上下文按固定七段组装
 
 素材按固定顺序进入 `<continuation_context>`：
 
 1. `worldline_setup`；
-2. `path_summary`；
-3. `canon_evidence`（继续复用 `selectContinuationContext` 的 6000 字符 / Source 25% 上限）；
-4. `recent_scenes`（最近 2 个场景正文）；
-5. `selected_direction`；
-6. `anchor_reminder`。
+2. `canon_events`（相关 Canon 事件、事件之间的边与 Anchor 目标结局）；
+3. `path_summary`；
+4. `canon_evidence`（相关事件证据在前，代表窗口/人物证据在后，后者继续复用 `selectContinuationContext` 的 6000 字符 / Source 25% 上限）；
+5. `recent_scenes`（最近 2 个场景正文）；
+6. `selected_direction`；
+7. `anchor_reminder`。
 
-总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，按 UTF-16 字符数而非 token 计算。超预算时依次：从末尾整条丢弃 `canon_evidence` → 从最旧开始整条丢弃 `recent_scenes`（始终保留最新一个场景）→ 从开头截断 `path_summary`。`worldline_setup`、`anchor_reminder` 以及场景生成时的 `selected_direction` 永不裁剪；配置非法，或必需段与最新场景本身超预算时 fail closed。系统 Prompt 模板不计入该素材预算。
+总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，按 UTF-16 字符数而非 token 计算，只约束组装后的上下文素材，不包含约 2–3k 字符的系统 Prompt 模板。超预算时依次：先用紧凑 `currentState`（计数 + key，无 fact 正文）替换完整 `worldline_setup`；按 priority 从低到高丢弃 `canon_evidence`（同优先级从末尾，相关事件证据最后丢）；从最旧开始整条丢弃 `recent_scenes`（始终保留最新一个场景）；按整行从开头裁剪 `path_summary`（保留首行省略提示到最后一刻，不切半行）；用最新场景自己的 `summary` 替换正文并记入 `droppedItemIds`。只有仍超预算才 fail closed。`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 永不裁剪（`worldline_setup` 只允许整体替换为更紧凑的等价形式）。
 
-每次场景生成保存不含正文的 Context Manifest：只含段名、`included`、`chars`、`trimmed`、`droppedItemIds` 与预算计数。manifest 随场景 Artifact 保存，前端抽屉只展示段名、字数和丢弃项数量，不展示原文或生成正文。
+每次场景生成保存不含正文的 Context Manifest：只含段名、`included`、`chars`、`trimmed`、`droppedItemIds`、`budget` 计数，以及 `path_summary` 的 `coveredItemIds` / `watermarkId`（只含场景 id）。manifest 随场景 Artifact 保存，前端抽屉只展示段名、字数和丢弃项数量，不展示原文或生成正文。
 
 ### 4. 路径滚动摘要是确定性派生，不额外调用模型
 
-`continuation-scene.v3` 顺带输出 ≤200 字的场景 `summary`，与场景一同不可变保存。组装上下文时沿根→当前节点构建滚动摘要：最近 2 个场景保留原文，更早的场景按旧→新写成摘要行；超过 1200 字符时从最旧一行开始省略并加省略提示，`watermarkSceneId` 记录最后一条被摘要覆盖的节点。摘要是纯函数派生，同一输入逐字节相同，不查询兄弟分支，也不需要单独的摘要表或缓存。
+`continuation-scene.v3` 顺带输出 ≤200 字的场景 `summary`，与场景一同不可变保存。组装上下文时沿根→当前节点构建滚动摘要：最近 2 个场景保留原文，更早的场景按旧→新写成摘要行；超过 1200 字符时保留最新若干行原文，把更早的场景压缩成一行 `更早剧情（第 a–b 幕）：` + 场景标题（按整条标题截断），`watermarkSceneId` 记录实际被摘要覆盖的最后一个节点。摘要是纯函数派生，同一输入逐字节相同，不查询兄弟分支，也不需要单独的摘要表或缓存。
 
-### 5. v1 保持可读，不做迁移
+### 5. v3 上下文与 v2 Prompt packet 的差异
+
+v2 packet 的字段去向：
+
+- `readonlyCanonical` → `canon_events`，字段不变：`sourceId`、`storyMapArtifactId`、`storyMapId`、`characters`、相关事件的 id/title/summary/sequence/participants/stateChanges、事件之间的 edges、Anchor 目标 endingCandidates。
+- `relevantEvidence` → `canon_evidence` 的前半部分，id 为 `related:<eventId>:<n>`；相关事件证据优先级最高，裁剪时最后丢弃。
+- `styleContext.representativeExcerpts` / `styleContext.characterEvidence` → `canon_evidence` 的后半部分，仍由 `selectContinuationContext` 选择，先于相关事件证据被裁剪。
+- `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` → `worldline_setup`：世界线 id/mode、Divergence、anchors、Story Map id/title/logline、人物 id/name/aliases/role、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态。完整 worldline 行不再发送；省略的是数据库/审计字段（`parentWorldlineId`、`baseStoryMapArtifactId`、`acceptedImpactPlanId`、`idempotencyKey`、`createdAt`、`status` 等），不影响生成语义。
+- `stage` 由 Prompt 版本承担；`selectedDirection` 仍是 `selected_direction`。
+- 新增：`path_summary`、`recent_scenes`、`anchor_reminder`、Context Manifest 与段级字符预算。
+
+`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。
+
+### 6. v1 保持可读，不做迁移
 
 v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`）。历史行保留原样并可作为根父节点；新生成只写 v2 方向、v2 场景和 v3 模型输出。
 
@@ -59,9 +73,9 @@ v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树�
 
 ## 后果
 
-- 旧方向和旧场景不被覆盖；继续、重试和换一批都产生新行，历史可回读。确定性 ID 让并发重复请求幂等，不产生重复批次或重复场景。
+- 旧方向和旧场景不被覆盖；继续、重试和换一批都产生新行，历史可回读。确定性 ID 让并发重复请求幂等，不产生重复批次或重复场景；同一进程内按目标 Artifact id 的 in-flight 锁让并发同内容请求只调用一次模型。
 - 兄弟分支的状态与摘要互不可见；断裂父子链、跨世界线父节点、深度不连续或循环引用都在构树时 fail closed，不返回部分树。
-- 上下文预算有硬上限，manifest 可审计且不泄露正文。代价是预算按字符近似 token，且没有按段配额：单个最新场景过大时可能挤掉全部 `canon_evidence`，甚至与必需段一起超预算而失败。这是有意的 fail-closed 取舍，不静默截断最新场景。
+- 上下文预算有硬上限，manifest 可审计且不泄露正文。代价是预算按字符近似 token，且没有按段配额：深层路径先用紧凑 `currentState`，再用最新场景摘要兜底；只有兜底后仍超预算才 fail closed，不会把最新场景切成半段。
 - 路径摘要不增加模型调用，但需要每个场景都产出 `summary`；v1 场景只有标题，摘要行会退化为标题，不会伪造旧场景摘要。
 - v1 兼容只做读取归一化，不迁移历史行；v1 场景只能作为根节点，不能获得真实的祖先树。
 - 当前 UI 默认沿首选分支（每层优先 `attemptIndex === 0`）走到叶子，兄弟用 `‹ 2/3 ›` 切换；“当前阅读位置”仍由客户端选择表达，尚未持久化 `headNodeId`。

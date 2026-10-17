@@ -5,6 +5,7 @@
 输入中的 `<continuation_context>` 是只读素材，按固定顺序包含：
 
 - `worldline_setup`：世界线、分歧、已接受 ImpactPlan 摘要、人物 ID、当前路径状态；
+- `canon_events`：与当前 ImpactPlan/Anchor 相关的 Canon 事件、这些事件之间的边与 Anchor 目标结局；
 - `path_summary`：当前路径较早场景的滚动摘要；
 - `canon_evidence`：与本次续写相关的原著证据切片；
 - `recent_scenes`：当前路径最近的场景正文；

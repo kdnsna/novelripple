@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 
 import {
   generateContinuationDirectionsAction,
@@ -40,6 +40,7 @@ type WorldlineContinuationPanelProps = {
 
 const contextSectionLabels: Record<ContextManifestSectionKind, string> = {
   worldline_setup: "世界线设定",
+  canon_events: "相关原著事件",
   path_summary: "路径摘要",
   canon_evidence: "原著证据",
   recent_scenes: "最近场景",
@@ -64,6 +65,28 @@ export function WorldlineContinuationPanel({
   const [pendingDirectionId, setPendingDirectionId] = useState<string | null>(
     null,
   );
+  /**
+   * useTransition 的 pending 在下一帧才可见；用 ref 同步拦住同一 tick 的
+   * 双击，避免重复发起服务端请求。
+   */
+  const pendingRef = useRef(false);
+
+  function beginPending(
+    kind: PendingKind,
+    directionId: string | null = null,
+  ): boolean {
+    if (pendingRef.current) return false;
+    pendingRef.current = true;
+    setPendingKind(kind);
+    setPendingDirectionId(directionId);
+    return true;
+  }
+
+  function endPending(): void {
+    pendingRef.current = false;
+    setPendingKind(null);
+    setPendingDirectionId(null);
+  }
 
   const storyMap = storyMapArtifact.storyMap;
   const plan = acceptedImpactPlanArtifact.impactPlan;
@@ -102,66 +125,73 @@ export function WorldlineContinuationPanel({
       : rootBatch;
 
   function runDirections(parentSceneId: string | null, newBatch: boolean): void {
+    if (!beginPending(newBatch ? "newBatch" : "directions")) return;
     setError(null);
-    setPendingKind(newBatch ? "newBatch" : "directions");
     startTransition(async () => {
-      const result = await generateContinuationDirectionsAction({
-        projectId,
-        worldlineId: worldline.id,
-        parentSceneId,
-        newBatch,
-      });
-      setPendingKind(null);
-      if (!result.ok) {
-        setError(result.error);
-        return;
+      try {
+        const result = await generateContinuationDirectionsAction({
+          projectId,
+          worldlineId: worldline.id,
+          parentSceneId,
+          newBatch,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        setView((current) =>
+          appendContinuationArtifact(current, result.artifact),
+        );
+        setActiveBatchId(result.artifact.id);
+      } finally {
+        endPending();
       }
-      setView((current) =>
-        appendContinuationArtifact(current, result.artifact),
-      );
-      setActiveBatchId(result.artifact.id);
     });
   }
 
   function generateScene(batch: ContinuationDirectionBatchView, directionId: string): void {
+    if (!beginPending("scene", directionId)) return;
     setError(null);
-    setPendingKind("scene");
-    setPendingDirectionId(directionId);
     startTransition(async () => {
-      const result = await generateContinuationSceneAction({
-        projectId,
-        worldlineId: worldline.id,
-        directionsArtifactId: batch.id,
-        selectedDirectionId: directionId,
-      });
-      setPendingKind(null);
-      setPendingDirectionId(null);
-      if (!result.ok) {
-        setError(result.error);
-        return;
+      try {
+        const result = await generateContinuationSceneAction({
+          projectId,
+          worldlineId: worldline.id,
+          directionsArtifactId: batch.id,
+          selectedDirectionId: directionId,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        selectGeneratedScene(result.artifact);
+      } finally {
+        endPending();
       }
-      selectGeneratedScene(result.artifact);
     });
   }
 
   function retrySelectedScene(): void {
     if (!selectedScene) return;
+    if (!beginPending("retry")) return;
     setError(null);
-    setPendingKind("retry");
     startTransition(async () => {
-      const result = await generateContinuationSceneAction({
-        projectId,
-        worldlineId: worldline.id,
-        directionsArtifactId: selectedScene.directionsArtifactId,
-        selectedDirectionId: selectedScene.selectedDirectionId,
-        retry: true,
-      });
-      setPendingKind(null);
-      if (!result.ok) {
-        setError(result.error);
-        return;
+      try {
+        const result = await generateContinuationSceneAction({
+          projectId,
+          worldlineId: worldline.id,
+          directionsArtifactId: selectedScene.directionsArtifactId,
+          selectedDirectionId: selectedScene.selectedDirectionId,
+          retry: true,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        selectGeneratedScene(result.artifact);
+      } finally {
+        endPending();
       }
-      selectGeneratedScene(result.artifact);
     });
   }
 

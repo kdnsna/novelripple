@@ -72,10 +72,16 @@ test("generates a strict rerouted preview and creates one child only after accep
 
   await page.getByRole("button", { name: "生成 3 个后续方向" }).click();
   await expect(page.locator(".direction-card")).toHaveCount(3);
+  await expect(page.getByText("方向批次 1")).toBeVisible();
   await expect(page.getByText("把证据藏进潮标站")).toBeVisible();
+
+  // 换一批：同一父节点创建新批次，旧批次不覆盖；界面切到新批次。
+  await page.getByRole("button", { name: "换一批" }).click();
+  await expect(page.getByText("方向批次 2")).toBeVisible();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
   await page
-    .getByText("把证据藏进潮标站")
-    .locator("xpath=ancestor::article[1]")
+    .locator(".direction-card")
+    .first()
     .getByRole("button", { name: "选择此方向" })
     .click();
   await expect(page.getByTestId("continuation-scene")).toContainText(

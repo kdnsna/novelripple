@@ -22,8 +22,9 @@ export type PathSummary = {
  * 兄弟分支的节点绝不会进入结果。路径按旧→新排列，
  * 最后 `recentSceneCount` 个场景留给最近场景原文，不进入摘要。
  *
- * 超预算时从最旧的行开始丢弃，始终优先保留较新的摘要；
- * 发生截断时在开头加一行省略提示。结果确定：同一输入逐字节相同。
+ * 超预算时先压缩而不是直接丢弃：保留最新的若干行原文，把更早的场景
+ * 合并成一行 `更早剧情（第 a–b 幕）：` + 场景标题（按整条标题截断）。
+ * 发生压缩时 `truncated` 为 true。结果确定：同一输入逐字节相同。
  */
 export function buildPathSummary(input: {
   pathNodes: readonly PathSummaryNode[];
@@ -66,28 +67,54 @@ export function buildPathSummary(input: {
     };
   }
 
-  // 从最旧的一行开始丢弃，直到“省略提示 + 保留行”进入预算。
-  for (let dropped = 1; dropped <= summarized.length; dropped += 1) {
-    const remaining = lines.slice(dropped);
-    const marker = `（更早的 ${dropped} 幕已省略）`;
+  // 从最早开始压缩，尽量保留更多最新行原文；标记行本身也要放得下。
+  for (let compressed = 1; compressed <= summarized.length; compressed += 1) {
+    const remaining = lines.slice(compressed);
+    const remainingText = remaining.join("\n");
+    const prefix = `更早剧情（第 1–${compressed} 幕）：`;
+    const available =
+      maxChars - (remaining.length > 0 ? remainingText.length + 1 : 0);
+    if (available < prefix.length) continue;
+
+    const marker = buildCompressedLine(
+      prefix,
+      summarized.slice(0, compressed),
+      available,
+    );
     const text =
-      remaining.length === 0 ? marker : `${marker}\n${remaining.join("\n")}`;
-    if (text.length <= maxChars) {
-      const covered = summarized.slice(dropped);
-      return {
-        text,
-        coveredSceneIds: covered.map((node) => node.id),
-        watermarkSceneId:
-          covered.length === 0 ? null : covered[covered.length - 1]!.id,
-        truncated: true,
-      };
-    }
+      remaining.length === 0 ? marker : `${marker}\n${remainingText}`;
+    if (text.length > maxChars) continue;
+
+    return {
+      text,
+      coveredSceneIds: summarized.map((node) => node.id),
+      watermarkSceneId: summarized[summarized.length - 1]!.id,
+      truncated: true,
+    };
   }
 
-  const minimalMarker = `（更早的 ${summarized.length} 幕已省略）`;
+  const minimalMarker = "更早剧情（第 1–1 幕）：";
   throw new Error(
     `路径摘要预算过小：maxChars=${maxChars}，至少需要 ${minimalMarker.length} 字符`,
   );
+}
+
+/** 把最早的若干场景标题拼成一行；只接受完整标题，不做字符截断。 */
+function buildCompressedLine(
+  prefix: string,
+  nodes: readonly PathSummaryNode[],
+  available: number,
+): string {
+  let line = prefix;
+  for (const node of nodes) {
+    const title = node.title.trim();
+    if (title.length === 0) continue;
+    const separator = line === prefix ? "" : "；";
+    const candidate = `${line}${separator}${title}`;
+    if (candidate.length > available) break;
+    line = candidate;
+  }
+  return line;
 }
 
 function formatLine(node: PathSummaryNode, position: number): string {

@@ -194,23 +194,45 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 每次生成只从当前路径和当前 Worldline 组装上下文，固定顺序为：
 
 1. `worldline_setup`：世界线、分歧、模式、Anchor、人物、accepted Impact Plan 与当前路径状态；
-2. `path_summary`：当前路径较早场景的滚动摘要；
-3. `canon_evidence`：现有 `selectContinuationContext` 选出的原著证据（分叉点窗口与人物证据，绝对上限 6000 字符且严格小于 Source 的 25%）；
-4. `recent_scenes`：当前路径最近 2 个场景正文；
-5. `selected_direction`：用户选中的方向；
-6. `anchor_reminder`：严格/开放模式提示与状态补丁约束。
+2. `canon_events`：与 accepted Impact Plan / Anchor 相关的 Canon 事件（id、标题、摘要、参与者、状态变化）、这些事件之间的边，以及 Anchor 目标结局；
+3. `path_summary`：当前路径较早场景的滚动摘要；
+4. `canon_evidence`：相关事件的原著证据切片排在最前，随后是 `selectContinuationContext` 选出的代表窗口与人物证据（后者仍受 6000 字符且严格小于 Source 25% 的选择器上限）；
+5. `recent_scenes`：当前路径最近 2 个场景正文；
+6. `selected_direction`：用户选中的方向；
+7. `anchor_reminder`：严格/开放模式提示与状态补丁约束。
 
 方向生成没有 `selected_direction`，其余段相同。
 
-`worldline_setup`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不裁剪；`path_summary` 可截尾，`canon_evidence` 从末尾整条丢弃，`recent_scenes` 从最旧开始整条丢弃但始终保留最新一个场景。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符；配置不是正整数、或必需段与最新场景本身超过预算时 fail closed。系统 Prompt 模板不计入该素材预算；预算按 UTF-16 字符数计算，不引入 tokenizer。
+`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不裁剪。`canon_evidence` 每条带优先级：相关事件证据优先级最高，代表窗口和人物证据较低；裁剪时先丢低优先级，同优先级从末尾整条丢弃，因此相关事件证据最后才被裁掉。`recent_scenes` 从最旧开始整条丢弃但始终保留最新一个场景；`path_summary` 按整行从开头裁剪，先把首行省略/压缩提示保留到最后一刻，绝不把一行切成半句。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
 
-每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+深层路径的 `worldline_setup` 会随 `currentState` 增长。超预算时先把它整体替换成紧凑形式（只保留事实/人物/线索的计数与 key，不包含任何 fact 正文），再按上述顺序裁剪；如果最新场景仍放不下，则用该场景自己的 `summary` 替换正文，并在 manifest 的 `droppedItemIds` 记录该场景 id。只有这样仍超过预算时才 fail closed。
+
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
 
 ### 路径滚动摘要
 
-场景生成输出 `summary`（≤200 字），与场景一起不可变保存。组装上下文时，沿根→当前节点路径确定性构建滚动摘要：最近 2 个场景留给 `recent_scenes` 原文，更早的场景按从旧到新写成摘要行；超过 1200 字符时从最旧一行开始省略并加省略提示，`watermarkSceneId` 指向最后一条被摘要覆盖的节点。摘要只读取给定路径的不可变字段，同一输入逐字节相同，不额外调用模型，也不查询兄弟分支；切换路径时按新路径重建，祖先内容保持一致。
+场景生成输出 `summary`（≤200 字），与场景一起不可变保存。组装上下文时，沿根→当前节点路径确定性构建滚动摘要：最近 2 个场景留给 `recent_scenes` 原文，更早的场景按从旧到新写成摘要行。超过 1200 字符时不再只丢弃旧行，而是保留最新若干行原文，把更早的场景压缩成一行 `更早剧情（第 a–b 幕）：` 加场景标题（以 `；` 连接）；标题按整条截断，不做字符截断。压缩只读取给定路径的不可变字段，同一输入逐字节相同，不额外调用模型，也不查询兄弟分支；切换路径时按新路径重建，祖先内容保持一致。`coveredSceneIds` / `watermarkSceneId` 指向实际被摘要覆盖的节点。
 
 模型只读取相关 Canon Event、对应 Source Evidence、accepted Impact Plan、当前路径状态、路径摘要与最近场景，不拼接整部 Source。Continuation 属于 `generated` 内容，不改变 Source，也不能充当原著 Evidence。
+
+### v3 上下文与 v2 Prompt packet 的差异
+
+v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 `readonlyCanonical`、完整 `currentWorldline`、`divergence`、完整 `acceptedImpactPlan`、`relevantEvidence`、`currentState`，以及可选的 `styleContext` 与 `selectedDirection`。v3 改为固定段标签，内容对应关系如下：
+
+| v2 packet | v3 段 | 说明 |
+| --- | --- | --- |
+| `readonlyCanonical` | `canon_events` | 保留 `sourceId`、`storyMapArtifactId`、`storyMapId`、`characters`、相关事件完整字段、事件之间的边与 Anchor 目标 `endingCandidates`；未变 |
+| `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；裁剪时最后丢弃；未变 |
+| `styleContext.representativeExcerpts` / `styleContext.characterEvidence` | `canon_evidence` 的后半部分 | 仍由 `selectContinuationContext` 选择；排在相关事件证据之后，先被裁剪 |
+| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
+| 无 | `path_summary` | 新增：当前路径较早场景的确定性滚动摘要 |
+| 无 | `recent_scenes` | 新增：当前路径最近 2 个场景正文 |
+| 无 | `anchor_reminder` | 新增：从 Prompt 模板移到上下文末尾的严格/开放 Anchor 与 statePatch 约束 |
+| 完整 `currentWorldline` JSON | `worldline_setup` 字段 | 不再发送完整 worldline 行；只保留上述字段。未发送的是数据库/审计字段（如 `parentWorldlineId`、`baseStoryMapArtifactId`、`acceptedImpactPlanId`、`idempotencyKey`、`createdAt`、`status` 等引用与时间戳），它们不改变生成语义 |
+| 无预算/无清单 | manifest + `CONTINUATION_CONTEXT_MAX_CHARS` | 新增：段级字符预算、裁剪记录、`coveredItemIds` / `watermarkId`；Prompt 模板不计入预算 |
+
+`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。
+
 
 ## 状态转换与确认门
 

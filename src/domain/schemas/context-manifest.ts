@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const ContextManifestSectionKindSchema = z.enum([
   "worldline_setup",
+  "canon_events",
   "path_summary",
   "canon_evidence",
   "recent_scenes",
@@ -20,6 +21,9 @@ export const ContextManifestSectionSchema = z
     chars: z.number().int().min(0),
     trimmed: z.boolean(),
     droppedItemIds: z.array(z.string()),
+    /** 只记录条目 id，供路径摘要说明实际覆盖了哪些场景。 */
+    coveredItemIds: z.array(z.string()).optional(),
+    watermarkId: z.string().nullable().optional(),
   })
   .strict();
 

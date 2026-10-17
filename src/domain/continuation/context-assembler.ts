@@ -8,6 +8,7 @@ import {
 /** 素材段在 Prompt 中的固定顺序，同时也是 manifest 的顺序。 */
 export const CONTEXT_SECTION_ORDER: readonly ContextManifestSectionKind[] = [
   "worldline_setup",
+  "canon_events",
   "path_summary",
   "canon_evidence",
   "recent_scenes",
@@ -15,27 +16,42 @@ export const CONTEXT_SECTION_ORDER: readonly ContextManifestSectionKind[] = [
   "anchor_reminder",
 ];
 
+/** 相关事件证据：裁剪时最后丢弃。 */
+export const RELATED_EVIDENCE_PRIORITY = 2;
+/** 代表片段与人物证据：先于相关事件证据丢弃。 */
+export const STYLE_EVIDENCE_PRIORITY = 1;
+
 /**
  * 原著证据条目由调用方提供。
  *
  * 证据如何选取仍由 `selectContinuationContext` 单独负责；组装器只负责
  * 排序、渲染和按预算裁剪，不复制窗口/人物证据的选择逻辑。
+ * `priority` 越大越重要；未提供时按 0 处理，同优先级内从末尾开始丢弃。
  */
 export type ContextEvidenceItem = {
   id: string;
   text: string;
+  priority?: number;
 };
 
 export type ContextSceneItem = {
   id: string;
   text: string;
+  /** 超预算且场景挤不下时，用这段摘要替换正文。 */
+  summary?: string;
 };
 
 export type ContextAssemblerInput = {
   maxChars: number;
   sections: {
     worldlineSetup: string;
+    /** 必需段放不下时的紧凑世界线设定（只含计数与 key）。 */
+    worldlineSetupCompact?: string;
+    canonEvents?: string;
     pathSummary: string;
+    /** 与 pathSummary 行对应的场景 id，用于 manifest 的覆盖信息。 */
+    pathSummaryCoveredSceneIds?: readonly string[];
+    pathSummaryWatermarkSceneId?: string | null;
     canonEvidence: readonly ContextEvidenceItem[];
     recentScenes: readonly ContextSceneItem[];
     selectedDirection: string;
@@ -51,11 +67,16 @@ export type ContextAssemblerResult = {
 type NormalizedItem = {
   id: string;
   text: string;
+  priority: number;
+  summary: string;
 };
 
 type LiveSections = {
   worldlineSetup: string;
+  canonEvents: string;
   pathSummary: string;
+  pathSummaryCoveredSceneIds: string[];
+  pathSummaryWatermarkSceneId: string | null;
   canonEvidence: NormalizedItem[];
   recentScenes: NormalizedItem[];
   selectedDirection: string;
@@ -65,16 +86,21 @@ type LiveSections = {
 /**
  * 确定性分段上下文组装器（纯函数）。
  *
- * 固定顺序：worldline_setup → path_summary → canon_evidence → recent_scenes
- * → selected_direction → anchor_reminder。所有段都渲染为稳定的 XML 风格标签。
+ * 固定顺序：worldline_setup → canon_events → path_summary → canon_evidence
+ * → recent_scenes → selected_direction → anchor_reminder。
+ * 所有段都渲染为稳定的 XML 风格标签。
  *
- * 超预算时按优先级从低到高裁剪：
- * 1. canon_evidence 从末尾（最不相关）整条丢弃；
- * 2. recent_scenes 从最旧开始整条丢弃，但始终保留最新一个场景；
- * 3. path_summary 从开头截断。
+ * 超预算时的顺序：
+ * 1. 必需段放不下：先用 compact worldlineSetup 替换完整 currentState；
+ *    仍放不下则 fail closed；
+ * 2. canon_evidence 按 priority 从低到高、同优先级从末尾整条丢弃；
+ * 3. recent_scenes 从最旧开始整条丢弃，但始终保留最新一个场景；
+ * 4. path_summary 按整行从开头裁剪（首行省略提示保留到最后一刻）；
+ * 5. 最新场景仍放不下时，用它自己的 summary 替换正文，记入 droppedItemIds；
+ * 6. 仍超过预算则 fail closed，不返回半成品。
  *
- * worldline_setup、selected_direction、anchor_reminder 永不裁剪；
- * 它们（或它们加最新场景）本身超过预算时 fail closed，不返回半成品。
+ * worldline_setup、canon_events、selected_direction、anchor_reminder
+ * 永不裁剪（worldline_setup 只允许整体替换为更紧凑的等价形式）。
  */
 export function assembleContext(
   input: ContextAssemblerInput,
@@ -86,13 +112,27 @@ export function assembleContext(
 
   const live: LiveSections = {
     worldlineSetup: input.sections.worldlineSetup.trim(),
+    canonEvents: input.sections.canonEvents?.trim() ?? "",
     pathSummary: input.sections.pathSummary.trim(),
-    canonEvidence: normalizeItems(input.sections.canonEvidence),
-    recentScenes: normalizeItems(input.sections.recentScenes),
+    pathSummaryCoveredSceneIds: [
+      ...(input.sections.pathSummaryCoveredSceneIds ?? []),
+    ],
+    pathSummaryWatermarkSceneId:
+      input.sections.pathSummaryWatermarkSceneId ?? null,
+    canonEvidence: normalizeEvidence(input.sections.canonEvidence),
+    recentScenes: normalizeScenes(input.sections.recentScenes),
     selectedDirection: input.sections.selectedDirection.trim(),
     anchorReminder: input.sections.anchorReminder.trim(),
   };
 
+  let worldlineSetupTrimmed = false;
+  if (renderMandatoryPrompt(live).length > maxChars) {
+    const compact = input.sections.worldlineSetupCompact?.trim() ?? "";
+    if (compact.length > 0 && compact.length < live.worldlineSetup.length) {
+      live.worldlineSetup = compact;
+      worldlineSetupTrimmed = true;
+    }
+  }
   const mandatoryPrompt = renderMandatoryPrompt(live);
   if (mandatoryPrompt.length > maxChars) {
     throw new Error(
@@ -106,11 +146,18 @@ export function assembleContext(
   const droppedEvidenceIds: string[] = [];
   const droppedSceneIds: string[] = [];
 
+  const pathLines = splitLines(live.pathSummary);
+  const pathLineSceneIds = mapPathSummaryLineSceneIds(
+    pathLines,
+    live.pathSummaryCoveredSceneIds,
+  );
+
   let prompt = renderPrompt(live);
 
-  // 1. 原著证据：从末尾开始整条丢弃。
+  // 1. 原著证据：低优先级先丢，同优先级从末尾整条丢弃。
   while (live.canonEvidence.length > 0 && prompt.length > maxChars) {
-    const dropped = live.canonEvidence.pop()!;
+    const index = lowestPriorityLastIndex(live.canonEvidence);
+    const dropped = live.canonEvidence.splice(index, 1)[0]!;
     droppedEvidenceIds.push(dropped.id);
     evidenceTrimmed = true;
     prompt = renderPrompt(live);
@@ -124,17 +171,28 @@ export function assembleContext(
     prompt = renderPrompt(live);
   }
 
-  // 3. 路径摘要：从开头截断，保留最新的尾部。
-  if (prompt.length > maxChars && live.pathSummary.length > 0) {
-    const excess = prompt.length - maxChars;
-    const keepChars = live.pathSummary.length - excess;
-    if (keepChars <= 0) {
-      live.pathSummary = "";
-    } else {
-      live.pathSummary = safeTail(live.pathSummary, keepChars);
-    }
+  // 3. 路径摘要：按整行从开头裁剪，不切断任何一行；首行省略提示最后才丢。
+  while (prompt.length > maxChars && pathLines.length > 0) {
+    const dropIndex =
+      pathLines.length > 1 && isOmissionLine(pathLines[0]!) ? 1 : 0;
+    pathLines.splice(dropIndex, 1);
+    pathLineSceneIds.splice(dropIndex, 1);
+    live.pathSummary = pathLines.join("\n");
     pathTrimmed = true;
     prompt = renderPrompt(live);
+  }
+
+  // 4. 最新场景仍放不下：用摘要替换正文，并记录被替换的条目 id。
+  if (prompt.length > maxChars && live.recentScenes.length > 0) {
+    const index = live.recentScenes.length - 1;
+    const newest = live.recentScenes[index]!;
+    const summary = newest.summary;
+    if (summary.length > 0 && summary !== newest.text) {
+      live.recentScenes[index] = { ...newest, text: summary };
+      droppedSceneIds.push(newest.id);
+      scenesTrimmed = true;
+      prompt = renderPrompt(live);
+    }
   }
 
   // 最新场景与必需段仍然放不下时 fail closed，不偷偷丢掉最新场景。
@@ -148,6 +206,8 @@ export function assembleContext(
     maxChars,
     prompt,
     live,
+    pathLineSceneIds,
+    worldlineSetupTrimmed,
     evidenceTrimmed,
     scenesTrimmed,
     pathTrimmed,
@@ -162,6 +222,9 @@ function renderPrompt(sections: LiveSections): string {
   const blocks: string[] = [];
   if (sections.worldlineSetup.length > 0) {
     blocks.push(renderStringSection("worldline_setup", sections.worldlineSetup));
+  }
+  if (sections.canonEvents.length > 0) {
+    blocks.push(renderStringSection("canon_events", sections.canonEvents));
   }
   if (sections.pathSummary.length > 0) {
     blocks.push(renderStringSection("path_summary", sections.pathSummary));
@@ -186,7 +249,10 @@ function renderPrompt(sections: LiveSections): string {
 function renderMandatoryPrompt(sections: LiveSections): string {
   return renderPrompt({
     worldlineSetup: sections.worldlineSetup,
+    canonEvents: sections.canonEvents,
     pathSummary: "",
+    pathSummaryCoveredSceneIds: [],
+    pathSummaryWatermarkSceneId: null,
     canonEvidence: [],
     recentScenes: [],
     selectedDirection: sections.selectedDirection,
@@ -208,27 +274,101 @@ function renderItemSection(
   return `<${kind}>\n${items.map((item) => item.text).join("\n\n")}\n</${kind}>`;
 }
 
-function normalizeItems(
+function normalizeEvidence(
   items: readonly ContextEvidenceItem[],
 ): NormalizedItem[] {
   return items
-    .map((item) => ({ id: item.id, text: item.text.trim() }))
+    .map((item) => {
+      const priority = item.priority ?? 0;
+      if (!Number.isInteger(priority)) {
+        throw new Error(`证据优先级必须是整数：${item.id}`);
+      }
+      return {
+        id: item.id,
+        text: item.text.trim(),
+        priority,
+        summary: "",
+      };
+    })
     .filter((item) => item.text.length > 0);
 }
 
-/** 按 UTF-16 字符数取尾部；不从一个代理对的低位切起。 */
-function safeTail(text: string, keepChars: number): string {
-  if (keepChars >= text.length) return text;
-  let start = text.length - keepChars;
-  const codeUnit = text.charCodeAt(start);
-  if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) start += 1;
-  return text.slice(start);
+function normalizeScenes(items: readonly ContextSceneItem[]): NormalizedItem[] {
+  return items
+    .map((item) => ({
+      id: item.id,
+      text: item.text.trim(),
+      priority: 0,
+      summary: item.summary?.trim() ?? "",
+    }))
+    .filter((item) => item.text.length > 0);
+}
+
+/** 最低优先级中最后一个条目的下标，等价于同优先级从末尾丢弃。 */
+function lowestPriorityLastIndex(items: readonly NormalizedItem[]): number {
+  let lowest = items[0]!.priority;
+  for (const item of items) {
+    if (item.priority < lowest) lowest = item.priority;
+  }
+  let index = 0;
+  for (const [current, item] of items.entries()) {
+    if (item.priority === lowest) index = current;
+  }
+  return index;
+}
+
+function splitLines(text: string): string[] {
+  return text.length === 0 ? [] : text.split("\n");
+}
+
+function isOmissionLine(line: string): boolean {
+  return (
+    line.startsWith("更早剧情（第 ") || line.startsWith("（更早的 ")
+  );
+}
+
+/**
+ * 把 pathSummary 的行对齐到场景 id。
+ *
+ * 首行可能是 `更早剧情（第 a–b 幕）：...`，它覆盖前 b 个场景；
+ * 其余行与剩余场景一一对应。无法安全对齐时不猜测，返回空映射。
+ */
+function mapPathSummaryLineSceneIds(
+  lines: readonly string[],
+  coveredSceneIds: readonly string[],
+): string[][] {
+  if (lines.length === 0) return [];
+  if (coveredSceneIds.length === 0) return lines.map(() => []);
+
+  const marker = /^更早剧情（第 \d+–(\d+) 幕）：/u.exec(lines[0] ?? "");
+  if (marker) {
+    const compressed = Number(marker[1]);
+    const remaining = coveredSceneIds.length - compressed;
+    if (
+      compressed > 0 &&
+      remaining >= 0 &&
+      remaining === lines.length - 1
+    ) {
+      return [
+        coveredSceneIds.slice(0, compressed),
+        ...coveredSceneIds.slice(compressed).map((id) => [id]),
+      ];
+    }
+    if (lines.length === 1) return [[...coveredSceneIds]];
+  }
+
+  if (coveredSceneIds.length === lines.length) {
+    return lines.map((_, index) => [coveredSceneIds[index]!]);
+  }
+  return lines.map(() => []);
 }
 
 function buildManifest(input: {
   maxChars: number;
   prompt: string;
   live: LiveSections;
+  pathLineSceneIds: string[][];
+  worldlineSetupTrimmed: boolean;
   evidenceTrimmed: boolean;
   scenesTrimmed: boolean;
   pathTrimmed: boolean;
@@ -236,6 +376,17 @@ function buildManifest(input: {
   droppedSceneIds: string[];
 }): ContextManifest {
   const { live } = input;
+  const coveredPathSceneIds = input.pathLineSceneIds
+    .flat()
+    .filter((id) => id.length > 0);
+  const pathWatermark =
+    coveredPathSceneIds.length > 0
+      ? coveredPathSceneIds[coveredPathSceneIds.length - 1]!
+      : live.pathSummaryCoveredSceneIds.length === 0 &&
+          live.pathSummary.length > 0
+        ? live.pathSummaryWatermarkSceneId
+        : null;
+
   const sections: ContextManifestSection[] = CONTEXT_SECTION_ORDER.map((kind) => {
     switch (kind) {
       case "worldline_setup": {
@@ -246,6 +397,16 @@ function buildManifest(input: {
           included
             ? renderStringSection(kind, live.worldlineSetup).length
             : 0,
+          input.worldlineSetupTrimmed,
+          [],
+        );
+      }
+      case "canon_events": {
+        const included = live.canonEvents.length > 0;
+        return section(
+          kind,
+          included,
+          included ? renderStringSection(kind, live.canonEvents).length : 0,
           false,
           [],
         );
@@ -260,6 +421,10 @@ function buildManifest(input: {
             : 0,
           input.pathTrimmed,
           [],
+          {
+            coveredItemIds: coveredPathSceneIds,
+            watermarkId: pathWatermark,
+          },
         );
       }
       case "canon_evidence": {
@@ -331,6 +496,17 @@ function section(
   chars: number,
   trimmed: boolean,
   droppedItemIds: string[],
+  coverage?: {
+    coveredItemIds: string[];
+    watermarkId: string | null;
+  },
 ): ContextManifestSection {
-  return { kind, included, chars, trimmed, droppedItemIds };
+  return {
+    kind,
+    included,
+    chars,
+    trimmed,
+    droppedItemIds,
+    ...(coverage ?? {}),
+  };
 }

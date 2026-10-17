@@ -3,10 +3,16 @@ import path from "node:path";
 
 import {
   assembleContext,
+  RELATED_EVIDENCE_PRIORITY,
+  STYLE_EVIDENCE_PRIORITY,
   type ContextAssemblerResult,
   type ContextEvidenceItem,
   type ContextSceneItem,
 } from "@/domain/continuation/context-assembler";
+import {
+  buildCanonEventsSection,
+  buildRelatedEvidenceItems,
+} from "@/domain/continuation/canon-context";
 import { buildPathSummary } from "@/domain/continuation/path-summary";
 import {
   buildSceneTree,
@@ -42,6 +48,8 @@ import {
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
   listScenesForDirection,
+  stableDirectionsArtifactIdV2,
+  stableSceneArtifactIdV2,
 } from "@/server/repositories/continuation-repository";
 import { getProjectSource } from "@/server/repositories/project-repository";
 import {
@@ -56,6 +64,32 @@ const scenePromptVersion = "continuation-scene.v3";
 export const DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS = 24_000;
 export const CONTINUATION_CONTEXT_MAX_CHARS_ENV =
   "CONTINUATION_CONTEXT_MAX_CHARS";
+
+/**
+ * 同一进程内的请求去重锁。
+ *
+ * key 是确定性目标 Artifact id：并发同内容请求只有第一个真正调用模型，
+ * 其余请求 await 同一个 Promise。锁释放后再次进入会先查已有 Artifact，
+ * 因此不会为相同内容重复生成。它不是跨进程锁，数据库确定性主键仍是
+ * 最终幂等边界。
+ */
+const inFlightGenerations = new Map<string, Promise<unknown>>();
+
+function runWithInFlightLock<T>(
+  key: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const existing = inFlightGenerations.get(key);
+  if (existing) return existing as Promise<T>;
+
+  const promise = task();
+  inFlightGenerations.set(key, promise);
+  return promise.finally(() => {
+    if (inFlightGenerations.get(key) === promise) {
+      inFlightGenerations.delete(key);
+    }
+  });
+}
 
 /**
  * 读取上下文预算。未配置时使用默认值；配置值必须是正整数，
@@ -103,42 +137,58 @@ export async function generateContinuationDirections(input: {
   }
   const batchIndex =
     latestBatch === null ? 0 : directionsBatchIndex(latestBatch) + 1;
-  const pathState = derivePathState(context.baseState, path);
-  const material = buildContextMaterial({
-    context,
-    path,
-    pathState,
-    selectedDirection: null,
-  });
-  const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
-
-  const generation = await generateStructured(
-    {
-      projectId: input.projectId,
-      worldlineId: context.worldline.id,
-      kind: "continuation_directions",
-      promptVersion: directionsPromptVersion,
-      prompt,
-      schemaName: "continuation_directions",
-      schema: ContinuationDirectionsModelOutputSchema,
-      modelConfig: input.modelConfig,
-      validate: (output) =>
-        validateContinuationDirections(output, context.storyMapArtifact.storyMap),
-    },
-    input.provider,
-  );
-  const artifact = createContinuationDirectionsArtifactV2({
-    projectId: input.projectId,
-    sourceId: context.source.id,
-    worldline: context.worldline,
-    acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
+  const targetArtifactId = stableDirectionsArtifactIdV2(
+    context.worldline.id,
     parentSceneId,
     batchIndex,
-    output: generation.value,
-    generationRunId: generation.generation.runId,
-  });
+  );
 
-  return { artifact, generation: generation.generation };
+  return runWithInFlightLock(targetArtifactId, async () => {
+    const existing = getContinuationArtifact(targetArtifactId);
+    if (existing && existing.artifactType === "directions") {
+      return { artifact: existing, generation: null };
+    }
+
+    const pathState = derivePathState(context.baseState, path);
+    const material = buildContextMaterial({
+      context,
+      path,
+      pathState,
+      selectedDirection: null,
+    });
+    const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
+
+    const generation = await generateStructured(
+      {
+        projectId: input.projectId,
+        worldlineId: context.worldline.id,
+        kind: "continuation_directions",
+        promptVersion: directionsPromptVersion,
+        prompt,
+        schemaName: "continuation_directions",
+        schema: ContinuationDirectionsModelOutputSchema,
+        modelConfig: input.modelConfig,
+        validate: (output) =>
+          validateContinuationDirections(
+            output,
+            context.storyMapArtifact.storyMap,
+          ),
+      },
+      input.provider,
+    );
+    const artifact = createContinuationDirectionsArtifactV2({
+      projectId: input.projectId,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
+      parentSceneId,
+      batchIndex,
+      output: generation.value,
+      generationRunId: generation.generation.runId,
+    });
+
+    return { artifact, generation: generation.generation };
+  });
 }
 
 export async function generateContinuationScene(input: {
@@ -198,63 +248,76 @@ export async function generateContinuationScene(input: {
       }, -1) + 1
     : 0;
 
-  const { path, parent } = resolveScenePath({
-    worldlineId: context.worldline.id,
-    parentSceneId,
-  });
-  const depth = parent === null ? 1 : parent.depth + 1;
-  const pathState = derivePathState(context.baseState, path);
-  const material = buildContextMaterial({
-    context,
-    path,
-    pathState,
-    selectedDirection,
-  });
-  const prompt = await buildPrompt(scenePromptVersion, material.prompt);
-  const divergenceEventId = context.worldline.divergence?.eventId;
-  if (!divergenceEventId) {
-    throw new Error("Continuation Worldline 缺少 Divergence Event");
-  }
-
-  const generation = await generateStructured(
-    {
-      projectId: input.projectId,
-      worldlineId: context.worldline.id,
-      kind: "continuation_scene",
-      promptVersion: scenePromptVersion,
-      prompt,
-      schemaName: "continuation_scene",
-      schema: ContinuationSceneModelOutputV3Schema,
-      modelConfig: input.modelConfig,
-      validate: (output) =>
-        validateContinuationStatePatch(
-          output.statePatch,
-          pathState,
-          context.storyMapArtifact.storyMap,
-          divergenceEventId,
-          context.worldline.anchors.map((anchor) => anchor.targetEventId),
-        ),
-    },
-    input.provider,
-  );
-  const artifact = createContinuationSceneArtifactV2({
-    projectId: input.projectId,
-    sourceId: context.source.id,
-    worldline: context.worldline,
-    acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
-    directionsArtifact,
-    selectedDirectionId: selectedDirection.id,
-    parentSceneId,
-    depth,
-    origin: retry ? "retry" : "generated",
+  const targetArtifactId = stableSceneArtifactIdV2(
+    directionsArtifact.id,
+    selectedDirection.id,
     attemptIndex,
-    summary: generation.value.summary,
-    contextManifest: material.manifest,
-    output: sceneOutputWithoutSummary(generation.value),
-    generationRunId: generation.generation.runId,
-  });
+  );
 
-  return { artifact, generation: generation.generation };
+  return runWithInFlightLock(targetArtifactId, async () => {
+    const existing = getContinuationArtifact(targetArtifactId);
+    if (existing && existing.artifactType === "scene") {
+      return { artifact: existing, generation: null };
+    }
+
+    const { path, parent } = resolveScenePath({
+      worldlineId: context.worldline.id,
+      parentSceneId,
+    });
+    const depth = parent === null ? 1 : parent.depth + 1;
+    const pathState = derivePathState(context.baseState, path);
+    const material = buildContextMaterial({
+      context,
+      path,
+      pathState,
+      selectedDirection,
+    });
+    const prompt = await buildPrompt(scenePromptVersion, material.prompt);
+    const divergenceEventId = context.worldline.divergence?.eventId;
+    if (!divergenceEventId) {
+      throw new Error("Continuation Worldline 缺少 Divergence Event");
+    }
+
+    const generation = await generateStructured(
+      {
+        projectId: input.projectId,
+        worldlineId: context.worldline.id,
+        kind: "continuation_scene",
+        promptVersion: scenePromptVersion,
+        prompt,
+        schemaName: "continuation_scene",
+        schema: ContinuationSceneModelOutputV3Schema,
+        modelConfig: input.modelConfig,
+        validate: (output) =>
+          validateContinuationStatePatch(
+            output.statePatch,
+            pathState,
+            context.storyMapArtifact.storyMap,
+            divergenceEventId,
+            context.worldline.anchors.map((anchor) => anchor.targetEventId),
+          ),
+      },
+      input.provider,
+    );
+    const artifact = createContinuationSceneArtifactV2({
+      projectId: input.projectId,
+      sourceId: context.source.id,
+      worldline: context.worldline,
+      acceptedImpactPlanArtifact: context.acceptedImpactPlanArtifact,
+      directionsArtifact,
+      selectedDirectionId: selectedDirection.id,
+      parentSceneId,
+      depth,
+      origin: retry ? "retry" : "generated",
+      attemptIndex,
+      summary: generation.value.summary,
+      contextManifest: material.manifest,
+      output: sceneOutputWithoutSummary(generation.value),
+      generationRunId: generation.generation.runId,
+    });
+
+    return { artifact, generation: generation.generation };
+  });
 }
 
 type ContinuationContext = {
@@ -365,26 +428,80 @@ function buildContextMaterial(input: {
     acceptedImpactPlan: input.context.acceptedImpactPlanArtifact,
     selectedDirection: selectorDirection,
   });
+  const relatedEvidence: ContextEvidenceItem[] =
+    buildRelatedEvidenceItems({
+      storyMap,
+      source: input.context.source,
+      impactPlan: plan,
+    }).map((item) => ({
+      ...item,
+      priority: RELATED_EVIDENCE_PRIORITY,
+    }));
   const canonEvidence: ContextEvidenceItem[] = [
+    ...relatedEvidence,
     ...selection.representativeExcerpts.map((excerpt) => ({
       id: `excerpt:${excerpt.kind}:${excerpt.start}:${excerpt.end}`,
       text: `[${excerpt.kind} ${excerpt.sectionId} ${excerpt.start}-${excerpt.end}]\n${excerpt.excerpt}`,
+      priority: STYLE_EVIDENCE_PRIORITY,
     })),
     ...selection.characterEvidence.map((evidence) => ({
       id: `character:${evidence.characterId}:${evidence.eventId}:${evidence.excerptHash.slice(0, 16)}`,
       text: `[人物 ${evidence.characterId} / 事件 ${evidence.eventId} / ${evidence.sectionId} ${evidence.start}-${evidence.end}]\n${evidence.excerpt}`,
+      priority: STYLE_EVIDENCE_PRIORITY,
     })),
   ];
+  const canonEvents = buildCanonEventsSection({
+    storyMap,
+    storyMapArtifactId: input.context.storyMapArtifact.id,
+    source: input.context.source,
+    impactPlan: plan,
+    anchors: input.context.worldline.anchors,
+  });
   const pathSummary = buildPathSummary({ pathNodes: input.path });
   const recentScenes: ContextSceneItem[] = input.path.slice(-2).map((node) => ({
     id: node.id,
     text: node.prose,
+    ...(node.summary === null ? {} : { summary: node.summary }),
   }));
-  const worldlineSetup = JSON.stringify({
-    worldlineId: input.context.worldline.id,
-    mode: input.context.worldline.mode,
-    divergence: input.context.worldline.divergence,
-    anchors: input.context.worldline.anchors,
+  const worldlineSetup = buildWorldlineSetup(input.context, input.pathState);
+  const worldlineSetupCompact = buildWorldlineSetup(
+    input.context,
+    compactCurrentState(input.pathState),
+  );
+  const anchorReminder = buildAnchorReminder(input.context);
+  const selectedDirection =
+    input.selectedDirection === null
+      ? ""
+      : JSON.stringify(input.selectedDirection);
+
+  return assembleContext({
+    maxChars: readContinuationContextMaxChars(),
+    sections: {
+      worldlineSetup,
+      worldlineSetupCompact,
+      canonEvents,
+      pathSummary: pathSummary.text,
+      pathSummaryCoveredSceneIds: pathSummary.coveredSceneIds,
+      pathSummaryWatermarkSceneId: pathSummary.watermarkSceneId,
+      canonEvidence,
+      recentScenes,
+      selectedDirection,
+      anchorReminder,
+    },
+  });
+}
+
+function buildWorldlineSetup(
+  context: ContinuationContext,
+  currentState: unknown,
+): string {
+  const storyMap = context.storyMapArtifact.storyMap;
+  const plan = context.acceptedImpactPlanArtifact.impactPlan;
+  return JSON.stringify({
+    worldlineId: context.worldline.id,
+    mode: context.worldline.mode,
+    divergence: context.worldline.divergence,
+    anchors: context.worldline.anchors,
     storyMap: {
       id: storyMap.id,
       title: storyMap.title,
@@ -413,25 +530,29 @@ function buildContextMaterial(input: {
       anchorEvaluations: plan.anchorEvaluations,
       uncertainties: plan.uncertainties,
     },
-    currentState: input.pathState,
+    currentState,
   });
-  const anchorReminder = buildAnchorReminder(input.context);
-  const selectedDirection =
-    input.selectedDirection === null
-      ? ""
-      : JSON.stringify(input.selectedDirection);
+}
 
-  return assembleContext({
-    maxChars: readContinuationContextMaxChars(),
-    sections: {
-      worldlineSetup,
-      pathSummary: pathSummary.text,
-      canonEvidence,
-      recentScenes,
-      selectedDirection,
-      anchorReminder,
-    },
-  });
+/**
+ * 深层路径的紧凑 currentState：只有计数与 key，不包含任何 fact/人物正文。
+ * 仅在必需段超预算时整体替换完整状态，不改变状态语义。
+ */
+function compactCurrentState(state: WorldlineDelta) {
+  return {
+    factsAddedCount: state.factsAdded.length,
+    factsRemovedCount: state.factsRemoved.length,
+    characterChangesCount: state.characterChanges.length,
+    threadsOpenedCount: state.threadsOpened.length,
+    threadsClosedCount: state.threadsClosed.length,
+    factsAddedKeys: state.factsAdded.map((fact) => fact.key),
+    factsRemovedKeys: state.factsRemoved,
+    characterChangeKeys: state.characterChanges.map(
+      (change) => change.characterId,
+    ),
+    threadsOpenedKeys: state.threadsOpened,
+    threadsClosedKeys: state.threadsClosed,
+  };
 }
 
 function buildAnchorReminder(context: ContinuationContext): string {

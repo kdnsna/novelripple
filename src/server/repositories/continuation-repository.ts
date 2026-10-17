@@ -643,7 +643,7 @@ function stableDirectionsArtifactId(worldlineId: string): string {
   return `artifact_continuation_directions_${digest.slice(0, 24)}`;
 }
 
-function stableDirectionsArtifactIdV2(
+export function stableDirectionsArtifactIdV2(
   worldlineId: string,
   parentSceneId: string | null,
   batchIndex: number,
@@ -665,7 +665,7 @@ function stableSceneArtifactId(worldlineId: string): string {
   return `artifact_continuation_scene_${digest.slice(0, 24)}`;
 }
 
-function stableSceneArtifactIdV2(
+export function stableSceneArtifactIdV2(
   directionsArtifactId: string,
   selectedDirectionId: string,
   attemptIndex: number,

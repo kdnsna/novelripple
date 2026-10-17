@@ -74,7 +74,7 @@ M0 已完成确定性发布门禁。当前仓库支持创建故事项目，将 U
 
 Ripple Simulator 已支持 `prevent` / `choice` / `outcome`、严格与开放模式、结构化 Impact Plan 和四种 Anchor 状态。Preview 只使用已确认 Story Map 构造只读 Canonical 上下文；用户接受后才在同一事务中保存 accepted Impact Plan revision、幂等 Canonical Worldline 和子 Worldline。严格模式的 `incompatible` 会在写入前被拦截。
 
-接受后的 Worldline 以 confirmed Story Map 为只读基线，并从 accepted Impact Plan 确定性派生 Delta，不复制 Canon。Continuation 先生成恰好 3 个未来方向，用户选择其一后生成 1 个带 `statePatch` 的完整场景；场景组成不可变场景节点树，任一场景都可以继续、重试本幕（同方向兄弟节点）或换一批方向，旧场景不覆盖。每次生成只读取当前路径：accepted Impact Plan 基础 Delta 沿根→当前节点折叠，较早场景以滚动摘要进入上下文；上下文按固定六段组装，并用 `CONTINUATION_CONTEXT_MAX_CHARS`（默认 24000）确定性裁剪，场景保存不含正文的 Context Manifest。方向和场景分别保存为可追踪 Artifact，刷新后可恢复；设计见 [`ADR 0007`](docs/decisions/0007-scene-node-tree-and-context-assembly.md)。场景若恢复已删除事实、删除 accepted Delta / Anchor / 分歧前 Canon，或占用非 `generated:` 事实命名空间，会在一次定向 repair 后 fail closed，不写入 Artifact。
+接受后的 Worldline 以 confirmed Story Map 为只读基线，并从 accepted Impact Plan 确定性派生 Delta，不复制 Canon。Continuation 先生成恰好 3 个未来方向，用户选择其一后生成 1 个带 `statePatch` 的完整场景；场景组成不可变场景节点树，任一场景都可以继续、重试本幕（同方向兄弟节点）或换一批方向，旧场景不覆盖。每次生成只读取当前路径：accepted Impact Plan 基础 Delta 沿根→当前节点折叠，较早场景以滚动摘要进入上下文；上下文按固定七段组装（世界线设定、相关原著事件、路径摘要、原著证据、最近场景、所选方向、锚点提醒），并用 `CONTINUATION_CONTEXT_MAX_CHARS`（默认 24000，只约束组装素材，不含 Prompt 模板）确定性裁剪，场景保存不含正文的 Context Manifest。方向和场景分别保存为可追踪 Artifact，刷新后可恢复；设计见 [`ADR 0007`](docs/decisions/0007-scene-node-tree-and-context-assembly.md)。场景若恢复已删除事实、删除 accepted Delta / Anchor / 分歧前 Canon，或占用非 `generated:` 事实命名空间，会在一次定向 repair 后 fail closed，不写入 Artifact。
 
 Source 只在本地 SQLite 中持久化且永不被生成内容覆盖；执行 Story Map 生成时，正文会发送到你在环境变量中配置的 OpenAI-compatible 模型端点。请只配置你信任且符合数据处理要求的服务。
 
