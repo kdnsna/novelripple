@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { mapAnchorEvaluationRows } from "@/components/story-workspace/ripple-simulator-panel";
+import {
+  mapAnchorEvaluationRows,
+  summarizeImpactScope,
+  summarizePlainAnchorStatus,
+} from "@/components/story-workspace/ripple-simulator-panel";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 
 describe("Ripple Preview Anchor presentation", () => {
@@ -27,5 +31,26 @@ describe("Ripple Preview Anchor presentation", () => {
         status: "incompatible",
       }),
     ]);
+  });
+
+  it("summarizes the first impact per scope and the worst Anchor status", async () => {
+    const { impactPlans } = await loadRippleFixture();
+    const first = impactPlans[0]!;
+    const second = impactPlans[1]!;
+
+    expect(summarizeImpactScope(first, "direct")).toContain(
+      first.impacts.find((impact) => impact.scope === "direct")!.summary,
+    );
+    expect(summarizePlainAnchorStatus(first)).toBe("原结局保住了 · 改道");
+    expect(
+      summarizePlainAnchorStatus({
+        ...first,
+        anchors: [first.anchors[0]!, second.anchors[0]!],
+        anchorEvaluations: [
+          first.anchorEvaluations[0]!,
+          second.anchorEvaluations[0]!,
+        ],
+      }),
+    ).toBe("2 个结局 · 原结局无法保留");
   });
 });

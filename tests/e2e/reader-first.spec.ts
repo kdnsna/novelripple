@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import path from "node:path";
 
-test("reader starts a ripple directly, picks a moment, and previews a strict ripple", async ({
+test("reader starts a ripple directly, previews it, and enters the first scene", async ({
   page,
 }) => {
   await page.goto("/");
@@ -36,6 +36,13 @@ test("reader starts a ripple directly, picks a moment, and previews a strict rip
     timeout: 15_000,
   });
 
+  // 关闭面板并切换事件后重开：建议已在工作区缓存，不得再次显示加载态。
+  await page.getByRole("button", { name: "返回 Evidence" }).click();
+  await page.getByTestId("event-node-event_06").click();
+  await page.getByRole("button", { name: "为所选事件创建 Ripple" }).click();
+  await expect(page.locator(".ripple-suggestion-card")).toHaveCount(3);
+  await expect(page.getByText("正在寻找值得改变的瞬间…")).toHaveCount(0);
+
   const card = page
     .locator(".ripple-suggestion-card")
     .filter({ hasText: "许澄没有把红色账簿交给周岚" });
@@ -56,8 +63,41 @@ test("reader starts a ripple directly, picks a moment, and previews a strict rip
     .check();
   await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
 
+  // 默认先展示一屏摘要：三类影响各一行 + 原结局状态 + 主操作。
   await expect(page.getByTestId("ripple-preview")).toBeVisible();
   await expect(page.locator(".mode-badge")).toHaveText("保留原结局");
-  await expect(page.getByText("Rerouted · 改道")).toBeVisible();
+  await expect(page.getByTestId("impact-summary")).toContainText("直接影响");
+  await expect(page.getByTestId("impact-summary")).toContainText("中期影响");
+  await expect(page.getByTestId("impact-summary")).toContainText("结局影响");
+  await expect(page.getByTestId("impact-summary")).toContainText(
+    "原结局保住了 · 改道",
+  );
   await expect(page.getByText("接受前不会创建 Worldline")).toBeVisible();
+
+  // 完整因果路径与 Anchor 解释仍在“查看完整影响”中。
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
+  await expect(page.getByText("Rerouted · 改道")).toBeVisible();
+  await expect(page.getByText(/因果路径：许澄交出红账/).first()).toBeVisible();
+
+  // 一键接受并进入新世界线；根方向自动出现，不需要再次点击生成。
+  await page.getByRole("button", { name: "进入新世界线" }).click();
+  await expect(page.getByTestId("worldline-continuation")).toBeVisible();
+  await expect(
+    page
+      .getByText("正在构思 3 个方向…")
+      .or(page.locator(".direction-card").first()),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".direction-card")).toHaveCount(3, {
+    timeout: 15_000,
+  });
+
+  // 选择一个方向后按现有流程得到第一幕。
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站的第二把锁",
+  );
 });

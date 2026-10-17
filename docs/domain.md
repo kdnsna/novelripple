@@ -157,7 +157,7 @@ Ripple Preview 只保存 `candidate` Impact Plan Artifact 与对应 Generation R
 
 ## Ripple Suggestions 与反馈谱系
 
-Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。
+Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。同一 confirmed Story Map revision 已有 Suggestions 时，后续请求直接复用最新一组 Artifact，不再次调用模型；同一进程内按 Story Map Artifact id 合并并发请求。失败后只有用户显式重试才会再次生成。
 
 Impact Plan 反馈重生成是完整的新 Generation Run 与完整 `ImpactPlanModelOutput`，不是局部 patch 或聊天。每次反馈产生新的不可变 `candidate` revision，并保存 `lineage`：父 candidate Artifact、反馈文本、新 Generation Run、同一 Story Map Artifact、同一 Divergence、同一 mode 与同一 Anchors。这些字段由服务端从父 candidate 冻结，客户端不可替换；原 candidate 与任何已接受版本保持不变。只有用户明确接受的一个候选谱系才能创建 Worldline。
 
@@ -195,7 +195,7 @@ Continuation 分为两个固定阶段，不是 Agent：
 
 方向和场景分别保存为不可变 `continuation` Artifact，均绑定该 Worldline、accepted Impact Plan 与对应 Generation Run；场景还绑定方向 Artifact 和用户选择。一次方向生成是一个方向批次（`schemaVersion: 2`）：`parentSceneId` 指向路径末端场景，根批次为 `null`，`batchIndex` 从 0 递增，批次内恰好三个方向。一次场景生成是一个节点（`schemaVersion: 2`），保存 `parentSceneId`、`depth`、`origin`（`generated` / `retry`）、`attemptIndex` 与 `summary`。根节点 `parentSceneId: null`、`depth: 1`；子节点 `depth = parent.depth + 1`。任一场景都可以作为父节点继续；同一方向重试创建新的兄弟场景（`origin: retry`、`attemptIndex` 递增），旧场景不更新；「换一批」在同一个父节点上创建新的方向批次（`batchIndex` 递增），旧批次保留。场景和方向 Artifact 永不 UPDATE，新内容总是新行。
 
-方向批次 ID 由 `(worldlineId, parentSceneId ?? "root", batchIndex)` 确定性派生，方向 ID 由 `(batchId, index)` 派生；场景 ID 由 `(directionsArtifactId, selectedDirectionId, attemptIndex)` 派生。相同 ID 的重复写入幂等返回已有行，因此并发重试不会产生重复批次或重复场景。v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`），保留可读并可作为根父节点，不迁移历史行。
+方向批次 ID 由 `(worldlineId, parentSceneId ?? "root", batchIndex)` 确定性派生，方向 ID 由 `(batchId, index)` 派生；场景 ID 由 `(directionsArtifactId, selectedDirectionId, attemptIndex)` 派生。相同 ID 的重复写入幂等返回已有行，因此并发重试不会产生重复批次或重复场景。进入 Worldline 时客户端自动请求根批次一次；服务端若已有根批次直接复用，同一进程内按确定性目标 Artifact id 合并并发请求，只有用户“换一批”才会创建新的 `batchIndex`。v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树字段，归一化为根节点（`parentSceneId: null`、`depth: 1`、`origin: generated`、`attemptIndex: 0`、`summary: null`、`contextManifest: null`），保留可读并可作为根父节点，不迁移历史行。
 
 `statePatch` 只包含 `factsAdded`、`factsRemoved`、`characterChanges`、`threadsOpened` 和 `threadsClosed`。新增事实只能使用 `generated:` key，不得占用 `event:` / `impact:` / `divergence:` 命名空间；删除事实不得删除 accepted Impact Plan 派生的 Delta、严格模式 Anchor 目标或越过 Divergence 倒改分歧前 Canon。人物和线索必须存在于当前状态。
 

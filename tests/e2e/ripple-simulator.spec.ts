@@ -47,25 +47,26 @@ test("generates a strict rerouted preview and creates one child only after accep
   await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
 
   await expect(page.getByTestId("ripple-preview")).toBeVisible();
-  await expect(page.getByText("直接影响")).toBeVisible();
-  await expect(page.getByText("中期影响")).toBeVisible();
-  await expect(page.getByText("结局影响")).toBeVisible();
+  await expect(page.getByTestId("impact-summary")).toContainText("直接影响");
+  await expect(page.getByTestId("impact-summary")).toContainText("中期影响");
+  await expect(page.getByTestId("impact-summary")).toContainText("结局影响");
+  await expect(page.getByTestId("impact-summary")).toContainText(
+    "原结局保住了 · 改道",
+  );
+  await expect(page.getByText("接受前不会创建 Worldline")).toBeVisible();
+
+  // 完整因果路径与 Anchor 解释收在“查看完整影响”里，信息不删除。
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
   await expect(page.getByText(/因果路径：许澄交出红账/).first()).toBeVisible();
   await expect(page.getByText("Rerouted · 改道")).toBeVisible();
   await expect(
     page.getByText(/Anchor · 白鸥号沉船事故的系统性真相最终进入公共记录/),
   ).toBeVisible();
   await expect(page.getByText(/Anchor 因果路径：许澄交出红账/)).toBeVisible();
-  await expect(page.getByText("接受前不会创建 Worldline")).toBeVisible();
 
-  await page
-    .getByRole("button", { name: "接受 ImpactPlan 并创建 Worldline" })
-    .click();
-  await expect(page.getByRole("status")).toContainText("新 Worldline 已创建");
-  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
-
-  await page.getByRole("button", { name: "进入新 Worldline" }).click();
+  await page.getByRole("button", { name: "进入新世界线" }).click();
   await expect(page.getByTestId("worldline-continuation")).toBeVisible();
+  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
   await expect(page.getByText("Canon", { exact: true })).toBeVisible();
   await expect(page.getByText("Divergence", { exact: true })).toBeVisible();
   await expect(page.getByText("当前 Worldline", { exact: true })).toBeVisible();
@@ -73,8 +74,10 @@ test("generates a strict rerouted preview and creates one child only after accep
     "许澄交出红账",
   );
 
-  await page.getByRole("button", { name: "生成 3 个后续方向" }).click();
-  await expect(page.locator(".direction-card")).toHaveCount(3);
+  // 进入新世界线后自动请求根方向，不需要再次点击“生成 3 个后续方向”。
+  await expect(page.locator(".direction-card")).toHaveCount(3, {
+    timeout: 15_000,
+  });
   await expect(page.getByText("方向批次 1")).toBeVisible();
   await expect(page.getByText("把证据藏进潮标站")).toBeVisible();
 
@@ -150,10 +153,14 @@ test("shows incompatible and blocks strict acceptance", async ({ page }) => {
   await page.getByLabel("红色账簿原件最终进入市档案馆").check();
   await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
 
+  await expect(page.getByTestId("impact-summary")).toContainText(
+    "原结局无法保留",
+  );
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
   await expect(page.getByText("Incompatible · 不兼容")).toBeVisible();
   await expect(
     page.getByRole("button", {
-      name: "接受 ImpactPlan 并创建 Worldline",
+      name: "进入新世界线",
     }),
   ).toBeDisabled();
   await expect(page.getByText("尚未创建子 Worldline")).toBeVisible();
@@ -174,13 +181,15 @@ test("generates and accepts an open-mode preview without ending Anchors", async 
 
   await expect(page.getByTestId("ripple-preview")).toBeVisible();
   await expect(page.locator(".mode-badge")).toHaveText("让故事自由发展");
+  await expect(page.getByTestId("impact-summary")).toContainText(
+    "不锁定结局 · 让故事自由发展",
+  );
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
   await expect(
     page.locator(".impact-item").getByText("旧东闸的实际泄洪能力低于原路径"),
   ).toBeVisible();
-  await page
-    .getByRole("button", { name: "接受 ImpactPlan 并创建 Worldline" })
-    .click();
-  await expect(page.getByRole("status")).toContainText("新 Worldline 已创建");
+  await page.getByRole("button", { name: "进入新世界线" }).click();
+  await expect(page.getByTestId("worldline-continuation")).toBeVisible();
 });
 
 test("uses suggestions as candidates and regenerates one immutable feedback lineage", async ({
@@ -210,6 +219,8 @@ test("uses suggestions as candidates and regenerates one immutable feedback line
     .check();
   await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
 
+  await expect(page.getByTestId("impact-summary")).toBeVisible();
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
   await expect(page.getByRole("heading", { name: "原路径" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "新路径" })).toBeVisible();
   for (const heading of ["删除", "修改", "新增", "保持不变的关键事实"]) {
@@ -225,9 +236,8 @@ test("uses suggestions as candidates and regenerates one immutable feedback line
   await expect(page.getByText("已创建 0 条子 Worldline")).toHaveCount(0);
   await expect(page.getByText("尚未创建子 Worldline")).toBeVisible();
 
-  await page
-    .getByRole("button", { name: "接受 ImpactPlan 并创建 Worldline" })
-    .click();
+  await page.getByRole("button", { name: "进入新世界线" }).click();
+  await expect(page.getByTestId("worldline-continuation")).toBeVisible();
   await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
 });
 

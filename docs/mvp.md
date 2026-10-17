@@ -18,11 +18,13 @@
 → 选择“保留原结局”或“让故事自由发展”
 → 查看 Ripple 影响预览
 → 必要时反馈并重新推演
-→ 创建 Worldline
+→ 一键进入新 Worldline
+→ 自动获得 3 个后续方向
+→ 选择一个方向
 → 阅读一个值得继续的新场景
 ```
 
-读者优先是默认路径：生成 candidate Story Map 后，用户可以一键快速确认并立即看到 3 个推荐分叉点。“核对、改人物、改边、补证据”保留为可选的**精修模式**；低置信度节点和结局用“待核对”角标提示，未精修不会阻止进入 Ripple，但会记录在不可变 revision 的 operation 中。普通确认（`confirm_story_map`）仍要求 readiness 通过。严格 / 开放模式的内部枚举不变，读者界面分别显示为“保留原结局”和“让故事自由发展”。
+读者优先是默认路径：生成 candidate Story Map 后，用户可以一键快速确认并立即看到 3 个推荐分叉点。“核对、改人物、改边、补证据”保留为可选的**精修模式**；低置信度节点和结局用“待核对”角标提示，未精修不会阻止进入 Ripple，但会记录在不可变 revision 的 operation 中。普通确认（`confirm_story_map`）仍要求 readiness 通过。严格 / 开放模式的内部枚举不变，读者界面分别显示为“保留原结局”和“让故事自由发展”。预览默认只展示三类影响摘要与原结局状态，完整因果路径与所有影响项收在“查看完整影响”中；接受后直接进入新世界线并自动出现根方向。
 
 所有 AI 输出仍先作为 candidate；人工修正、确认和反馈必须创建不可变 revision，旧 Source、Artifact 与 Worldline 不得被覆盖。
 
@@ -45,8 +47,8 @@ M1 的成功不是“能跑一次 Prompt”，而是三类真实作品在 [`docs
 5. 从 3 个 Ripple Suggestions 中选择有价值的分叉点，或由用户从时间线指定分叉点；
 6. 对每篇至少运行一个“保留原结局”（strict）和一个“让故事自由发展”（open）分歧；
 7. 必要时对 candidate Impact Plan 提交反馈并生成新的 candidate revision；
-8. 接受一个 Impact Plan，创建隔离的 Worldline；
-9. 生成并阅读一个符合 Canon、Delta 与 Anchor 的完整场景；
+8. 接受一个 Impact Plan，创建隔离的 Worldline，并直接进入该 Worldline；
+9. 自动获得根批次 3 个方向，选择一个方向后生成并阅读一个符合 Canon、Delta 与 Anchor 的完整场景；
 10. 将自动指标、人工评分（作者自评有效）、修正成本和（可选）用户观察写入脱敏 M1 质量仪表盘。
 
 任一 Evidence、Schema、引用、分歧前历史、Anchor 或 Worldline 隔离校验失败，都必须 fail closed；不得部分采用、静默修补或覆盖旧版本。

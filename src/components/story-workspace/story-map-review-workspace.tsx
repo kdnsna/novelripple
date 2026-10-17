@@ -1,16 +1,19 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import {
   confirmStoryMapAction,
+  generateContinuationDirectionsAction,
+  generateRippleSuggestionsAction,
   quickStartRippleAction,
   reviseStoryMapAction,
   type StoryMapActionResult,
 } from "@/app/projects/actions";
 import type { EvidencePickerOption } from "@/components/story-workspace/evidence-unit-picker";
 import {
+  appendContinuationArtifact,
   emptyContinuationTreeView,
   type ContinuationTreeView,
 } from "@/components/story-workspace/continuation-tree-view";
@@ -22,6 +25,7 @@ import {
 import { deriveStoryMapRefinementState } from "@/domain/review/derive-story-map-refinement";
 import {
   sourceReferenceKey,
+  type ContinuationDirectionsArtifact,
   type Event,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
@@ -53,6 +57,19 @@ type StoryMapReviewWorkspaceProps = {
   initialImpactPlanArtifacts: ImpactPlanArtifact[];
   initialRippleSuggestions: RippleSuggestionsArtifact | null;
   initialContinuationTrees: ContinuationTreeView[];
+};
+
+type SuggestionsState = {
+  artifactId: string;
+  suggestions: RippleSuggestionsArtifact | null;
+  loading: boolean;
+  error: string | null;
+};
+
+type RootDirectionsState = {
+  status: "loading" | "loaded" | "error";
+  artifact: ContinuationDirectionsArtifact | null;
+  error: string | null;
 };
 
 export function StoryMapReviewWorkspace({
@@ -102,10 +119,147 @@ export function StoryMapReviewWorkspace({
     initialImpactPlanArtifacts,
   );
   const [activeWorldlineId, setActiveWorldlineId] = useState<string | null>(null);
+  // Suggestions 与根方向请求都提升到工作区：面板关闭/重开、切换 Event 或
+  // 场景面板重挂载都不应重新发起付费生成。状态按实体 id 归属，只有当前
+  // Story Map artifact / worldline 匹配时才传给面板。
+  const [suggestionsState, setSuggestionsState] = useState<SuggestionsState>(
+    () => ({
+      artifactId: initialArtifact.id,
+      suggestions: initialRippleSuggestions,
+      loading: false,
+      error: null,
+    }),
+  );
+  const suggestionsAutoRequested = useRef<Set<string>>(new Set());
+  const [rootDirectionsByWorldline, setRootDirectionsByWorldline] = useState<
+    Record<string, RootDirectionsState>
+  >({});
+  const rootDirectionsAutoRequested = useRef<Set<string>>(new Set());
   // 单一 pending 是有意设计：revision 操作很短，禁用全部 mutation 按钮
   // 可以防止同一工作区并发提交产生交错 revision（服务端仍有 stale 校验兜底）。
   // AI 生成类操作在各自面板内拥有独立的 useTransition。
   const [pending, startTransition] = useTransition();
+
+  const requestSuggestions = useCallback(
+    async (artifactId: string): Promise<void> => {
+      setSuggestionsState((current) =>
+        current.artifactId === artifactId
+          ? { ...current, loading: true, error: null }
+          : current,
+      );
+      try {
+        const response = await generateRippleSuggestionsAction({
+          projectId,
+          storyMapArtifactId: artifactId,
+        });
+        setSuggestionsState((current) => {
+          if (current.artifactId !== artifactId) return current;
+          return response.ok
+            ? {
+                ...current,
+                loading: false,
+                suggestions: response.artifact,
+                error: null,
+              }
+            : { ...current, loading: false, error: response.error };
+        });
+      } catch {
+        setSuggestionsState((current) =>
+          current.artifactId === artifactId
+            ? {
+                ...current,
+                loading: false,
+                error: "Ripple Suggestions 生成失败，请重试。",
+              }
+            : current,
+        );
+      }
+    },
+    [projectId],
+  );
+
+  const requestRootDirections = useCallback(
+    async (worldlineId: string): Promise<void> => {
+      setRootDirectionsByWorldline((current) => {
+        const previous = current[worldlineId];
+        if (previous?.status === "loading") return current;
+        return {
+          ...current,
+          [worldlineId]: {
+            status: "loading",
+            artifact: previous?.artifact ?? null,
+            error: null,
+          },
+        };
+      });
+      try {
+        const response = await generateContinuationDirectionsAction({
+          projectId,
+          worldlineId,
+          parentSceneId: null,
+          newBatch: false,
+        });
+        setRootDirectionsByWorldline((current) => ({
+          ...current,
+          [worldlineId]: response.ok
+            ? { status: "loaded", artifact: response.artifact, error: null }
+            : {
+                status: "error",
+                artifact: current[worldlineId]?.artifact ?? null,
+                error: response.error,
+              },
+        }));
+      } catch {
+        setRootDirectionsByWorldline((current) => ({
+          ...current,
+          [worldlineId]: {
+            status: "error",
+            artifact: current[worldlineId]?.artifact ?? null,
+            error: "Continuation 方向生成失败，请重试。",
+          },
+        }));
+      }
+    },
+    [projectId],
+  );
+
+  // 当前 revision 还没有建议时自动生成一次。请求真正发出前先写 guard，
+  // 因此 StrictMode、Event 切换和面板重挂载都不会再次自动请求；失败后只有
+  // 用户点击“重试”才会重新请求。
+  useEffect(() => {
+    if (!rippleOpen || artifact.storyMap.status !== "confirmed") return;
+    if (suggestionsState.artifactId !== artifact.id) return;
+    if (
+      suggestionsState.suggestions ||
+      suggestionsState.loading ||
+      suggestionsState.error
+    ) {
+      return;
+    }
+    if (suggestionsAutoRequested.current.has(artifact.id)) return;
+    suggestionsAutoRequested.current.add(artifact.id);
+    void requestSuggestions(artifact.id);
+  }, [artifact.id, artifact.storyMap.status, requestSuggestions, rippleOpen, suggestionsState]);
+
+  // 进入一条还没有根方向批次的 Worldline 时自动请求一次。服务端会复用
+  // 已有批次并合并并发调用；guard 保证关闭/重开面板不会重复请求。
+  function enterWorldline(worldlineId: string): void {
+    setRippleOpen(false);
+    setActiveWorldlineId(worldlineId);
+    if (rootDirectionsAutoRequested.current.has(worldlineId)) return;
+    const existingTree = initialContinuationTrees.find(
+      (tree) => tree.worldlineId === worldlineId,
+    );
+    if (
+      existingTree?.directionBatches.some(
+        (batch) => batch.parentSceneId === null,
+      )
+    ) {
+      return;
+    }
+    rootDirectionsAutoRequested.current.add(worldlineId);
+    void requestRootDirections(worldlineId);
+  }
 
   // props 同步（渲染期状态调整模式）：
   // - 本地 revision 快进后再由 replace 导航送回同一 artifact：只刷新派生数据列表；
@@ -135,6 +289,20 @@ export function StoryMapReviewWorkspace({
         evidenceForSelection(nextSelection, initialArtifact) ??
           initialArtifact.storyMap.events[0].evidence[0] ??
           null,
+      );
+      setSuggestionsState({
+        artifactId: initialArtifact.id,
+        suggestions: initialRippleSuggestions,
+        loading: false,
+        error: null,
+      });
+    } else if (initialRippleSuggestions) {
+      // 同一 artifact 的服务端数据刷新（例如生成建议后的 revalidate）可以
+      // 补上本地还没有的建议，但不覆盖已加载的本地结果。
+      setSuggestionsState((current) =>
+        current.artifactId === initialArtifact.id && !current.suggestions
+          ? { ...current, suggestions: initialRippleSuggestions }
+          : current,
       );
     }
     setWorldlines(initialWorldlines);
@@ -172,6 +340,19 @@ export function StoryMapReviewWorkspace({
   const activeImpactPlanArtifact = activeWorldline?.acceptedImpactPlanId
     ? impactPlanArtifacts.find(
         (impactPlan) => impactPlan.id === activeWorldline.acceptedImpactPlanId,
+      )
+    : null;
+  const activeSuggestions =
+    suggestionsState.artifactId === artifact.id ? suggestionsState : null;
+  const rootDirectionsState = activeWorldline
+    ? rootDirectionsByWorldline[activeWorldline.id] ?? null
+    : null;
+  const activeContinuation = activeWorldline
+    ? withRootDirections(
+        initialContinuationTrees.find(
+          (tree) => tree.worldlineId === activeWorldline.id,
+        ) ?? emptyContinuationTreeView(activeWorldline.id),
+        rootDirectionsState?.artifact ?? null,
       )
     : null;
 
@@ -238,6 +419,17 @@ export function StoryMapReviewWorkspace({
     const nextReview = deriveStoryMapReview(nextArtifact, source);
     const nextStoryMap = nextArtifact.storyMap;
     setArtifact(nextArtifact);
+    if (nextArtifact.id !== artifact.id) {
+      setSuggestionsState({
+        artifactId: nextArtifact.id,
+        suggestions:
+          nextArtifact.id === initialArtifact.id
+            ? initialRippleSuggestions
+            : null,
+        loading: false,
+        error: null,
+      });
+    }
     setSelection((current) => {
       if (current.kind === "event") {
         return nextStoryMap.events.some((event) => event.id === current.eventId)
@@ -370,8 +562,7 @@ export function StoryMapReviewWorkspace({
                   className="secondary-button compact-button"
                   onClick={() => {
                     setViewMode("graph");
-                    setRippleOpen(false);
-                    setActiveWorldlineId(activeWorldlines[0]!.id);
+                    enterWorldline(activeWorldlines[0]!.id);
                   }}
                   type="button"
                 >
@@ -520,13 +711,21 @@ export function StoryMapReviewWorkspace({
           {activeWorldline && activeImpactPlanArtifact ? (
             <WorldlineContinuationPanel
               acceptedImpactPlanArtifact={activeImpactPlanArtifact}
-              initialContinuation={
-                initialContinuationTrees.find(
-                  (tree) => tree.worldlineId === activeWorldline.id,
-                ) ?? emptyContinuationTreeView(activeWorldline.id)
-              }
-              key={`${activeWorldline.id}:continuation`}
+              initialContinuation={activeContinuation!}
+              autoRootDirections={{
+                loading:
+                  rootDirectionsState === null ||
+                  rootDirectionsState.status === "loading",
+                error:
+                  rootDirectionsState?.status === "error"
+                    ? rootDirectionsState.error
+                    : null,
+              }}
+              key={`${activeWorldline.id}:${rootDirectionsState?.artifact?.id ?? "no-root"}:continuation`}
               onClose={() => setActiveWorldlineId(null)}
+              onRetryRootDirections={() => {
+                void requestRootDirections(activeWorldline.id);
+              }}
               projectId={projectId}
               storyMapArtifact={artifact}
               worldline={activeWorldline}
@@ -535,7 +734,6 @@ export function StoryMapReviewWorkspace({
             <RippleSimulatorPanel
               key={`${artifact.id}:${selectedEvent.id}:ripple`}
               artifact={artifact}
-              initialSuggestions={initialRippleSuggestions}
               needsReviewEndingIds={refinementState.endingIds}
               onAccepted={(worldline, acceptedArtifact) => {
                 setWorldlines((current) => [
@@ -549,11 +747,16 @@ export function StoryMapReviewWorkspace({
               }}
               onClose={() => setRippleOpen(false)}
               onEnterWorldline={(worldlineId) => {
-                setRippleOpen(false);
-                setActiveWorldlineId(worldlineId);
+                enterWorldline(worldlineId);
+              }}
+              onRetrySuggestions={() => {
+                void requestSuggestions(artifact.id);
               }}
               projectId={projectId}
               selectedEvent={selectedEvent}
+              suggestions={activeSuggestions?.suggestions ?? null}
+              suggestionsError={activeSuggestions?.error ?? null}
+              suggestionsLoading={activeSuggestions?.loading ?? false}
             />
           ) : (
             <StoryMapDetails
@@ -572,6 +775,13 @@ export function StoryMapReviewWorkspace({
       )}
     </section>
   );
+}
+
+function withRootDirections(
+  view: ContinuationTreeView,
+  artifact: ContinuationDirectionsArtifact | null,
+): ContinuationTreeView {
+  return artifact ? appendContinuationArtifact(view, artifact) : view;
 }
 
 function selectDefaultReviewItem(

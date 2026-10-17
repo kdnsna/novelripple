@@ -110,6 +110,8 @@ npm run dev
 
 打开 `http://localhost:3000` 即可创建项目并导入 Source。重复导入规范化后内容相同的文件会打开已有 Source；内容发生变化时会创建新版本，旧 Source 不会被覆盖。
 
+> **隐私：真实作品请用生产服务器运行。** 开发模式请只导入测试或公版文本；处理真实作品时使用 `npm run build && npm start`。Next 16 开发模式默认会在终端记录 Server Function 名称、参数值与耗时，而本项目 action 会接收原著正文与改写指令；仓库已在 `next.config.ts` 设置 `logging.serverFunctions: false`，请保持关闭，避免作品内容进入日志。
+
 常用验证命令：
 
 ```bash

@@ -1,17 +1,10 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  useTransition,
-  type FormEvent,
-} from "react";
+import { useState, useTransition, type FormEvent } from "react";
 
 import {
   acceptImpactPlanAction,
   generateRipplePreviewAction,
-  generateRippleSuggestionsAction,
   regenerateRipplePreviewAction,
 } from "@/app/projects/actions";
 import { deriveImpactPlanComparison } from "@/domain/ripple/derive-impact-plan-comparison";
@@ -28,7 +21,9 @@ type RippleSimulatorPanelProps = {
   projectId: string;
   artifact: StoryMapArtifact;
   selectedEvent: Event;
-  initialSuggestions: RippleSuggestionsArtifact | null;
+  suggestions: RippleSuggestionsArtifact | null;
+  suggestionsLoading: boolean;
+  suggestionsError: string | null;
   needsReviewEndingIds?: string[];
   onClose: () => void;
   onAccepted: (
@@ -36,6 +31,7 @@ type RippleSimulatorPanelProps = {
     acceptedArtifact: ImpactPlanArtifact,
   ) => void;
   onEnterWorldline: (worldlineId: string) => void;
+  onRetrySuggestions: () => void;
 };
 
 const divergenceLabels = {
@@ -50,6 +46,51 @@ const anchorStatusLabels = {
   threatened: "Threatened · 受威胁",
   incompatible: "Incompatible · 不兼容",
 } as const;
+
+const plainAnchorStatusLabels = {
+  preserved: "原结局保住了",
+  rerouted: "原结局保住了 · 改道",
+  threatened: "原结局受到威胁",
+  incompatible: "原结局无法保留",
+} as const;
+
+const impactScopeLabels = {
+  direct: "直接影响",
+  downstream: "中期影响",
+  ending: "结局影响",
+} as const;
+
+type ImpactScope = keyof typeof impactScopeLabels;
+
+export function summarizeImpactScope(
+  plan: ImpactPlan,
+  scope: ImpactScope,
+): string {
+  const impacts = plan.impacts.filter((impact) => impact.scope === scope);
+  if (impacts.length === 0) return "无";
+  const first = impacts[0]!.summary;
+  return impacts.length > 1 ? `${first}（另有 ${impacts.length - 1} 项）` : first;
+}
+
+/**
+ * 摘要只回答“原结局怎么样了”；完整 Anchor 评估、路径与解释仍在详情中。
+ * 多个 Anchor 取最严重的状态，并保留数量提示。
+ */
+export function summarizePlainAnchorStatus(plan: ImpactPlan): string | null {
+  if (plan.mode !== "strict" || plan.anchorEvaluations.length === 0) return null;
+  const severity = ["preserved", "rerouted", "threatened", "incompatible"] as const;
+  const worst = plan.anchorEvaluations.reduce<(typeof severity)[number]>(
+    (current, evaluation) =>
+      severity.indexOf(evaluation.status) > severity.indexOf(current)
+        ? evaluation.status
+        : current,
+    "preserved",
+  );
+  const label = plainAnchorStatusLabels[worst];
+  return plan.anchorEvaluations.length > 1
+    ? `${plan.anchorEvaluations.length} 个结局 · ${label}`
+    : label;
+}
 
 export function mapAnchorEvaluationRows(
   plan: ImpactPlan,
@@ -71,11 +112,14 @@ export function RippleSimulatorPanel({
   projectId,
   artifact,
   selectedEvent,
-  initialSuggestions,
+  suggestions,
+  suggestionsLoading,
+  suggestionsError,
   needsReviewEndingIds = [],
   onClose,
   onAccepted,
   onEnterWorldline,
+  onRetrySuggestions,
 }: RippleSimulatorPanelProps) {
   const [divergenceType, setDivergenceType] = useState<
     "prevent" | "choice" | "outcome"
@@ -85,17 +129,7 @@ export function RippleSimulatorPanel({
   const [mode, setMode] = useState<"strict" | "open">("strict");
   const [endingCandidateIds, setEndingCandidateIds] = useState<string[]>([]);
   const [preview, setPreview] = useState<ImpactPlanArtifact | null>(null);
-  const [suggestions, setSuggestions] =
-    useState<RippleSuggestionsArtifact | null>(initialSuggestions);
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
-  const [suggestionsError, setSuggestionsError] = useState<string | null>(null);
-  const suggestionsRequested = useRef(false);
   const [feedback, setFeedback] = useState("");
-  const [acceptedWorldline, setAcceptedWorldline] = useState<Worldline | null>(
-    null,
-  );
-  const [acceptedArtifact, setAcceptedArtifact] =
-    useState<ImpactPlanArtifact | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const storyMap = artifact.storyMap;
@@ -132,7 +166,6 @@ export function RippleSimulatorPanel({
   function generatePreview(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     setError(null);
-    setAcceptedWorldline(null);
     startTransition(async () => {
       const result = await generateRipplePreviewAction({
         projectId,
@@ -150,32 +183,6 @@ export function RippleSimulatorPanel({
       setPreview(result.artifact);
     });
   }
-
-  async function requestSuggestions(): Promise<void> {
-    if (suggestionsLoading) return;
-    setSuggestionsLoading(true);
-    setSuggestionsError(null);
-    const result = await generateRippleSuggestionsAction({
-      projectId,
-      storyMapArtifactId: artifact.id,
-    });
-    setSuggestionsLoading(false);
-    if (!result.ok) {
-      setSuggestionsError(result.error);
-      return;
-    }
-    setSuggestions(result.artifact);
-  }
-
-  // 当前 revision 还没有建议时自动生成一次；ref 防止 StrictMode/重渲染重复调用。
-  // 失败只显示在建议区，提供显式重试，不影响用户继续自己选事件。
-  useEffect(() => {
-    if (suggestions || suggestionsRequested.current) return;
-    suggestionsRequested.current = true;
-    void requestSuggestions();
-    // 每个 revision 面板按 artifact/event 重挂载，只请求一次。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function applySuggestion(
     suggestion: RippleSuggestionsArtifact["suggestions"][number],
@@ -219,16 +226,14 @@ export function RippleSimulatorPanel({
         setError(result.error);
         return;
       }
-      setAcceptedWorldline(result.worldline);
-      setAcceptedArtifact(result.acceptedArtifact);
       onAccepted(result.worldline, result.acceptedArtifact);
+      // 接受后直接进入新 Worldline；方向由工作区自动请求一次。
+      onEnterWorldline(result.worldline.id);
     });
   }
 
   function returnToDivergence(): void {
     setPreview(null);
-    setAcceptedWorldline(null);
-    setAcceptedArtifact(null);
     setError(null);
   }
 
@@ -269,7 +274,7 @@ export function RippleSimulatorPanel({
                 <button
                   className="secondary-button compact-button"
                   disabled={suggestionsLoading}
-                  onClick={() => void requestSuggestions()}
+                  onClick={onRetrySuggestions}
                   type="button"
                 >
                   重试
@@ -435,212 +440,211 @@ export function RippleSimulatorPanel({
             </span>
           </div>
 
-          <section className="impact-group changed-what">
-            <h4>改变了什么</h4>
-            <strong>{plan.divergence.instruction}</strong>
-          </section>
-
-          {preview?.lineage ? (
-            <p className="candidate-lineage">基于上一候选重新推演</p>
-          ) : null}
-
-          {comparison ? (
-            <section className="impact-comparison" aria-label="原路径与新路径">
-              <div>
-                <h4>原路径</h4>
-                <ol>
-                  {comparison.originalPath.map((event) => (
-                    <li key={event.eventId}>{event.title}</li>
-                  ))}
-                </ol>
-              </div>
-              <div>
-                <h4>新路径</h4>
-                <ol>
-                  {comparison.newPath.map((impact) => (
-                    <li key={impact.impactId}>{impact.summary}</li>
-                  ))}
-                </ol>
-              </div>
-              {(
-                [
-                  ["removed", "删除"],
-                  ["modified", "修改"],
-                  ["added", "新增"],
-                  ["preserved", "保持不变的关键事实"],
-                ] as const
-              ).map(([changeType, label]) => (
-                <div key={changeType}>
-                  <h4>{label}</h4>
-                  {comparison.changes[changeType].length > 0 ? (
-                    <ul>
-                      {comparison.changes[changeType].map((change) => (
-                        <li key={change.impactId}>{change.summary}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p>无</p>
-                  )}
-                </div>
-              ))}
-            </section>
-          ) : null}
-
-          {(["direct", "downstream", "ending"] as const).map((scope) => (
-            <section className="impact-group" key={scope}>
-              <h4>
-                {scope === "direct"
-                  ? "直接影响"
-                  : scope === "downstream"
-                    ? "中期影响"
-                    : "结局影响"}
-              </h4>
-              {plan.impacts
-                .filter((impact) => impact.scope === scope)
-                .map((impact) => (
-                  <article className="impact-item" key={impact.id}>
-                    <span className={`change change-${impact.changeType}`}>
-                      {impact.changeType === "removed"
-                        ? "−"
-                        : impact.changeType === "added"
-                          ? "+"
-                          : "~"}
-                    </span>
-                    <div>
-                      <strong>{impact.summary}</strong>
-                      <p><b>为什么：</b>{impact.explanation}</p>
-                      <small>
-                        因果路径：{formatReasonPath(impact.reasonPath)}
-                        {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
-                        {" · "}置信度：{Math.round(impact.confidence * 100)}%
-                      </small>
-                    </div>
-                  </article>
-                ))}
-            </section>
-          ))}
-
-          {mapAnchorEvaluationRows(plan).map((evaluation) => (
-            <section
-              className={`anchor-check anchor-${evaluation.status}`}
-              key={evaluation.anchorId}
-            >
-              <div>
-                <span>Anchor · {evaluation.requirement}</span>
-                <strong>{anchorStatusLabels[evaluation.status]}</strong>
-              </div>
-              <p>{evaluation.explanation}</p>
-              <small>
-                Anchor 因果路径：{formatReasonPath(evaluation.reasonPath)}
-              </small>
-            </section>
-          ))}
-
-          <section className="impact-group compact-impact-list">
-            <h4>人物状态变化</h4>
-            <ul>
-              {plan.characterChanges.map((change) => (
-                <li key={`${change.characterId}:${change.summary}`}>
-                  <strong>{characterNames[change.characterId] ?? change.characterId}</strong>
-                  {"："}{change.summary}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="impact-group compact-impact-list">
-            <h4>线索变化</h4>
-            <ul>
-              {plan.threadChanges.opened.map((thread) => (
-                <li key={`opened:${thread}`}><strong>开启：</strong>{thread}</li>
-              ))}
-              {plan.threadChanges.closed.map((thread) => (
-                <li key={`closed:${thread}`}><strong>关闭：</strong>{thread}</li>
-              ))}
-            </ul>
-          </section>
-
-          {plan.uncertainties.length > 0 ? (
-            <details className="uncertainties">
-              <summary>{plan.uncertainties.length} 个不确定项</summary>
-              <ul>
-                {plan.uncertainties.map((uncertainty) => (
-                  <li key={uncertainty}>{uncertainty}</li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
-
-          <form className="impact-feedback" onSubmit={regeneratePreview}>
-            <label htmlFor={`impact-feedback-${preview!.id}`}>
-              指出一个关键判断问题
-            </label>
-            <textarea
-              id={`impact-feedback-${preview!.id}`}
-              maxLength={2_000}
-              onChange={(event) => setFeedback(event.target.value)}
-              placeholder="只写一条明确修正，不会进入聊天"
-              required
-              rows={3}
-              value={feedback}
-            />
-            <button
-              className="secondary-button"
-              disabled={pending || feedback.trim().length === 0}
-              type="submit"
-            >
-              {pending ? "正在重新推演…" : "根据反馈重新推演"}
-            </button>
-          </form>
-
-          {incompatible ? (
-            <div className="blocked-message">
-              该分歧与要保留的结局不兼容。保留原结局模式不会强行圆回原结局。
+          <section
+            className="impact-summary"
+            data-testid="impact-summary"
+            aria-label="涟漪影响摘要"
+          >
+            <div className="impact-summary-divergence">
+              <span>改变了什么</span>
+              <strong>{plan.divergence.instruction}</strong>
             </div>
-          ) : (
-            <p className="preview-write-boundary">接受前不会创建 Worldline</p>
-          )}
 
-          <div className="ripple-preview-actions">
-            <button
-              className="secondary-button"
-              disabled={pending}
-              onClick={returnToDivergence}
-              type="button"
-            >
-              返回修改 Divergence
-            </button>
-            <button
-              className="primary-button"
-              disabled={incompatible || pending || acceptedWorldline !== null}
-              onClick={acceptPreview}
-              type="button"
-            >
-              {pending
-                ? "正在创建…"
-                : acceptedWorldline
-                  ? "ImpactPlan 已接受"
-                  : "接受 ImpactPlan 并创建 Worldline"}
-            </button>
-          </div>
+            {(["direct", "downstream", "ending"] as const).map((scope) => (
+              <div className="impact-summary-row" key={scope}>
+                <span>{impactScopeLabels[scope]}</span>
+                <strong>{summarizeImpactScope(plan, scope)}</strong>
+              </div>
+            ))}
 
-          {acceptedWorldline ? (
-            <div className="result-success" role="status">
-              <strong>新 Worldline 已创建</strong>
-              <span>{acceptedWorldline.id}</span>
-              <small>重复接受会返回同一分支，Canon 保持只读。</small>
+            <div className="impact-summary-row impact-summary-anchor">
+              <span>{plan.mode === "strict" ? "原结局" : "故事走向"}</span>
+              <strong>
+                {plan.mode === "strict"
+                  ? summarizePlainAnchorStatus(plan) ?? "未提供 Anchor 评估"
+                  : "不锁定结局 · 让故事自由发展"}
+              </strong>
+            </div>
+
+            {preview?.lineage ? (
+              <p className="candidate-lineage">基于上一候选重新推演</p>
+            ) : null}
+
+            {incompatible ? (
+              <div className="blocked-message">
+                该分歧与要保留的结局不兼容。保留原结局模式不会强行圆回原结局。
+              </div>
+            ) : (
+              <p className="preview-write-boundary">接受前不会创建 Worldline</p>
+            )}
+
+            <div className="ripple-preview-actions">
               <button
                 className="secondary-button"
-                disabled={!acceptedArtifact}
-                onClick={() => {
-                  if (acceptedArtifact) onEnterWorldline(acceptedWorldline.id);
-                }}
+                disabled={pending}
+                onClick={returnToDivergence}
                 type="button"
               >
-                进入新 Worldline
+                返回修改 Divergence
+              </button>
+              <button
+                className="primary-button"
+                disabled={incompatible || pending}
+                onClick={acceptPreview}
+                type="button"
+              >
+                {pending ? "正在进入…" : "进入新世界线"}
               </button>
             </div>
-          ) : null}
+          </section>
+
+          <details className="impact-details" data-testid="impact-details">
+            <summary>查看完整影响</summary>
+            <div className="impact-details-body">
+              {comparison ? (
+                <section className="impact-comparison" aria-label="原路径与新路径">
+                  <div>
+                    <h4>原路径</h4>
+                    <ol>
+                      {comparison.originalPath.map((event) => (
+                        <li key={event.eventId}>{event.title}</li>
+                      ))}
+                    </ol>
+                  </div>
+                  <div>
+                    <h4>新路径</h4>
+                    <ol>
+                      {comparison.newPath.map((impact) => (
+                        <li key={impact.impactId}>{impact.summary}</li>
+                      ))}
+                    </ol>
+                  </div>
+                  {(
+                    [
+                      ["removed", "删除"],
+                      ["modified", "修改"],
+                      ["added", "新增"],
+                      ["preserved", "保持不变的关键事实"],
+                    ] as const
+                  ).map(([changeType, label]) => (
+                    <div key={changeType}>
+                      <h4>{label}</h4>
+                      {comparison.changes[changeType].length > 0 ? (
+                        <ul>
+                          {comparison.changes[changeType].map((change) => (
+                            <li key={change.impactId}>{change.summary}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>无</p>
+                      )}
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+
+              {(["direct", "downstream", "ending"] as const).map((scope) => (
+                <section className="impact-group" key={scope}>
+                  <h4>{impactScopeLabels[scope]}</h4>
+                  {plan.impacts
+                    .filter((impact) => impact.scope === scope)
+                    .map((impact) => (
+                      <article className="impact-item" key={impact.id}>
+                        <span className={`change change-${impact.changeType}`}>
+                          {impact.changeType === "removed"
+                            ? "−"
+                            : impact.changeType === "added"
+                              ? "+"
+                              : "~"}
+                        </span>
+                        <div>
+                          <strong>{impact.summary}</strong>
+                          <p><b>为什么：</b>{impact.explanation}</p>
+                          <small>
+                            因果路径：{formatReasonPath(impact.reasonPath)}
+                            {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
+                            {" · "}置信度：{Math.round(impact.confidence * 100)}%
+                          </small>
+                        </div>
+                      </article>
+                    ))}
+                </section>
+              ))}
+
+              {mapAnchorEvaluationRows(plan).map((evaluation) => (
+                <section
+                  className={`anchor-check anchor-${evaluation.status}`}
+                  key={evaluation.anchorId}
+                >
+                  <div>
+                    <span>Anchor · {evaluation.requirement}</span>
+                    <strong>{anchorStatusLabels[evaluation.status]}</strong>
+                  </div>
+                  <p>{evaluation.explanation}</p>
+                  <small>
+                    Anchor 因果路径：{formatReasonPath(evaluation.reasonPath)}
+                  </small>
+                </section>
+              ))}
+
+              <section className="impact-group compact-impact-list">
+                <h4>人物状态变化</h4>
+                <ul>
+                  {plan.characterChanges.map((change) => (
+                    <li key={`${change.characterId}:${change.summary}`}>
+                      <strong>{characterNames[change.characterId] ?? change.characterId}</strong>
+                      {"："}{change.summary}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <section className="impact-group compact-impact-list">
+                <h4>线索变化</h4>
+                <ul>
+                  {plan.threadChanges.opened.map((thread) => (
+                    <li key={`opened:${thread}`}><strong>开启：</strong>{thread}</li>
+                  ))}
+                  {plan.threadChanges.closed.map((thread) => (
+                    <li key={`closed:${thread}`}><strong>关闭：</strong>{thread}</li>
+                  ))}
+                </ul>
+              </section>
+
+              {plan.uncertainties.length > 0 ? (
+                <details className="uncertainties">
+                  <summary>{plan.uncertainties.length} 个不确定项</summary>
+                  <ul>
+                    {plan.uncertainties.map((uncertainty) => (
+                      <li key={uncertainty}>{uncertainty}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+
+              <form className="impact-feedback" onSubmit={regeneratePreview}>
+                <label htmlFor={`impact-feedback-${preview!.id}`}>
+                  指出一个关键判断问题
+                </label>
+                <textarea
+                  id={`impact-feedback-${preview!.id}`}
+                  maxLength={2_000}
+                  onChange={(event) => setFeedback(event.target.value)}
+                  placeholder="只写一条明确修正，不会进入聊天"
+                  required
+                  rows={3}
+                  value={feedback}
+                />
+                <button
+                  className="secondary-button"
+                  disabled={pending || feedback.trim().length === 0}
+                  type="submit"
+                >
+                  {pending ? "正在重新推演…" : "根据反馈重新推演"}
+                </button>
+              </form>
+            </div>
+          </details>
         </div>
       )}
 

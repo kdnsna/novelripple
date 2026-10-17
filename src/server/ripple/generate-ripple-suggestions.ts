@@ -7,12 +7,16 @@ import {
   type StoryMap,
 } from "@/domain/schemas";
 import { generateStructured } from "@/server/ai/generate-structured";
+import { runWithInFlightLock } from "@/server/ai/in-flight-generation";
 import type {
   AIProvider,
   ModelConfig,
   StructuredValidationIssue,
 } from "@/server/ai/types";
-import { createRippleSuggestionsArtifact } from "@/server/repositories/ripple-suggestions-repository";
+import {
+  createRippleSuggestionsArtifact,
+  listRippleSuggestionsArtifactsForStoryMap,
+} from "@/server/repositories/ripple-suggestions-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
 const promptVersion = "ripple-suggestions.v3";
@@ -32,70 +36,97 @@ export async function generateRippleSuggestions(input: {
     throw new Error("只有 confirmed Story Map 才能生成 Ripple Suggestions");
   }
 
-  const storyMap = storyMapArtifact.storyMap;
-  const template = await readFile(
-    path.join(process.cwd(), "prompts", `${promptVersion}.md`),
-    "utf8",
-  );
-  const prompt = [
-    template,
-    "<suggestion_context>",
-    JSON.stringify({
-      eligibleEventIds: storyMap.events
-        .filter((event) =>
-          storyMap.edges.some(
-            (edge) =>
-              edge.from === event.id &&
-              (edge.type === "causes" || edge.type === "enables"),
-          ),
-        )
-        .map((event) => event.id),
-      events: storyMap.events.map((event) => ({
-        id: event.id,
-        sequence: event.sequence,
-        title: event.title,
-        summary: event.summary,
-        participants: event.participants,
-      })),
-      characters: storyMap.characters.map((character) => ({
-        id: character.id,
-        role: character.role,
-      })),
-      causalGraph: storyMap.edges.map((edge) => ({
-        from: edge.from,
-        to: edge.to,
-        type: edge.type,
-      })),
-      endingCandidates: storyMap.endingCandidates.map((ending) => ({
-        id: ending.id,
-        targetEventId: ending.targetEventId,
-        requirement: ending.requirement,
-      })),
-    }),
-    "</suggestion_context>",
-  ].join("\n\n");
+  // 每个 confirmed revision 只保留一组最新建议：面板关闭/重开、切换事件或
+  // 客户端并发调用都复用已有 Artifact，不重复产生付费模型调用。
+  const existing = latestSuggestions(input);
+  if (existing) return { artifact: existing, generation: null };
 
-  const generation = await generateStructured(
-    {
-      projectId: input.projectId,
-      worldlineId: null,
-      kind: "ripple_suggestions",
-      promptVersion,
-      prompt,
-      schemaName: "ripple_suggestions",
-      schema: RippleSuggestionsModelOutputSchema,
-      modelConfig: input.modelConfig,
-      validate: (output) => validateSuggestions(output, storyMap),
+  return runWithInFlightLock(
+    `ripple_suggestions:${input.storyMapArtifactId}`,
+    async () => {
+      const lockedExisting = latestSuggestions(input);
+      if (lockedExisting) {
+        return { artifact: lockedExisting, generation: null };
+      }
+
+      const storyMap = storyMapArtifact.storyMap;
+      const template = await readFile(
+        path.join(process.cwd(), "prompts", `${promptVersion}.md`),
+        "utf8",
+      );
+      const prompt = [
+        template,
+        "<suggestion_context>",
+        JSON.stringify({
+          eligibleEventIds: storyMap.events
+            .filter((event) =>
+              storyMap.edges.some(
+                (edge) =>
+                  edge.from === event.id &&
+                  (edge.type === "causes" || edge.type === "enables"),
+              ),
+            )
+            .map((event) => event.id),
+          events: storyMap.events.map((event) => ({
+            id: event.id,
+            sequence: event.sequence,
+            title: event.title,
+            summary: event.summary,
+            participants: event.participants,
+          })),
+          characters: storyMap.characters.map((character) => ({
+            id: character.id,
+            role: character.role,
+          })),
+          causalGraph: storyMap.edges.map((edge) => ({
+            from: edge.from,
+            to: edge.to,
+            type: edge.type,
+          })),
+          endingCandidates: storyMap.endingCandidates.map((ending) => ({
+            id: ending.id,
+            targetEventId: ending.targetEventId,
+            requirement: ending.requirement,
+          })),
+        }),
+        "</suggestion_context>",
+      ].join("\n\n");
+
+      const generation = await generateStructured(
+        {
+          projectId: input.projectId,
+          worldlineId: null,
+          kind: "ripple_suggestions",
+          promptVersion,
+          prompt,
+          schemaName: "ripple_suggestions",
+          schema: RippleSuggestionsModelOutputSchema,
+          modelConfig: input.modelConfig,
+          validate: (output) => validateSuggestions(output, storyMap),
+        },
+        input.provider,
+      );
+      const artifact = createRippleSuggestionsArtifact({
+        projectId: input.projectId,
+        storyMapArtifact,
+        suggestions: generation.value.suggestions,
+        generationRunId: generation.generation.runId,
+      });
+      return { artifact, generation: generation.generation };
     },
-    input.provider,
   );
-  const artifact = createRippleSuggestionsArtifact({
-    projectId: input.projectId,
-    storyMapArtifact,
-    suggestions: generation.value.suggestions,
-    generationRunId: generation.generation.runId,
-  });
-  return { artifact, generation: generation.generation };
+}
+
+function latestSuggestions(input: {
+  projectId: string;
+  storyMapArtifactId: string;
+}) {
+  return (
+    listRippleSuggestionsArtifactsForStoryMap(
+      input.projectId,
+      input.storyMapArtifactId,
+    )[0] ?? null
+  );
 }
 
 function validateSuggestions(

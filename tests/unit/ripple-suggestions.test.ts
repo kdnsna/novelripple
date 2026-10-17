@@ -6,6 +6,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { RippleSuggestionsModelOutput } from "@/domain/schemas";
 import { MockAIProvider } from "@/server/ai/mock-provider";
+import type {
+  AIProvider,
+  AIProviderRequest,
+  AIProviderResponse,
+} from "@/server/ai/types";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import { listProjectGenerationRuns } from "@/server/repositories/generation-run-repository";
@@ -59,6 +64,23 @@ const modelConfig = {
   model: "mock-ripple-model",
   structuredOutputMode: "json_schema" as const,
 };
+
+/** 慢速 provider：让两个并发请求都先进入 in-flight 窗口。 */
+class SlowAIProvider implements AIProvider {
+  readonly providerName = "slow-mock";
+  readonly requests: AIProviderRequest[] = [];
+  readonly #output: string;
+
+  constructor(output: string) {
+    this.#output = output;
+  }
+
+  async generate(request: AIProviderRequest): Promise<AIProviderResponse> {
+    this.requests.push(request);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return { rawOutput: this.#output };
+  }
+}
 
 const validSuggestions: RippleSuggestionsModelOutput = {
   suggestions: [
@@ -213,5 +235,56 @@ describe("Ripple Suggestions generation", () => {
       }),
     ).rejects.toThrow("Structured generation failed schema validation");
     expect(provider.requests).toHaveLength(2);
+  });
+
+  it("reuses the latest suggestions artifact without another provider call", async () => {
+    const { project, artifact } = await createContext();
+    const first = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    const secondProvider = new MockAIProvider([]);
+
+    const second = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      provider: secondProvider,
+      modelConfig,
+    });
+
+    expect(second.artifact).toEqual(first.artifact);
+    expect(second.generation).toBeNull();
+    expect(secondProvider.requests).toHaveLength(0);
+    expect(
+      listRippleSuggestionsArtifactsForStoryMap(project.id, artifact.id),
+    ).toHaveLength(1);
+  });
+
+  it("coalesces concurrent suggestions requests into one provider call", async () => {
+    const { project, artifact } = await createContext();
+    const provider = new SlowAIProvider(JSON.stringify(validSuggestions));
+
+    const [first, second] = await Promise.all([
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        provider,
+        modelConfig,
+      }),
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        provider,
+        modelConfig,
+      }),
+    ]);
+
+    expect(provider.requests).toHaveLength(1);
+    expect(first.artifact.id).toBe(second.artifact.id);
+    expect(
+      listRippleSuggestionsArtifactsForStoryMap(project.id, artifact.id),
+    ).toHaveLength(1);
   });
 });
