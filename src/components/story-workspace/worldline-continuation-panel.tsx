@@ -3,14 +3,22 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 
 import {
+  createWorldlineBookmarkAction,
+  deleteWorldlineBookmarkAction,
   generateContinuationDirectionsAction,
   generateContinuationSceneAction,
+  setWorldlineHeadAction,
 } from "@/app/projects/actions";
 import {
   buildSceneTree,
   derivePathState,
   type SceneNode,
 } from "@/domain/continuation/scene-tree";
+import {
+  assertHeadOnTree,
+  headNodeIdFromReadingPosition,
+  readingPositionFromHead,
+} from "@/domain/continuation/reading-position";
 import {
   buildWorldlineTreeOutline,
   derivePathCharacterTimeline,
@@ -32,6 +40,7 @@ import type {
   ImpactPlanArtifact,
   StoryMapArtifact,
   Worldline,
+  WorldlineBookmark,
 } from "@/domain/schemas";
 import {
   appendContinuationArtifact,
@@ -63,6 +72,7 @@ type WorldlineContinuationPanelProps = {
   worldline: Worldline;
   acceptedImpactPlanArtifact: ImpactPlanArtifact;
   initialContinuation: ContinuationTreeView;
+  initialBookmarks: WorldlineBookmark[];
   autoRootDirections: AutoRootDirections;
   onRetryRootDirections: () => void;
   onClose: () => void;
@@ -85,16 +95,51 @@ export function WorldlineContinuationPanel({
   worldline,
   acceptedImpactPlanArtifact,
   initialContinuation,
+  initialBookmarks,
   autoRootDirections,
   onRetryRootDirections,
   onClose,
 }: WorldlineContinuationPanelProps) {
+  /**
+   * 刷新后从服务端恢复阅读位置。head 失效时只提示并回到默认路径，
+   * 不在这里静默改写数据库（避免把损坏的游标自动“修好”）。
+   */
+  const initialReading = useMemo((): {
+    position: ReadingPosition;
+    error: string | null;
+  } => {
+    if (worldline.headNodeId === null) {
+      return { position: { kind: "default" }, error: null };
+    }
+    try {
+      const initialTree = buildSceneTree(initialContinuation.scenes);
+      assertHeadOnTree(initialTree, worldline.headNodeId);
+      return {
+        position: readingPositionFromHead(worldline.headNodeId),
+        error: null,
+      };
+    } catch {
+      return {
+        position: { kind: "default" },
+        error: "已保存的阅读位置已失效，已回到默认路径；数据库未被改动。",
+      };
+    }
+  }, [initialContinuation.scenes, worldline.headNodeId]);
+
   const [view, setView] = useState(initialContinuation);
-  const [position, setPosition] = useState<ReadingPosition>({
-    kind: "default",
-  });
+  const [position, setPosition] = useState<ReadingPosition>(
+    initialReading.position,
+  );
+  const [bookmarks, setBookmarks] = useState<WorldlineBookmark[]>(
+    initialBookmarks,
+  );
+  const [bookmarkName, setBookmarkName] = useState("");
+  const [bookmarkPending, setBookmarkPending] = useState(false);
+  const [headStatus, setHeadStatus] = useState<"idle" | "saving" | "saved">(
+    "idle",
+  );
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialReading.error);
   const [pending, startTransition] = useTransition();
   const [pendingKind, setPendingKind] = useState<PendingKind | null>(null);
   const [pendingDirectionId, setPendingDirectionId] = useState<string | null>(
@@ -105,6 +150,10 @@ export function WorldlineContinuationPanel({
    * 双击，避免重复发起服务端请求。
    */
   const pendingRef = useRef(false);
+  /** 阅读位置写入串行化：保证服务端最后落库的是用户最后一次点击。 */
+  const headWriteQueue = useRef<Promise<void>>(Promise.resolve());
+  const headWriteSeq = useRef(0);
+  const bookmarkPendingRef = useRef(false);
 
   function beginPending(
     kind: PendingKind,
@@ -257,6 +306,35 @@ export function WorldlineContinuationPanel({
     view.settingDeltas,
   ]);
 
+  /**
+   * 持久化阅读游标。请求按提交顺序串行执行，因此快速连续点树时服务端
+   * 最终保存的是最后一次点击；失败只提示，不回滚本地阅读位置。
+   */
+  function persistHead(next: ReadingPosition): void {
+    const headNodeId = headNodeIdFromReadingPosition(next);
+    const sequence = ++headWriteSeq.current;
+    setHeadStatus("saving");
+    const write = headWriteQueue.current.then(async () => {
+      const result = await setWorldlineHeadAction({
+        projectId,
+        worldlineId: worldline.id,
+        headNodeId,
+      });
+      if (sequence !== headWriteSeq.current) return;
+      if (!result.ok) {
+        setError(result.error);
+        setHeadStatus("idle");
+        return;
+      }
+      setHeadStatus("saved");
+    });
+    headWriteQueue.current = write.catch(() => {
+      if (sequence !== headWriteSeq.current) return;
+      setError("阅读位置保存失败，请重试。");
+      setHeadStatus("idle");
+    });
+  }
+
   function movePosition(next: ReadingPosition): void {
     // 阅读位置只通过这里和 selectGeneratedScene 改变；在此并入新路径的
     // 展开集合，避免用 effect 触发级联渲染。
@@ -266,6 +344,7 @@ export function WorldlineContinuationPanel({
     setPosition(next);
     setActiveBatchId(null);
     setError(null);
+    persistHead(next);
   }
 
   function runDirections(parentSceneId: string | null, newBatch: boolean): void {
@@ -356,8 +435,13 @@ export function WorldlineContinuationPanel({
       ),
     );
     setView((current) => appendContinuationArtifact(current, artifact));
-    setPosition({ kind: "scene", sceneId: artifact.id });
+    const nextPosition: ReadingPosition = {
+      kind: "scene",
+      sceneId: artifact.id,
+    };
+    setPosition(nextPosition);
     setActiveBatchId(null);
+    persistHead(nextPosition);
   }
 
   function selectSibling(sibling: SceneNode): void {
@@ -375,6 +459,78 @@ export function WorldlineContinuationPanel({
       else next.add(id);
       return next;
     });
+  }
+
+  function beginBookmarkPending(): boolean {
+    if (bookmarkPendingRef.current) return false;
+    bookmarkPendingRef.current = true;
+    setBookmarkPending(true);
+    return true;
+  }
+
+  function endBookmarkPending(): void {
+    bookmarkPendingRef.current = false;
+    setBookmarkPending(false);
+  }
+
+  function addBookmark(): void {
+    if (!beginBookmarkPending()) return;
+    setError(null);
+    void (async () => {
+      try {
+        const result = await createWorldlineBookmarkAction({
+          projectId,
+          worldlineId: worldline.id,
+          sceneNodeId: currentNodeId,
+          name: bookmarkName,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        setBookmarks((current) => [...current, result.bookmark]);
+        setBookmarkName("");
+      } finally {
+        endBookmarkPending();
+      }
+    })();
+  }
+
+  function deleteBookmark(bookmark: WorldlineBookmark): void {
+    if (!beginBookmarkPending()) return;
+    setError(null);
+    void (async () => {
+      try {
+        const result = await deleteWorldlineBookmarkAction({
+          projectId,
+          worldlineId: worldline.id,
+          bookmarkId: bookmark.id,
+        });
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
+        setBookmarks((current) =>
+          current.filter((item) => item.id !== bookmark.id),
+        );
+      } finally {
+        endBookmarkPending();
+      }
+    })();
+  }
+
+  function jumpToBookmark(bookmark: WorldlineBookmark): void {
+    movePosition(
+      bookmark.sceneNodeId === null
+        ? { kind: "root" }
+        : { kind: "scene", sceneId: bookmark.sceneNodeId },
+    );
+  }
+
+  function bookmarkSceneLabel(sceneNodeId: string | null): string {
+    if (sceneNodeId === null) return "分歧点";
+    const scene = tree.nodes.get(sceneNodeId);
+    return scene ? `第 ${scene.depth} 幕 · ${scene.title}` : "未知场景";
   }
 
   return (
@@ -419,6 +575,85 @@ export function WorldlineContinuationPanel({
           rows={treeRows}
         />
       ) : null}
+
+      {headStatus !== "idle" ? (
+        <p
+          className="reading-position-status"
+          data-testid="reading-position-status"
+          role="status"
+        >
+          {headStatus === "saving" ? "正在保存阅读位置…" : "阅读位置已保存。"}
+        </p>
+      ) : null}
+
+      <section
+        className="worldline-bookmarks"
+        data-testid="worldline-bookmarks"
+      >
+        <div className="worldline-bookmarks-heading">
+          <h3>书签</h3>
+          <small>书签只记录阅读位置，不写入剧情。</small>
+        </div>
+        <form
+          className="worldline-bookmark-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            addBookmark();
+          }}
+        >
+          <label>
+            <span>书签名</span>
+            <input
+              maxLength={40}
+              onChange={(event) => setBookmarkName(event.target.value)}
+              placeholder="例如：灯塔对峙"
+              value={bookmarkName}
+            />
+          </label>
+          <button
+            className="secondary-button compact-button"
+            disabled={bookmarkPending || bookmarkName.trim().length === 0}
+            type="submit"
+          >
+            {bookmarkPending ? "保存中…" : "加书签"}
+          </button>
+        </form>
+        {bookmarks.length === 0 ? (
+          <p className="worldline-bookmark-empty">还没有书签。</p>
+        ) : (
+          <ul className="worldline-bookmark-list">
+            {bookmarks.map((bookmark) => (
+              <li data-testid="worldline-bookmark" key={bookmark.id}>
+                <div>
+                  <strong>{bookmark.name}</strong>
+                  <small>{bookmarkSceneLabel(bookmark.sceneNodeId)}</small>
+                </div>
+                <div className="worldline-bookmark-actions">
+                  <button
+                    className="text-button"
+                    disabled={
+                      bookmark.sceneNodeId !== null &&
+                      !tree.nodes.has(bookmark.sceneNodeId)
+                    }
+                    onClick={() => jumpToBookmark(bookmark)}
+                    type="button"
+                  >
+                    跳转
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={bookmarkPending}
+                    onClick={() => deleteBookmark(bookmark)}
+                    type="button"
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section className="worldline-delta" data-testid="worldline-delta">
         <h3>当前路径 Delta</h3>

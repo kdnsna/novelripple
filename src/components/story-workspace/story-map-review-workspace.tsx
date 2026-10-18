@@ -34,6 +34,7 @@ import {
   type StoryMapArtifact,
   type StoryMapRevisionChange,
   type Worldline,
+  type WorldlineBookmark,
 } from "@/domain/schemas";
 import { RippleSimulatorPanel } from "./ripple-simulator-panel";
 import { SourceReader } from "./source-reader";
@@ -58,6 +59,7 @@ type StoryMapReviewWorkspaceProps = {
   /** 已持久化的建议批次，按 batchIndex 升序；空数组表示当前 revision 还没有建议。 */
   initialRippleSuggestionBatches: RippleSuggestionsArtifact[];
   initialContinuationTrees: ContinuationTreeView[];
+  initialWorldlineBookmarks: WorldlineBookmark[];
   rippleSuggestionBatchLimit: number;
 };
 
@@ -84,6 +86,7 @@ export function StoryMapReviewWorkspace({
   initialImpactPlanArtifacts,
   initialRippleSuggestionBatches,
   initialContinuationTrees,
+  initialWorldlineBookmarks,
   rippleSuggestionBatchLimit,
 }: StoryMapReviewWorkspaceProps) {
   const router = useRouter();
@@ -732,6 +735,9 @@ export function StoryMapReviewWorkspace({
             <WorldlineContinuationPanel
               acceptedImpactPlanArtifact={activeImpactPlanArtifact}
               initialContinuation={activeContinuation!}
+              initialBookmarks={initialWorldlineBookmarks.filter(
+                (bookmark) => bookmark.worldlineId === activeWorldline.id,
+              )}
               autoRootDirections={{
                 loading:
                   rootDirectionsState === null ||

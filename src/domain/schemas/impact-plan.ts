@@ -52,10 +52,25 @@ export const ImpactItemSchema = z
   })
   .strict();
 
+/**
+ * 人物在“当前路径”上的运行时状态，与 Character.role 的叙事功能无关。
+ *
+ * `role` 中的 `deceased` 是 Story Map 对人物叙事作用的静态描述；这里的
+ * `status` 只记录分歧点之后某条路径上人物是否在世/在场。旧 Artifact 没有
+ * 该字段仍可解析，缺失表示该变化没有显式改变状态。
+ */
+export const CharacterStatusSchema = z.enum([
+  "alive",
+  "dead",
+  "absent",
+  "unknown",
+]);
+
 export const CharacterChangeSchema = z
   .object({
     characterId: z.string().min(1),
     summary: z.string().min(1),
+    status: CharacterStatusSchema.optional(),
   })
   .strict();
 
@@ -182,6 +197,7 @@ export type Anchor = z.infer<typeof AnchorSchema>;
 export type AnchorEvaluation = z.infer<typeof AnchorEvaluationSchema>;
 export type ImpactItem = z.infer<typeof ImpactItemSchema>;
 export type CharacterChange = z.infer<typeof CharacterChangeSchema>;
+export type CharacterStatus = z.infer<typeof CharacterStatusSchema>;
 export type ThreadChanges = z.infer<typeof ThreadChangesSchema>;
 export type ImpactPlanModelOutput = z.infer<
   typeof ImpactPlanModelOutputSchema

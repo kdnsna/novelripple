@@ -2743,8 +2743,124 @@ input:focus-visible,
   font-size: 0.78rem;
 }
 
-.path-character-state-heading span {
+.path-character-state-heading > span {
   color: var(--ink-soft);
+}
+
+.path-character-status-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 0.64rem;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.path-character-status-badge[data-status="dead"] {
+  border-color: var(--rust);
+  color: var(--rust-dark);
+}
+
+.reading-position-status,
+.worldline-bookmark-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.worldline-bookmarks {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.worldline-bookmarks-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.worldline-bookmarks-heading h3 {
+  margin: 0;
+}
+
+.worldline-bookmarks-heading small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.worldline-bookmark-form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.worldline-bookmark-form label {
+  display: grid;
+  flex: 1 1 9rem;
+  gap: 0.2rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.worldline-bookmark-form input {
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.worldline-bookmark-list {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.worldline-bookmark-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--surface);
+}
+
+.worldline-bookmark-list > li > div {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.worldline-bookmark-list strong {
+  font-size: 0.76rem;
+}
+
+.worldline-bookmark-list small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.worldline-bookmark-actions {
+  display: flex;
+  gap: 0.3rem;
 }
 
 .path-character-history,

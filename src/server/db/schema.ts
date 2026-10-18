@@ -216,6 +216,8 @@ export const worldlines = sqliteTable(
     acceptedImpactPlanId: text("accepted_impact_plan_id").references(
       () => artifacts.id,
     ),
+    /** 阅读游标：最近一次阅读的场景；null 表示默认路径/分歧点。 */
+    headNodeId: text("head_node_id"),
     idempotencyKey: text("idempotency_key").notNull(),
     status: text("status", {
       enum: ["canonical", "active", "archived"],
@@ -231,5 +233,31 @@ export const worldlines = sqliteTable(
       table.projectId,
       table.parentWorldlineId,
     ),
+  ],
+);
+
+/**
+ * 命名书签：读者在世界线上的阅读游标，不是叙事 Artifact。
+ *
+ * scene_node_id 为 null 表示分歧点/根路径；非空由仓储层校验必须是本
+ * Worldline 的场景。唯一 (worldline_id, name) 防止同名书签。
+ */
+export const worldlineBookmarks = sqliteTable(
+  "worldline_bookmarks",
+  {
+    id: text("id").primaryKey(),
+    worldlineId: text("worldline_id")
+      .notNull()
+      .references(() => worldlines.id, { onDelete: "cascade" }),
+    sceneNodeId: text("scene_node_id"),
+    name: text("name").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("worldline_bookmarks_worldline_name_unique").on(
+      table.worldlineId,
+      table.name,
+    ),
+    index("worldline_bookmarks_worldline_idx").on(table.worldlineId),
   ],
 );

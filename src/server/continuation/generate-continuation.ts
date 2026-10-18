@@ -85,7 +85,7 @@ import {
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
 const directionsPromptVersion = "continuation-directions.v4";
-const scenePromptVersion = "continuation-scene.v5";
+const scenePromptVersion = "continuation-scene.v6";
 
 export {
   CONTINUATION_CONTEXT_MAX_CHARS_ENV,

@@ -6,6 +6,7 @@ import {
   type SceneTree,
 } from "@/domain/continuation/scene-tree";
 import type {
+  CharacterStatus,
   ContinuationCanonWarning,
   ContinuationDirection,
   WorldlineDelta,
@@ -229,6 +230,8 @@ export type PathCharacterHistoryEntry = {
   sceneId: string | null;
   depth: number;
   summary: string;
+  /** 该条变化显式携带的状态；未改变状态时缺省。 */
+  status?: CharacterStatus;
 };
 
 export type PathCharacterState = {
@@ -236,8 +239,26 @@ export type PathCharacterState = {
   name: string;
   /** 与 `derivePathState(baseDelta, path)` 中该人物的最后一条变化一致。 */
   current: string;
+  /** 沿路径最后一次显式 status；从未出现则为 null，不从 Character.role 推断。 */
+  currentStatus: CharacterStatus | null;
   history: PathCharacterHistoryEntry[];
 };
+
+/**
+ * 按给定顺序折叠人物状态：只认显式 `status`，后出现的覆盖先出现的。
+ *
+ * 传入顺序就是路径顺序（baseDelta → 每个场景）；没有 status 的变化不会
+ * 清空之前的状态，因此“状态未变”可以只写 summary。
+ */
+export function foldCharacterStatus(
+  changes: readonly { status?: CharacterStatus }[],
+): CharacterStatus | null {
+  let status: CharacterStatus | null = null;
+  for (const change of changes) {
+    if (change.status !== undefined) status = change.status;
+  }
+  return status;
+}
 
 /**
  * 沿当前路径推导人物状态时间线（分歧点 → 路径上的每个场景）。
@@ -257,28 +278,49 @@ export function derivePathCharacterTimeline(input: {
   const finalState = derivePathState(baseDelta, path);
 
   const historyByCharacter = new Map<string, PathCharacterHistoryEntry[]>();
-  const append = (characterId: string, entry: PathCharacterHistoryEntry) => {
+  const statusChangesByCharacter = new Map<
+    string,
+    { status?: CharacterStatus }[]
+  >();
+  const append = (
+    characterId: string,
+    entry: PathCharacterHistoryEntry,
+    statusChanges: { status?: CharacterStatus }[],
+  ) => {
     const history = historyByCharacter.get(characterId) ?? [];
     history.push(entry);
     historyByCharacter.set(characterId, history);
+    const changes = statusChangesByCharacter.get(characterId) ?? [];
+    changes.push(...statusChanges);
+    statusChangesByCharacter.set(characterId, changes);
   };
 
   for (const change of baseDelta.characterChanges) {
-    append(change.characterId, {
-      sourceKind: "divergence",
-      sceneId: null,
-      depth: 0,
-      summary: change.summary,
-    });
+    append(
+      change.characterId,
+      {
+        sourceKind: "divergence",
+        sceneId: null,
+        depth: 0,
+        summary: change.summary,
+        ...(change.status === undefined ? {} : { status: change.status }),
+      },
+      [{ ...(change.status === undefined ? {} : { status: change.status }) }],
+    );
   }
   for (const node of path) {
     for (const change of node.statePatch.characterChanges) {
-      append(change.characterId, {
-        sourceKind: "scene",
-        sceneId: node.id,
-        depth: node.depth,
-        summary: change.summary,
-      });
+      append(
+        change.characterId,
+        {
+          sourceKind: "scene",
+          sceneId: node.id,
+          depth: node.depth,
+          summary: change.summary,
+          ...(change.status === undefined ? {} : { status: change.status }),
+        },
+        [{ ...(change.status === undefined ? {} : { status: change.status }) }],
+      );
     }
   }
 
@@ -291,6 +333,9 @@ export function derivePathCharacterTimeline(input: {
   const knownIds = new Set(characters.map((character) => character.id));
   const result: PathCharacterState[] = [];
 
+  const statusFor = (characterId: string): CharacterStatus | null =>
+    foldCharacterStatus(statusChangesByCharacter.get(characterId) ?? []);
+
   for (const character of characters) {
     const history = historyByCharacter.get(character.id);
     if (!history) continue;
@@ -298,6 +343,7 @@ export function derivePathCharacterTimeline(input: {
       characterId: character.id,
       name: character.name,
       current: currentById.get(character.id) ?? history[history.length - 1]!.summary,
+      currentStatus: statusFor(character.id),
       history,
     });
   }
@@ -307,6 +353,7 @@ export function derivePathCharacterTimeline(input: {
       characterId,
       name: characterId,
       current: currentById.get(characterId) ?? history[history.length - 1]!.summary,
+      currentStatus: statusFor(characterId),
       history,
     });
   }

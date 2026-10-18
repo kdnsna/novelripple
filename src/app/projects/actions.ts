@@ -22,6 +22,7 @@ import {
   type SettingDeltaLifecycleStatus,
   type StoryMapArtifact,
   type Worldline,
+  type WorldlineBookmark,
 } from "@/domain/schemas";
 import { isSettingDeltaError } from "@/domain/continuation/setting-delta-error";
 import {
@@ -46,6 +47,12 @@ import {
   createSettingDeltaArtifact,
   createSettingDeltaLifecycleArtifact,
 } from "@/server/repositories/continuation-repository";
+import {
+  createWorldlineBookmark,
+  deleteWorldlineBookmark,
+  isReadingPositionError,
+  setWorldlineHeadNode,
+} from "@/server/repositories/reading-position-repository";
 import {
   confirmStoryMapArtifact,
   createStoryMapRevision,
@@ -599,4 +606,98 @@ function rippleErrorMessage(error: unknown): string {
   return safeFragments.some((fragment) => error.message.includes(fragment))
     ? error.message
     : "Ripple 操作失败，未改变 Worldline。";
+}
+
+const SetWorldlineHeadInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    headNodeId: z.string().min(1).nullable(),
+  })
+  .strict();
+
+export type SetWorldlineHeadActionResult =
+  | { ok: true; worldline: Worldline }
+  | { ok: false; error: string };
+
+/** 只更新阅读游标，不写 Continuation Artifact，也不触发模型调用。 */
+export async function setWorldlineHeadAction(
+  input: unknown,
+): Promise<SetWorldlineHeadActionResult> {
+  const parsed = SetWorldlineHeadInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "阅读位置参数无效，请刷新后重试。" };
+  }
+  try {
+    const worldline = setWorldlineHeadNode(parsed.data);
+    return { ok: true, worldline };
+  } catch (error) {
+    return { ok: false, error: readingPositionErrorMessage(error) };
+  }
+}
+
+const CreateWorldlineBookmarkInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    sceneNodeId: z.string().min(1).nullable(),
+    name: z.string(),
+  })
+  .strict();
+
+export type WorldlineBookmarkActionResult =
+  | { ok: true; bookmark: WorldlineBookmark }
+  | { ok: false; error: string };
+
+export async function createWorldlineBookmarkAction(
+  input: unknown,
+): Promise<WorldlineBookmarkActionResult> {
+  const parsed = CreateWorldlineBookmarkInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "书签参数无效，请检查名称与当前场景。" };
+  }
+  try {
+    const bookmark = createWorldlineBookmark(parsed.data);
+    // 书签列表由服务端随页面加载；让关闭/重开面板也能读到新行。
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, bookmark };
+  } catch (error) {
+    return { ok: false, error: readingPositionErrorMessage(error) };
+  }
+}
+
+const DeleteWorldlineBookmarkInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    bookmarkId: z.string().min(1),
+  })
+  .strict();
+
+export type DeleteWorldlineBookmarkActionResult =
+  | { ok: true; bookmarkId: string }
+  | { ok: false; error: string };
+
+export async function deleteWorldlineBookmarkAction(
+  input: unknown,
+): Promise<DeleteWorldlineBookmarkActionResult> {
+  const parsed = DeleteWorldlineBookmarkInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "书签参数无效，请刷新后重试。" };
+  }
+  try {
+    deleteWorldlineBookmark(parsed.data);
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, bookmarkId: parsed.data.bookmarkId };
+  } catch (error) {
+    return { ok: false, error: readingPositionErrorMessage(error) };
+  }
+}
+
+function readingPositionErrorMessage(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return "阅读位置或书签参数无效。";
+  }
+  if (isReadingPositionError(error)) return error.message;
+  return "阅读位置保存失败，未写入任何数据。";
 }

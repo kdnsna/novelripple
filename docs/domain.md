@@ -96,6 +96,8 @@ Story Map 生成不再占用一次同步 Server Action。用户点击生成后�
 
 Story Map 中可被事件引用的人物实体。Character 在所属 Story Map 版本内有唯一 ID，`role` 取 `protagonist` / `antagonist` / `supporting` / `minor` / `deceased`；`minor` 表示只短暂出现、无名、边缘或不确定是否重要的具体人物，仍与主要人物一样必须参与至少一个有 Evidence 的 Event。当前不在 Character 上复制独立 Evidence：可作为剧情事实使用的人物状态必须写入带 Evidence 的 Event；`role` 与 `initialState` 只用于地图浏览和提取定向，不能脱离相关 Event 充当 Canon 事实。别名可以归到同一 Character，但不确定的合并不得静默发生。Character split 只有真实 benchmark 记录明确需求后才实现；M1-04 没有取得该证据。
 
+`role` 是叙事功能，**不是**任一世界线路径上的运行状态；`deceased` 不会因分支事件被改写，也不迁移旧 Story Map。分歧后人物在某条路径上是否在世、在场，由可选 `statePatch.characterChanges[].status` 表示（`alive` / `dead` / `absent` / `unknown`）：旧 Artifact 没有该字段仍可解析，沿路径最后一条显式值生效，未设置的变化不清空更早状态，整条路径从未设置时为 `null`，绝不从 `role` 推断。
+
 ## Event
 
 原著中已经发生或被明确叙述的故事事件。Event 在所属 Story Map 版本内有唯一 ID、事实层级和 Evidence；同一版本不得出现重复 Event ID。每个 `participant` 都必须引用该版本中存在的 Character。
@@ -206,6 +208,8 @@ Source → Story Map version → Divergence → accepted Impact Plan → Worldli
 
 接受操作必须在同一事务中按顺序写入：`accepted Impact Plan revision → 幂等 Canonical Worldline → 子 Worldline`。Canonical 和子分支都使用确定性幂等标识；重复接受必须返回同一组记录。任一校验、Anchor 或写入失败时整个事务回滚。
 
+Worldline 行另有两个阅读游标，它们不是叙事 Artifact，也不进入 Delta 或生成上下文：`headNodeId` 记录最近阅读的场景（`null` 表示默认路径/分歧点，旧行迁移后为 `null`；canonical 只能为 `null`），`worldline_bookmarks` 保存命名书签（`scene_node_id` 为 `null` 表示分歧点）。这是 Artifact/revision 不可变合同之外唯一允许 UPDATE/删除的指针数据；非空场景 id 必须属于同一项目与 Worldline 且是已生成的场景，否则写入 fail closed，不建 artifacts 外键。书签名做 NFC + trim 后必须为 1–40 字符且同一 Worldline 内唯一；删除未知书签 fail closed。
+
 ## Continuation
 
 Continuation 分为两个固定阶段，不是 Agent：
@@ -224,6 +228,8 @@ Continuation 分为两个固定阶段，不是 Agent：
 ### 路径状态
 
 Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta（`baseDelta`）。当前路径状态是 `baseDelta` 沿根节点到当前节点的 `statePatch` 依次折叠的结果：只读取该路径上的节点，不读取兄弟节点、世界线中路径外的场景或未来节点。折叠沿用上述 `statePatch` 语义。路径必须同属一个 Worldline、父子链连续、`depth` 逐级加一，否则 fail closed。因此兄弟分支的状态互不可见，任一节点只影响它的后代路径。
+
+人物路径状态在上述折叠之外单独汇总 `currentStatus`：按 `baseDelta` → 根→当前节点顺序收集所有显式 `status`，最后一条生效；只写 summary 的变化保留此前状态，从未出现则为 `null`。人物时间线的 `current` 仍与 `derivePathState` 的最终 summary 一致。界面只在非 `null` 时显示「在世 / 已故 / 不在场 / 未知」，`Character.role` 不参与该派生。
 
 ### 路径作用域设定增量
 

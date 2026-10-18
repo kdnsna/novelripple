@@ -1,6 +1,9 @@
 import type { PathCharacterState } from "@/domain/continuation/worldline-tree";
 
-import { pathCharacterHistoryLabel } from "./worldline-tree-ui";
+import {
+  pathCharacterHistoryLabel,
+  pathCharacterStatusLabel,
+} from "./worldline-tree-ui";
 
 type PathCharacterStatesProps = {
   states: readonly PathCharacterState[];
@@ -21,7 +24,18 @@ export function PathCharacterStates({ states }: PathCharacterStatesProps) {
           {states.map((state) => (
             <li data-testid="path-character-state" key={state.characterId}>
               <div className="path-character-state-heading">
-                <strong>{state.name}</strong>
+                <strong>
+                  {state.name}
+                  {state.currentStatus ? (
+                    <span
+                      className="path-character-status-badge"
+                      data-status={state.currentStatus}
+                      data-testid="path-character-status"
+                    >
+                      {pathCharacterStatusLabel(state.currentStatus)}
+                    </span>
+                  ) : null}
+                </strong>
                 <span>{state.current}</span>
               </div>
               <p className="path-character-history">

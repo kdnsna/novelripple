@@ -370,7 +370,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === scene.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-scene.v5");
+    ).toBe("continuation-scene.v6");
     expect(sceneProvider.requests[0]?.prompt).toContain(selectedDirection.title);
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_events>");
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_evidence>");
