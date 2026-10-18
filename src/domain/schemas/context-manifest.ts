@@ -3,6 +3,7 @@ import { z } from "zod";
 export const ContextManifestSectionKindSchema = z.enum([
   "worldline_setup",
   "canon_events",
+  "setting_deltas",
   "path_summary",
   "canon_evidence",
   "recent_scenes",
@@ -20,7 +21,7 @@ export const ContextManifestSectionSchema = z
     included: z.boolean(),
     chars: z.number().int().min(0),
     trimmed: z.boolean(),
-    /** 被整体丢弃的条目 id（证据、旧场景、路径摘要行）。 */
+    /** 被整体丢弃的条目 id（证据、设定增量、旧场景、路径摘要行）。 */
     droppedItemIds: z.array(z.string()),
     /** 用自身摘要替换正文的条目 id（当前只会是最新场景）。 */
     summarizedItemIds: z.array(z.string()).optional(),

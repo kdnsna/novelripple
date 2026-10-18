@@ -37,6 +37,7 @@ import {
   createContinuationSceneArtifact,
   createContinuationSceneArtifactV2,
   createSettingDeltaArtifact,
+  createSettingDeltaLifecycleArtifact,
   getContinuationArtifact,
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
@@ -68,6 +69,13 @@ import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
 let temporaryDirectory: string;
 const previousEnvironment = new Map<string, string | undefined>();
+
+function promptSection(prompt: string, kind: string): string {
+  const match = new RegExp(`<${kind}>\\n([\\s\\S]*?)\\n</${kind}>`).exec(
+    prompt,
+  );
+  return match?.[1] ?? "";
+}
 
 beforeAll(async () => {
   temporaryDirectory = await mkdtemp(
@@ -375,6 +383,7 @@ describe("Continuation scene tree generation", () => {
     expect(manifest.sections.map((section) => section.kind)).toEqual([
       "worldline_setup",
       "canon_events",
+      "setting_deltas",
       "path_summary",
       "canon_evidence",
       "recent_scenes",
@@ -1158,7 +1167,7 @@ describe("Continuation scene tree generation", () => {
     });
   });
 
-  it("puts only path-scoped setting deltas into worldline_setup for directions and scenes", async () => {
+  it("puts only path-scoped setting deltas into the setting_deltas section", async () => {
     const context = await createAcceptedWorldline();
     const rootDirections = await generateContinuationDirections({
       projectId: context.project.id,
@@ -1193,7 +1202,7 @@ describe("Continuation scene tree generation", () => {
       modelConfig,
     });
 
-    createSettingDeltaArtifact({
+    const rootDelta = createSettingDeltaArtifact({
       projectId: context.project.id,
       worldlineId: context.worldline.id,
       anchorSceneId: null,
@@ -1227,11 +1236,17 @@ describe("Continuation scene tree generation", () => {
       modelConfig,
     });
     const rootPrompt = rootProvider.requests[0]?.prompt ?? "";
-    expect(rootPrompt).toContain("旧灯塔已被封锁，任何人不得进入。");
+    const rootSetup = promptSection(rootPrompt, "worldline_setup");
+    expect(rootSetup).not.toContain("settingDeltas");
+    expect(rootSetup).not.toContain("旧灯塔已被封锁，任何人不得进入。");
+    const rootSettingDeltas = promptSection(rootPrompt, "setting_deltas");
+    expect(rootSettingDeltas).toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(rootSettingDeltas).toContain("自分歧点起");
     expect(rootPrompt).not.toContain("夜班渡船已经停航。");
     expect(rootPrompt).not.toContain("北侧石阶已经塌方，不能通行。");
-    expect(rootPrompt).toContain('"settingDeltas"');
-    expect(rootPrompt).toContain('"anchor":"分歧点"');
+    expect(rootPrompt.indexOf("<setting_deltas>")).toBeGreaterThan(
+      rootPrompt.indexOf("<canon_events>"),
+    );
 
     const childDirectionsProvider = new MockAIProvider([
       JSON.stringify(directionOutput),
@@ -1246,12 +1261,19 @@ describe("Continuation scene tree generation", () => {
     });
     const childDirectionsPrompt =
       childDirectionsProvider.requests[0]?.prompt ?? "";
-    expect(childDirectionsPrompt).toContain("旧灯塔已被封锁，任何人不得进入。");
-    expect(childDirectionsPrompt).toContain("夜班渡船已经停航。");
+    const childSettingDeltas = promptSection(
+      childDirectionsPrompt,
+      "setting_deltas",
+    );
+    expect(childSettingDeltas).toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(childSettingDeltas).toContain("夜班渡船已经停航。");
+    expect(childSettingDeltas).toContain("自第 1 幕起");
     expect(childDirectionsPrompt).not.toContain(
       "北侧石阶已经塌方，不能通行。",
     );
-    expect(childDirectionsPrompt).toContain('"anchor":"第 1 幕"');
+    expect(
+      promptSection(childDirectionsPrompt, "worldline_setup"),
+    ).not.toContain("settingDeltas");
     expect(childDirectionsPrompt).toContain(
       "不能改写分歧点之前已发生的原著事实",
     );
@@ -1280,11 +1302,55 @@ describe("Continuation scene tree generation", () => {
       modelConfig,
     });
     const scenePrompt = sceneProvider.requests[0]?.prompt ?? "";
-    expect(scenePrompt).toContain("夜班渡船已经停航。");
+    expect(promptSection(scenePrompt, "setting_deltas")).toContain(
+      "夜班渡船已经停航。",
+    );
     expect(scenePrompt).not.toContain("北侧石阶已经塌方，不能通行。");
-    expect(scenePrompt).toContain("worldline_setup.settingDeltas");
+    expect(scenePrompt).toContain("`setting_deltas` 是读者为当前路径写下的设定规则");
     expect(scenePrompt).toContain(
       "不能改写分歧点之前已发生的原著事实",
+    );
+
+    // 停用根规则后，后续生成不再携带它；重新启用后恢复原说明。
+    createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      targetDeltaId: rootDelta.id,
+      status: "deactivated",
+      idempotencyKey: "generation-lifecycle-deactivate",
+    });
+    const deactivatedProvider = new MockAIProvider([
+      JSON.stringify(directionOutput),
+    ]);
+    await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      newBatch: true,
+      provider: deactivatedProvider,
+      modelConfig,
+    });
+    const deactivatedPrompt = deactivatedProvider.requests[0]?.prompt ?? "";
+    expect(deactivatedPrompt).not.toContain("旧灯塔已被封锁，任何人不得进入。");
+
+    createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      targetDeltaId: rootDelta.id,
+      status: "reactivated",
+      idempotencyKey: "generation-lifecycle-reactivate",
+    });
+    const reactivatedProvider = new MockAIProvider([
+      JSON.stringify(directionOutput),
+    ]);
+    await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      newBatch: true,
+      provider: reactivatedProvider,
+      modelConfig,
+    });
+    expect(reactivatedProvider.requests[0]?.prompt ?? "").toContain(
+      "旧灯塔已被封锁，任何人不得进入。",
     );
   });
 });

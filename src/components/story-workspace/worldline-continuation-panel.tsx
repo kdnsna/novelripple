@@ -67,6 +67,7 @@ type WorldlineContinuationPanelProps = {
 const contextSectionLabels: Record<ContextManifestSectionKind, string> = {
   worldline_setup: "世界线设定",
   canon_events: "相关原著事件",
+  setting_deltas: "路径设定增量",
   path_summary: "路径摘要",
   canon_evidence: "原著证据",
   recent_scenes: "最近场景",
@@ -420,6 +421,7 @@ export function WorldlineContinuationPanel({
           setView((current) => appendContinuationArtifact(current, artifact))
         }
         projectId={projectId}
+        settingDeltaLifecycles={view.settingDeltaLifecycles}
         settingDeltas={view.settingDeltas}
         tree={tree}
         worldlineId={worldline.id}

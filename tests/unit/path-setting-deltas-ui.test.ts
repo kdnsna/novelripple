@@ -9,6 +9,8 @@ import {
 
 import {
   emptySettingDeltaDraft,
+  settingDeltaActiveCount,
+  settingDeltaAddBlockReason,
   settingDeltaAnchorHint,
   settingDeltaHistoryLabel,
   settingDeltaScopeLabel,
@@ -17,6 +19,10 @@ import {
   validateSettingDeltaDraft,
   type SettingDeltaDraft,
 } from "@/components/story-workspace/path-setting-deltas-ui";
+import {
+  SETTING_DELTA_MAX_ACTIVE,
+  SETTING_DELTA_MAX_PER_WORLDLINE,
+} from "@/domain/continuation/setting-delta-limits";
 import { v2SceneFixture } from "../helpers/continuation-scene-fixtures";
 
 function buildTree() {
@@ -180,5 +186,30 @@ describe("path setting delta presentation helpers", () => {
       valid: false,
       error: "请输入设定词条名称。",
     });
+  });
+
+  it("warns and blocks adding when active rules on the current path reach the cap", () => {
+    expect(
+      settingDeltaActiveCount([
+        { status: "active" },
+        { status: "deactivated" },
+        { status: "active" },
+      ]),
+    ).toBe(2);
+    expect(
+      settingDeltaAddBlockReason({ activeCount: 19, storedCount: 19 }),
+    ).toBeNull();
+    expect(
+      settingDeltaAddBlockReason({
+        activeCount: SETTING_DELTA_MAX_ACTIVE,
+        storedCount: SETTING_DELTA_MAX_ACTIVE,
+      }),
+    ).toContain("停用或软删除已有规则");
+    expect(
+      settingDeltaAddBlockReason({
+        activeCount: 1,
+        storedCount: SETTING_DELTA_MAX_PER_WORLDLINE,
+      }),
+    ).toContain("每条 Worldline 最多保存");
   });
 });

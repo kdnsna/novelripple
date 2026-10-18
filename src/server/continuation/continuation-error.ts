@@ -22,6 +22,7 @@ export function continuationErrorMessage(
       "接下来可以：",
       "• 换一个分歧瞬间，或改用「让故事自由发展」（开放模式通常更短）；",
       "• 减少保留的结局 Anchor；",
+      "• 停用或软删除本路径上过长/过多的设定增量后重试；",
       `• 若由部署方配置，可提高环境变量 ${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 后重试。`,
     ].join("\n");
   }

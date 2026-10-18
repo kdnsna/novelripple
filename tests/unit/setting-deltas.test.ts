@@ -6,12 +6,22 @@ import {
   type SceneTree,
 } from "@/domain/continuation/scene-tree";
 import {
+  buildSettingDeltaContextItems,
   deriveActiveSettingDeltas,
+  derivePathSettingDeltas,
+  normalizedContextChars,
+  serializeSettingDeltasForContext,
+  settingDeltaLifecycleStatuses,
   subjectKey,
 } from "@/domain/continuation/setting-deltas";
-import { SETTING_DELTA_MAX_ACTIVE } from "@/domain/continuation/setting-delta-limits";
 import {
+  SETTING_DELTA_CONTEXT_MAX_CHARS,
+  SETTING_DELTA_MAX_ACTIVE,
+} from "@/domain/continuation/setting-delta-limits";
+import {
+  SettingDeltaLifecycleV1Schema,
   SettingDeltaV1Schema,
+  type SettingDeltaLifecycleV1,
   type SettingDeltaSubject,
   type SettingDeltaV1,
 } from "@/domain/schemas";
@@ -35,6 +45,23 @@ function settingDelta(input: {
     statement: input.statement ?? "旧灯塔已被封锁，不能进入。",
     contentKind: "user",
     createdAt: input.createdAt ?? "2026-08-11T00:00:00.000Z",
+  });
+}
+
+function lifecycle(input: {
+  id: string;
+  targetDeltaId: string;
+  status: "deactivated" | "reactivated" | "deleted";
+  createdAt?: string;
+  worldlineId?: string;
+}): SettingDeltaLifecycleV1 {
+  return SettingDeltaLifecycleV1Schema.parse({
+    id: input.id,
+    worldlineId: input.worldlineId ?? "wl_1",
+    targetDeltaId: input.targetDeltaId,
+    status: input.status,
+    contentKind: "user",
+    createdAt: input.createdAt ?? "2026-08-11T00:10:00.000Z",
   });
 }
 
@@ -287,5 +314,254 @@ describe("deriveActiveSettingDeltas", () => {
         path,
       }),
     ).toThrow("设定增量存在重复 id");
+  });
+});
+
+describe("setting delta lifecycles", () => {
+  const tree = buildTree();
+  const path = getScenePath(tree, "scene_a1");
+
+  it("shows a deactivated winner as inactive and drops it from active context", () => {
+    const deltas = [
+      settingDelta({
+        id: "delta_term",
+        statement: "旧灯塔已被封锁。",
+      }),
+    ];
+    const lifecycles = [
+      lifecycle({
+        id: "lifecycle_deactivate",
+        targetDeltaId: "delta_term",
+        status: "deactivated",
+      }),
+    ];
+
+    const visible = derivePathSettingDeltas({
+      tree,
+      deltas,
+      lifecycles,
+      path,
+    });
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({
+      status: "deactivated",
+      subjectKey: "term:旧灯塔",
+    });
+    expect(deriveActiveSettingDeltas({ tree, deltas, lifecycles, path })).toEqual(
+      [],
+    );
+  });
+
+  it("hides a soft-deleted winner entirely instead of restoring an older version", () => {
+    const deltas = [
+      settingDelta({
+        id: "delta_root",
+        statement: "旧灯塔还能通行。",
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+      settingDelta({
+        id: "delta_scene",
+        anchorSceneId: "scene_a",
+        statement: "旧灯塔已被封锁。",
+        createdAt: "2026-08-11T00:01:00.000Z",
+      }),
+    ];
+    const lifecycles = [
+      lifecycle({
+        id: "lifecycle_delete",
+        targetDeltaId: "delta_scene",
+        status: "deleted",
+      }),
+    ];
+
+    const visible = derivePathSettingDeltas({
+      tree,
+      deltas,
+      lifecycles,
+      path,
+    });
+    expect(visible).toEqual([]);
+  });
+
+  it("excludes a soft-deleted history item without hiding the active winner", () => {
+    const deltas = [
+      settingDelta({
+        id: "delta_root",
+        statement: "旧灯塔还能通行。",
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }),
+      settingDelta({
+        id: "delta_scene",
+        anchorSceneId: "scene_a",
+        statement: "旧灯塔已被封锁。",
+        createdAt: "2026-08-11T00:01:00.000Z",
+      }),
+    ];
+    const lifecycles = [
+      lifecycle({
+        id: "lifecycle_delete_history",
+        targetDeltaId: "delta_root",
+        status: "deleted",
+      }),
+    ];
+
+    const visible = derivePathSettingDeltas({
+      tree,
+      deltas,
+      lifecycles,
+      path,
+    });
+    expect(visible).toHaveLength(1);
+    expect(visible[0]!.active.id).toBe("delta_scene");
+    expect(visible[0]!.history.map((delta) => delta.id)).toEqual([]);
+  });
+
+  it("lets the latest lifecycle win so reactivation restores the original statement", () => {
+    const deltas = [
+      settingDelta({
+        id: "delta_term",
+        statement: "旧灯塔已被封锁。",
+      }),
+    ];
+    const lifecycles = [
+      lifecycle({
+        id: "lifecycle_deactivate",
+        targetDeltaId: "delta_term",
+        status: "deactivated",
+        createdAt: "2026-08-11T00:10:00.000Z",
+      }),
+      lifecycle({
+        id: "lifecycle_reactivate",
+        targetDeltaId: "delta_term",
+        status: "reactivated",
+        createdAt: "2026-08-11T00:11:00.000Z",
+      }),
+    ];
+
+    const active = deriveActiveSettingDeltas({
+      tree,
+      deltas,
+      lifecycles,
+      path,
+    });
+    expect(active).toHaveLength(1);
+    expect(active[0]!.active.statement).toBe("旧灯塔已被封锁。");
+    expect(
+      settingDeltaLifecycleStatuses(lifecycles).get("delta_term"),
+    ).toBe("reactivated");
+  });
+
+  it("fails closed for cross-worldline or unknown lifecycle targets", () => {
+    const delta = settingDelta({ id: "delta_term" });
+    expect(() =>
+      derivePathSettingDeltas({
+        tree,
+        deltas: [delta],
+        lifecycles: [
+          lifecycle({
+            id: "lifecycle_other_worldline",
+            targetDeltaId: "delta_term",
+            status: "deactivated",
+            worldlineId: "wl_other",
+          }),
+        ],
+        path,
+      }),
+    ).toThrow("设定增量生命周期属于其他世界线");
+
+    expect(() =>
+      derivePathSettingDeltas({
+        tree,
+        deltas: [delta],
+        lifecycles: [
+          lifecycle({
+            id: "lifecycle_unknown_target",
+            targetDeltaId: "delta_missing",
+            status: "deleted",
+          }),
+        ],
+        path,
+      }),
+    ).toThrow("设定增量生命周期引用了未知规则");
+  });
+});
+
+describe("setting delta context serialization", () => {
+  const characters = [{ id: "char_shenyan", name: "沈砚" }];
+
+  it("builds stable per-rule lines with subject and scope", () => {
+    const tree = buildTree();
+    const deltas = [
+      settingDelta({
+        id: "delta_character",
+        subject: { kind: "character", characterId: "char_shenyan" },
+        statement: "沈砚从此左手受伤，不能划船。",
+      }),
+      settingDelta({
+        id: "delta_term",
+        anchorSceneId: "scene_a",
+        subject: { kind: "term", name: "旧灯塔" },
+        statement: "旧灯塔已被封锁。",
+      }),
+    ];
+    const active = deriveActiveSettingDeltas({
+      tree,
+      deltas,
+      path: getScenePath(tree, "scene_a1"),
+    });
+    const items = buildSettingDeltaContextItems({ active, characters });
+    expect(items.map((item) => item.id)).toEqual([
+      "delta_character",
+      "delta_term",
+    ]);
+    expect(items[0]!.text).toContain("沈砚（自分歧点起）");
+    expect(items[1]!.text).toContain("旧灯塔（自第 1 幕起）");
+    expect(serializeSettingDeltasForContext(items)).toBe(
+      items.map((item) => item.text).join("\n"),
+    );
+  });
+
+  it("rejects 20 maximum-length statements but accepts a small set", () => {
+    const tree = buildTree();
+    const maxStatements = Array.from({ length: 20 }, (_, index) =>
+      settingDelta({
+        id: `delta_max_${index}`,
+        subject: { kind: "term", name: `规则 ${index}` },
+        statement: "灯".repeat(200),
+        createdAt: `2026-08-11T00:${String(index).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const active = deriveActiveSettingDeltas({
+      tree,
+      deltas: maxStatements,
+      path: [],
+    });
+    const serialized = serializeSettingDeltasForContext(
+      buildSettingDeltaContextItems({ active, characters: [] }),
+    );
+    expect(normalizedContextChars(serialized)).toBeGreaterThan(
+      SETTING_DELTA_CONTEXT_MAX_CHARS,
+    );
+
+    const small = maxStatements.slice(0, 2);
+    const smallSerialized = serializeSettingDeltasForContext(
+      buildSettingDeltaContextItems({
+        active: deriveActiveSettingDeltas({ tree, deltas: small, path: [] }),
+        characters: [],
+      }),
+    );
+    expect(normalizedContextChars(smallSerialized)).toBeLessThanOrEqual(
+      SETTING_DELTA_CONTEXT_MAX_CHARS,
+    );
+  });
+
+  it("measures control-character padding after normalization, not before", () => {
+    const padding = "\u0000".repeat(10_000);
+    expect(normalizedContextChars(`旧灯塔${padding}已被封锁`)).toBe(
+      normalizedContextChars("旧灯塔已被封锁"),
+    );
+    expect(normalizedContextChars(`${padding}\n${padding}`)).toBe(0);
+    // NFKC 后全角字符按统一形式计数。
+    expect(normalizedContextChars("ＡＢＣ")).toBe(3);
   });
 });

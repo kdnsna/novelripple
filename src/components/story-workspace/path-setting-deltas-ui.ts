@@ -1,5 +1,10 @@
 import type { SceneNode, SceneTree } from "@/domain/continuation/scene-tree";
 import {
+  SETTING_DELTA_MAX_ACTIVE,
+  SETTING_DELTA_MAX_PER_WORLDLINE,
+} from "@/domain/continuation/setting-delta-limits";
+import type { PathSettingDelta } from "@/domain/continuation/setting-deltas";
+import {
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
   type SettingDeltaSubject,
@@ -64,6 +69,32 @@ export function settingDeltaHistoryLabel(
 
 export function settingDeltaStatementRemaining(statement: string): number {
   return Math.max(0, SETTING_DELTA_STATEMENT_MAX_CHARS - statement.length);
+}
+
+/** 当前路径真正生效（非停用/非软删除）的主体数量。 */
+export function settingDeltaActiveCount(
+  items: readonly Pick<PathSettingDelta, "status">[],
+): number {
+  return items.filter((item) => item.status === "active").length;
+}
+
+/**
+ * 添加按钮的禁用原因。
+ *
+ * 写时上限按当前路径的生效主体计算，因此界面必须在 active ≥ 20 时提示
+ * 停用/删除/改写已有主体，而不是只等每条世界线 50 条的总上限。
+ */
+export function settingDeltaAddBlockReason(input: {
+  activeCount: number;
+  storedCount: number;
+}): string | null {
+  if (input.activeCount >= SETTING_DELTA_MAX_ACTIVE) {
+    return `本路径已有 ${SETTING_DELTA_MAX_ACTIVE} 条生效规则；请先停用或软删除已有规则，或改写已有主体的说明。`;
+  }
+  if (input.storedCount >= SETTING_DELTA_MAX_PER_WORLDLINE) {
+    return `每条 Worldline 最多保存 ${SETTING_DELTA_MAX_PER_WORLDLINE} 条设定增量，当前已达到上限；请先软删除不再需要的规则。`;
+  }
+  return null;
 }
 
 /** 表单提示里的锚点文案；空路径表示分歧点。 */

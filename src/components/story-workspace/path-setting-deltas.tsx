@@ -8,22 +8,32 @@ import {
   useTransition,
 } from "react";
 
-import { addSettingDeltaAction } from "@/app/projects/actions";
+import {
+  addSettingDeltaAction,
+  deactivateSettingDeltaAction,
+  deleteSettingDeltaAction,
+  reactivateSettingDeltaAction,
+} from "@/app/projects/actions";
 import type { SceneNode, SceneTree } from "@/domain/continuation/scene-tree";
 import {
-  deriveActiveSettingDeltas,
-  type ActiveSettingDelta,
+  derivePathSettingDeltas,
+  settingDeltaLifecycleStatuses,
+  type PathSettingDelta,
 } from "@/domain/continuation/setting-deltas";
-import { SETTING_DELTA_MAX_PER_WORLDLINE } from "@/domain/continuation/setting-delta-limits";
 import {
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
   type SettingDeltaArtifact,
+  type SettingDeltaLifecycleArtifact,
+  type SettingDeltaLifecycleStatus,
+  type SettingDeltaLifecycleV1,
   type SettingDeltaV1,
 } from "@/domain/schemas";
 
 import {
   emptySettingDeltaDraft,
+  settingDeltaActiveCount,
+  settingDeltaAddBlockReason,
   settingDeltaAnchorHint,
   settingDeltaHistoryLabel,
   settingDeltaScopeLabel,
@@ -39,8 +49,11 @@ type PathSettingDeltasProps = {
   tree: SceneTree;
   currentPath: readonly SceneNode[];
   settingDeltas: readonly SettingDeltaV1[];
+  settingDeltaLifecycles: readonly SettingDeltaLifecycleV1[];
   characters: readonly { id: string; name: string }[];
-  onArtifactAdded: (artifact: SettingDeltaArtifact) => void;
+  onArtifactAdded: (
+    artifact: SettingDeltaArtifact | SettingDeltaLifecycleArtifact,
+  ) => void;
 };
 
 /**
@@ -55,12 +68,12 @@ export function PathSettingDeltas({
   tree,
   currentPath,
   settingDeltas,
+  settingDeltaLifecycles,
   characters,
   onArtifactAdded,
 }: PathSettingDeltasProps) {
   const currentNode = currentPath[currentPath.length - 1] ?? null;
   const currentNodeId = currentNode?.id ?? null;
-  const atCap = settingDeltas.length >= SETTING_DELTA_MAX_PER_WORLDLINE;
 
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<SettingDeltaDraft>(() =>
@@ -68,6 +81,10 @@ export function PathSettingDeltas({
   );
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [pendingLifecycleId, setPendingLifecycleId] = useState<string | null>(
+    null,
+  );
   const [pending, startTransition] = useTransition();
   /** useTransition 的 pending 延迟一帧；ref 同步拦住同一 tick 的重复提交。 */
   const pendingRef = useRef(false);
@@ -82,16 +99,18 @@ export function PathSettingDeltas({
 
   /**
    * 与路径 Delta / 人物状态相同：派生失败整体 fail closed，不展示半份列表。
+   * 这里保留停用主体（界面显示“已停用”），软删除主体由派生层完全排除。
    */
   const derivation = useMemo<{
-    items: ActiveSettingDelta[];
+    items: PathSettingDelta[];
     error: string | null;
   }>(() => {
     try {
       return {
-        items: deriveActiveSettingDeltas({
+        items: derivePathSettingDeltas({
           tree,
           deltas: settingDeltas,
+          lifecycles: settingDeltaLifecycles,
           path: currentPath,
         }),
         error: null,
@@ -102,18 +121,34 @@ export function PathSettingDeltas({
         error: "无法沿当前路径推导设定增量，请刷新或返回 Evidence 后重试。",
       };
     }
-  }, [currentPath, settingDeltas, tree]);
+  }, [currentPath, settingDeltaLifecycles, settingDeltas, tree]);
+
+  const activeCount = settingDeltaActiveCount(derivation.items);
+  const storedCount = useMemo(() => {
+    try {
+      const statuses = settingDeltaLifecycleStatuses(settingDeltaLifecycles);
+      return settingDeltas.filter(
+        (delta) => statuses.get(delta.id) !== "deleted",
+      ).length;
+    } catch {
+      return settingDeltas.length;
+    }
+  }, [settingDeltaLifecycles, settingDeltas]);
+  const addBlockReason = derivation.error
+    ? "无法沿当前路径推导设定增量，请刷新后重试。"
+    : settingDeltaAddBlockReason({ activeCount, storedCount });
 
   const validation = validateSettingDeltaDraft(draft);
 
   function openForm(): void {
-    if (pendingRef.current || atCap) return;
+    if (pendingRef.current || addBlockReason) return;
     setDraft(
       emptySettingDeltaDraft(characters.length > 0 ? "character" : "term"),
     );
     // 每次打开表单都使用新的幂等键；成功后关闭，下次打开即新规则。
     setIdempotencyKey(crypto.randomUUID());
     setFormError(null);
+    setLifecycleError(null);
     setFormOpen(true);
   }
 
@@ -125,7 +160,7 @@ export function PathSettingDeltas({
 
   function submitForm(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (pendingRef.current || atCap || !idempotencyKey) return;
+    if (pendingRef.current || addBlockReason || !idempotencyKey) return;
 
     const result = validateSettingDeltaDraft(draft);
     if (!result.valid) {
@@ -159,6 +194,43 @@ export function PathSettingDeltas({
     });
   }
 
+  function changeLifecycle(
+    targetDeltaId: string,
+    status: SettingDeltaLifecycleStatus,
+  ): void {
+    if (pendingRef.current) return;
+    const idempotencyKey = crypto.randomUUID();
+    pendingRef.current = true;
+    setPendingLifecycleId(targetDeltaId);
+    setLifecycleError(null);
+    startTransition(async () => {
+      try {
+        const action =
+          status === "deactivated"
+            ? deactivateSettingDeltaAction
+            : status === "reactivated"
+              ? reactivateSettingDeltaAction
+              : deleteSettingDeltaAction;
+        const saved = await action({
+          projectId,
+          worldlineId,
+          targetDeltaId,
+          idempotencyKey,
+        });
+        if (!saved.ok) {
+          setLifecycleError(saved.error);
+          return;
+        }
+        onArtifactAdded(saved.artifact);
+      } catch {
+        setLifecycleError("设定增量操作失败，未写入任何变更。");
+      } finally {
+        pendingRef.current = false;
+        setPendingLifecycleId(null);
+      }
+    });
+  }
+
   return (
     <section
       className="path-setting-deltas"
@@ -168,7 +240,7 @@ export function PathSettingDeltas({
         <h3>设定增量（本路径生效）</h3>
         <button
           className="text-button"
-          disabled={atCap || pending}
+          disabled={Boolean(addBlockReason) || pending}
           onClick={openForm}
           type="button"
         >
@@ -187,7 +259,16 @@ export function PathSettingDeltas({
           {derivation.items.map((item) => {
             const historyLabel = settingDeltaHistoryLabel(item.history);
             return (
-              <li data-testid="path-setting-delta" key={item.active.id}>
+              <li
+                className={
+                  item.status === "deactivated"
+                    ? "path-setting-delta-deactivated"
+                    : undefined
+                }
+                data-testid="path-setting-delta"
+                data-status={item.status}
+                key={item.active.id}
+              >
                 <div className="path-setting-delta-item-heading">
                   <strong>
                     {settingDeltaSubjectLabel(
@@ -196,6 +277,7 @@ export function PathSettingDeltas({
                     )}
                   </strong>
                   <span>
+                    {item.status === "deactivated" ? "已停用 · " : ""}
                     {settingDeltaScopeLabel(item.active.anchorSceneId, tree)}
                   </span>
                 </div>
@@ -210,17 +292,53 @@ export function PathSettingDeltas({
                     {historyLabel}
                   </p>
                 ) : null}
+                <div className="path-setting-delta-actions">
+                  {item.status === "active" ? (
+                    <button
+                      className="text-button"
+                      disabled={pending || pendingLifecycleId !== null}
+                      onClick={() =>
+                        changeLifecycle(item.active.id, "deactivated")
+                      }
+                      type="button"
+                    >
+                      停用
+                    </button>
+                  ) : (
+                    <button
+                      className="text-button"
+                      disabled={pending || pendingLifecycleId !== null}
+                      onClick={() =>
+                        changeLifecycle(item.active.id, "reactivated")
+                      }
+                      type="button"
+                    >
+                      重新启用
+                    </button>
+                  )}
+                  <button
+                    className="text-button"
+                    disabled={pending || pendingLifecycleId !== null}
+                    onClick={() => changeLifecycle(item.active.id, "deleted")}
+                    type="button"
+                  >
+                    删除
+                  </button>
+                </div>
               </li>
             );
           })}
         </ul>
       )}
 
-      {atCap ? (
-        <p className="path-setting-delta-cap">
-          每条 Worldline 最多保存 {SETTING_DELTA_MAX_PER_WORLDLINE}{" "}
-          条设定增量，当前已达到上限；已有规则仍然生效，暂时不能再添加。
+      {lifecycleError ? (
+        <p className="continuation-action-error" role="alert">
+          {lifecycleError}
         </p>
+      ) : null}
+
+      {addBlockReason ? (
+        <p className="path-setting-delta-cap">{addBlockReason}</p>
       ) : null}
 
       {formOpen ? (
@@ -313,7 +431,9 @@ export function PathSettingDeltas({
           <div className="path-setting-delta-form-actions">
             <button
               className="primary-button compact-button"
-              disabled={pending || atCap || !validation.valid}
+              disabled={
+                pending || Boolean(addBlockReason) || !validation.valid
+              }
               type="submit"
             >
               {pending ? "正在保存…" : "保存设定增量"}

@@ -132,7 +132,20 @@ function isSuffix<T>(previous: readonly T[], next: readonly T[]): boolean {
 
 describe("assembleContext", () => {
   it("renders the fixed section order with stable tags", () => {
-    const result = assemble(10_000);
+    const result = assembleContext({
+      maxChars: 10_000,
+      sections: {
+        ...sections,
+        settingDeltas: [
+          {
+            id: "delta_root",
+            text: "- 旧灯塔（自分歧点起）：旧灯塔已被封锁。",
+            anchorDepth: 0,
+            createdAt: "2026-08-11T00:00:00.000Z",
+          },
+        ],
+      },
+    });
 
     const positions = CONTEXT_SECTION_ORDER.map((kind) =>
       result.prompt.indexOf(`<${kind}>`),
@@ -143,6 +156,9 @@ describe("assembleContext", () => {
     }
     expect(result.prompt.startsWith("<worldline_setup>")).toBe(true);
     expect(result.prompt.indexOf("<canon_events>")).toBeLessThan(
+      result.prompt.indexOf("<setting_deltas>"),
+    );
+    expect(result.prompt.indexOf("<setting_deltas>")).toBeLessThan(
       result.prompt.indexOf("<path_summary>"),
     );
     expect(result.prompt.endsWith("</anchor_reminder>")).toBe(true);
@@ -992,24 +1008,27 @@ describe("assembleContext", () => {
     expect(sawSummary).toBe(true);
   });
 
-  it("keeps the ladder monotonic and setting deltas present across budgets", () => {
-    const settingDeltas = JSON.stringify([
-      {
-        subject: { kind: "character", characterId: "char_shenyan", name: "沈砚" },
-        statement: "沈砚从此左手受伤，不能划船。",
-        anchor: "分歧点",
-      },
-      {
-        subject: { kind: "term", name: "旧灯塔" },
-        statement: "旧灯塔已被封锁，不能进入。",
-        anchor: "第 1 幕",
-      },
-    ]);
+  it("keeps setting deltas in their own trimmable section, never in worldline_setup", () => {
     const settingSections: ContextAssemblerInput["sections"] = {
-      worldlineSetup: `完整世界线设定：${"事实正文".repeat(40)}{"settingDeltas":${settingDeltas}}`,
-      worldlineSetupCompact: `{"currentState":{"factsAddedCount":2},"settingDeltas":${settingDeltas}}`,
+      worldlineSetup: `完整世界线设定：${"事实正文".repeat(40)}`,
+      worldlineSetupCompact: `{"currentState":{"factsAddedCount":2}}`,
       worldlineSetupCompactRemoved: ["currentState.factsAdded[].statement"],
-      canonEvents: '{"events":[{"id":"event_01"}],"edges":[],"endingCandidates":[]}',
+      canonEvents:
+        '{"events":[{"id":"event_01"}],"edges":[],"endingCandidates":[]}',
+      settingDeltas: [
+        {
+          id: "delta_root",
+          text: "- 沈砚（自分歧点起）：沈砚从此左手受伤，不能划船。",
+          anchorDepth: 0,
+          createdAt: "2026-08-11T00:00:00.000Z",
+        },
+        {
+          id: "delta_deep",
+          text: "- 旧灯塔（自第 2 幕起）：旧灯塔已被封锁，不能进入。",
+          anchorDepth: 2,
+          createdAt: "2026-08-11T00:01:00.000Z",
+        },
+      ],
       pathSummary: "第 1 幕：丁——丁的摘要。\n第 2 幕：戊——戊的摘要。",
       pathSummaryCoveredSceneIds: ["p1", "p2"],
       canonEvidence: [
@@ -1028,6 +1047,17 @@ describe("assembleContext", () => {
       sections: settingSections,
     });
 
+    // 规则只在独立段中，不进入永不裁剪的 worldline_setup。
+    expect(renderedSection(full.prompt, "worldline_setup")).not.toContain(
+      "settingDeltas",
+    );
+    expect(renderedSection(full.prompt, "worldline_setup")).not.toContain(
+      "旧灯塔已被封锁",
+    );
+    expect(renderedSection(full.prompt, "setting_deltas")).toContain(
+      "旧灯塔已被封锁，不能进入。",
+    );
+
     let firstSuccess: number | null = null;
     for (let budget = 1; budget <= full.prompt.length + 20; budget += 1) {
       const result = tryAssemble(budget, settingSections);
@@ -1036,20 +1066,18 @@ describe("assembleContext", () => {
     }
     expect(firstSuccess).not.toBeNull();
 
-    const droppedIds = (
-      result: ContextAssemblerResult,
-      kind: "canon_evidence" | "recent_scenes",
-    ) => new Set(sectionOf(result, kind).droppedItemIds);
-    const keptIds = (
-      result: ContextAssemblerResult,
-      kind: "canon_evidence" | "recent_scenes",
-      ids: string[],
-    ) => {
-      const dropped = droppedIds(result, kind);
-      return ids.filter((id) => !dropped.has(id));
+    const keptSettingDeltas = (result: ContextAssemblerResult) => {
+      const dropped = new Set(
+        sectionOf(result, "setting_deltas").droppedItemIds,
+      );
+      return settingSections.settingDeltas!
+        .map((item) => item.id)
+        .filter((id) => !dropped.has(id));
     };
 
     let previous: ContextAssemblerResult | null = null;
+    let sawSettingDeltaDrop = false;
+    let sawShallowDroppedBeforeDeep = false;
     for (
       let budget = firstSuccess!;
       budget <= full.prompt.length + 40;
@@ -1058,25 +1086,15 @@ describe("assembleContext", () => {
       const result = tryAssemble(budget, settingSections);
       expect(result).not.toBeNull();
       if (!result) continue;
-      // 读者设定位于永不裁剪的 worldline_setup：任何预算下都必须可见。
-      expect(result.prompt).toContain("沈砚从此左手受伤，不能划船。");
-      expect(result.prompt).toContain("旧灯塔已被封锁，不能进入。");
+      const kept = keptSettingDeltas(result);
+      sawSettingDeltaDrop ||= kept.length < 2;
+      // 更浅的分歧点规则先被丢弃，更深的场景规则保留更久。
+      sawShallowDroppedBeforeDeep ||= !kept.includes("delta_root") &&
+        kept.includes("delta_deep");
       if (previous) {
-        for (const id of keptIds(previous, "canon_evidence", [
-          "related_1",
-          "style_1",
-        ])) {
-          expect(
-            keptIds(result, "canon_evidence", ["related_1", "style_1"]),
-          ).toContain(id);
-        }
-        for (const id of keptIds(previous, "recent_scenes", [
-          "scene_1",
-          "scene_2",
-        ])) {
-          expect(
-            keptIds(result, "recent_scenes", ["scene_1", "scene_2"]),
-          ).toContain(id);
+        // 更大预算只能保留相同或更多规则；不会重新丢弃更小预算已保留的规则。
+        for (const id of keptSettingDeltas(previous)) {
+          expect(keptSettingDeltas(result)).toContain(id);
         }
         expect(result.prompt.length).toBeGreaterThanOrEqual(
           previous.prompt.length,
@@ -1084,6 +1102,54 @@ describe("assembleContext", () => {
       }
       previous = result;
     }
+    expect(sawSettingDeltaDrop).toBe(true);
+    expect(sawShallowDroppedBeforeDeep).toBe(true);
+  });
+
+  it("never fails because of trimmable setting deltas when required sections alone fit", () => {
+    const rules: NonNullable<ContextAssemblerInput["sections"]["settingDeltas"]> =
+      Array.from({ length: 20 }, (_, index) => ({
+        id: `delta_${String(index).padStart(2, "0")}`,
+        text: `- 规则 ${index}（自分歧点起）：${"灯".repeat(200)}`,
+        anchorDepth: index % 2,
+        createdAt: `2026-08-11T00:${String(index).padStart(2, "0")}:00.000Z`,
+      }));
+    const requiredSections: ContextAssemblerInput["sections"] = {
+      worldlineSetup: `必需世界线设定：${"事实正文".repeat(30)}`,
+      canonEvents:
+        '{"events":[{"id":"event_01"}],"edges":[],"endingCandidates":[]}',
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [],
+      selectedDirection: "让沈砚在雨夜说出真相。",
+      anchorReminder: "请保留顾闻舟在钟楼出现的结局。",
+    };
+    const base = assembleContext({
+      maxChars: 1_000_000,
+      sections: { ...requiredSections, settingDeltas: [] },
+    });
+
+    // 预算恰好只够必需段：20 条长规则必须被全部丢弃，而不是让组装失败。
+    const result = assembleContext({
+      maxChars: base.prompt.length,
+      sections: { ...requiredSections, settingDeltas: rules },
+    });
+    expect(result.prompt).toBe(base.prompt);
+    expect(sectionOf(result, "setting_deltas")).toMatchObject({
+      included: false,
+      trimmed: true,
+    });
+    expect(
+      new Set(sectionOf(result, "setting_deltas").droppedItemIds),
+    ).toEqual(new Set(rules.map((rule) => rule.id)));
+
+    // 默认 24000 预算下同样的 20 条规则可以正常组装（规则可能被部分裁剪）。
+    expect(() =>
+      assembleContext({
+        maxChars: 24_000,
+        sections: { ...requiredSections, settingDeltas: rules },
+      }),
+    ).not.toThrow();
   });
 
   it(

@@ -4,7 +4,10 @@ import {
   ContinuationDirectionsSchema,
   ContinuationSchema,
 } from "./continuation";
-import { SettingDeltaV1Schema } from "./setting-delta";
+import {
+  SettingDeltaLifecycleV1Schema,
+  SettingDeltaV1Schema,
+} from "./setting-delta";
 import { SourceReferenceSchema } from "./source";
 import { ImpactPlanSchema } from "./impact-plan";
 import { EvidenceKindSchema, StoryMapSchema } from "./story-map";
@@ -548,12 +551,41 @@ export const SettingDeltaArtifactSchema = ContinuationArtifactBaseSchema.extend(
     }
   });
 
+/**
+ * 设定增量的生命周期事件（停用 / 重新启用 / 软删除）。
+ *
+ * 与 `setting_delta` 一样不调用模型，没有 Generation Run / basedOnArtifactId；
+ * 只追加，不 UPDATE 原始规则。软删除的规则不进入 UI 列表与生成上下文。
+ */
+export const SettingDeltaLifecycleArtifactSchema =
+  ContinuationArtifactBaseSchema.extend({
+    artifactType: z.literal("setting_delta_lifecycle"),
+    schemaVersion: z.literal(1),
+    lifecycle: SettingDeltaLifecycleV1Schema,
+    basedOnArtifactId: z.null(),
+    generationRunId: z.null(),
+  })
+    .strict()
+    .superRefine((artifact, context) => {
+      if (
+        artifact.lifecycle.id !== artifact.id ||
+        artifact.lifecycle.worldlineId !== artifact.worldlineId
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["lifecycle"],
+          message: "设定增量生命周期 Artifact 与领域对象引用不一致",
+        });
+      }
+    });
+
 export const ContinuationArtifactSchema = z.discriminatedUnion(
   "artifactType",
   [
     ContinuationDirectionsArtifactSchema,
     ContinuationSceneArtifactSchema,
     SettingDeltaArtifactSchema,
+    SettingDeltaLifecycleArtifactSchema,
   ],
 );
 
@@ -573,6 +605,9 @@ export type ContinuationSceneArtifact = z.infer<
 >;
 export type SettingDeltaArtifact = z.infer<
   typeof SettingDeltaArtifactSchema
+>;
+export type SettingDeltaLifecycleArtifact = z.infer<
+  typeof SettingDeltaLifecycleArtifactSchema
 >;
 export type ContinuationArtifact = z.infer<typeof ContinuationArtifactSchema>;
 export type StoryMapReview = z.infer<typeof StoryMapReviewSchema>;

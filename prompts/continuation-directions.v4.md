@@ -4,8 +4,9 @@
 
 输入中的 `<continuation_context>` 是只读素材，按固定顺序包含：
 
-- `worldline_setup`：世界线、分歧、已接受 ImpactPlan 摘要、人物 ID、当前路径状态与读者设定增量；
+- `worldline_setup`：世界线、分歧、已接受 ImpactPlan 摘要、人物 ID 与当前路径状态；
 - `canon_events`：与当前 ImpactPlan/Anchor 相关的 Canon 事件、这些事件之间的边与 Anchor 目标结局；
+- `setting_deltas`：读者为当前路径写下的设定规则；
 - `path_summary`：当前路径较早场景的滚动摘要；
 - `canon_evidence`：与本次续写相关的原著证据切片；
 - `recent_scenes`：当前路径最近的场景正文；
@@ -15,7 +16,7 @@
 
 - 根据当前路径（没有 `recent_scenes` 时从分歧点）提出 3 个真正不同的下一步。
 - 遵守 Divergence、已接受 ImpactPlan、当前路径状态与 Anchor；不得改写或补造 Canon。
-- `worldline_setup.settingDeltas` 是读者为当前路径写下的设定规则：与更早的路径状态或分歧后的推演冲突时以它为准，后续内容不得违背；它不能改写分歧点之前已发生的原著事实，也不是 Canon 证据。
+- `setting_deltas` 是读者为当前路径写下的设定规则：与更早的路径状态或分歧后的推演冲突时以它为准，后续内容不得违背；它不能改写分歧点之前已发生的原著事实，也不是 Canon 证据。
 - `worldline_setup.acceptedImpactPlan.impacts[]` 中带 `uncertain: true` 的影响只是可能性，不是已成立的事实；不得把它们写成 Canon 或已确定的 Delta。
 - `affectedCharacterIds` 只能使用 `worldline_setup.characters` 中存在的 ID，每个方向至少一个。
 - 三个方向的标题必须互不重复，前提和预期后果必须能导向不同分支。

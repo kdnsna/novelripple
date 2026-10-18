@@ -9,14 +9,16 @@ import { z } from "zod";
 
 import {
   SettingDeltaSubjectSchema,
-  type ContinuationDirectionsArtifact,
-  type ContinuationSceneArtifact,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
   StoryMapGenerationStartModeSchema,
+  type ContinuationDirectionsArtifact,
+  type ContinuationSceneArtifact,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
   type SettingDeltaArtifact,
+  type SettingDeltaLifecycleArtifact,
+  type SettingDeltaLifecycleStatus,
   type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
@@ -38,7 +40,10 @@ import {
   createProject,
   importProjectSource,
 } from "@/server/repositories/project-repository";
-import { createSettingDeltaArtifact } from "@/server/repositories/continuation-repository";
+import {
+  createSettingDeltaArtifact,
+  createSettingDeltaLifecycleArtifact,
+} from "@/server/repositories/continuation-repository";
 import {
   confirmStoryMapArtifact,
   createStoryMapRevision,
@@ -79,6 +84,9 @@ export type ContinuationSceneActionResult =
   | { ok: false; error: string };
 export type SettingDeltaActionResult =
   | { ok: true; artifact: SettingDeltaArtifact }
+  | { ok: false; error: string };
+export type SettingDeltaLifecycleActionResult =
+  | { ok: true; artifact: SettingDeltaLifecycleArtifact }
   | { ok: false; error: string };
 
 export async function createProjectAction(
@@ -450,6 +458,57 @@ export async function addSettingDeltaAction(
   }
 }
 
+const SettingDeltaLifecycleInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    targetDeltaId: z.string().min(1),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+async function changeSettingDeltaLifecycleAction(
+  status: SettingDeltaLifecycleStatus,
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  const parsed = SettingDeltaLifecycleInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "设定增量操作参数无效：请刷新后重试。",
+    };
+  }
+
+  try {
+    const artifact = createSettingDeltaLifecycleArtifact({
+      ...parsed.data,
+      status,
+    });
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, artifact };
+  } catch (error) {
+    return { ok: false, error: settingDeltaErrorMessage(error) };
+  }
+}
+
+export async function deactivateSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  return changeSettingDeltaLifecycleAction("deactivated", input);
+}
+
+export async function reactivateSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  return changeSettingDeltaLifecycleAction("reactivated", input);
+}
+
+export async function deleteSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  return changeSettingDeltaLifecycleAction("deleted", input);
+}
+
 function settingDeltaErrorMessage(error: unknown): string {
   if (error instanceof z.ZodError) {
     return "设定增量参数无效：请检查主体、说明与锚点。";
@@ -460,15 +519,23 @@ function settingDeltaErrorMessage(error: unknown): string {
   const safeMessages = [
     "设定增量说明必须为 1–200 个字符",
     "设定增量幂等键必须为 1–200 个字符",
+    "设定增量生命周期幂等键必须为 1–200 个字符",
     "Worldline 不存在或不属于当前项目",
     "设定增量必须绑定当前项目的 confirmed Story Map 基线",
     "锚点场景不属于当前 Worldline",
     "设定增量的人物不在当前 Worldline 的 Story Map 中",
     "设定增量幂等键已被其他内容占用",
+    "设定增量生命周期幂等键已被其他内容占用",
+    "设定增量不存在或不属于当前 Worldline",
     "设定增量 Artifact 写入失败",
+    "设定增量生命周期 Artifact 写入失败",
   ];
   if (safeMessages.includes(error.message)) return error.message;
-  if (error.message.startsWith("设定增量已达到每条世界线的上限")) {
+  if (
+    error.message.startsWith("设定增量已达到每条世界线的上限") ||
+    error.message.startsWith("当前路径最多保留") ||
+    error.message.startsWith("设定增量上下文最多")
+  ) {
     return error.message;
   }
   return "设定增量保存失败，未写入任何规则。";

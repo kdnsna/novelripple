@@ -5,6 +5,7 @@ import {
 import type { ContinuationDirectionBatchView } from "@/domain/continuation/worldline-tree";
 import type {
   ContinuationArtifact,
+  SettingDeltaLifecycleV1,
   SettingDeltaV1,
 } from "@/domain/schemas";
 
@@ -12,8 +13,8 @@ import type {
  * 续写面板的序列化视图模型。
  *
  * 只保存面板真正需要展示的不可变内容：场景正文各保存一次，方向批次只保存
- * 三个方向，设定增量保存读者输入的短规则。世界线、ImpactPlan 等绑定信息
- * 已经由外层面板持有，不在这里重复。
+ * 三个方向，设定增量保存读者输入的短规则与生命周期事件（停用/软删除不发
+ * 原始规则正文）。世界线、ImpactPlan 等绑定信息已经由外层面板持有。
  */
 export type { ContinuationDirectionBatchView };
 
@@ -22,6 +23,7 @@ export type ContinuationTreeView = {
   scenes: ScenePayload[];
   directionBatches: ContinuationDirectionBatchView[];
   settingDeltas: SettingDeltaV1[];
+  settingDeltaLifecycles: SettingDeltaLifecycleV1[];
 };
 
 export function emptyContinuationTreeView(
@@ -32,6 +34,7 @@ export function emptyContinuationTreeView(
     scenes: [],
     directionBatches: [],
     settingDeltas: [],
+    settingDeltaLifecycles: [],
   };
 }
 
@@ -48,6 +51,7 @@ export function buildContinuationTreeView(
   const scenes: ScenePayload[] = [];
   const directionBatches: ContinuationDirectionBatchView[] = [];
   const settingDeltas: SettingDeltaV1[] = [];
+  const settingDeltaLifecycles: SettingDeltaLifecycleV1[] = [];
 
   for (const artifact of artifacts) {
     if (artifact.worldlineId !== worldlineId) {
@@ -61,11 +65,16 @@ export function buildContinuationTreeView(
       settingDeltas.push(artifact.settingDelta);
       continue;
     }
+    if (artifact.artifactType === "setting_delta_lifecycle") {
+      settingDeltaLifecycles.push(artifact.lifecycle);
+      continue;
+    }
     directionBatches.push(directionBatchView(artifact));
   }
 
   buildSceneTree(scenes);
   const sceneIds = new Set(scenes.map((scene) => scene.id));
+  const deltaIds = new Set(settingDeltas.map((delta) => delta.id));
   for (const batch of directionBatches) {
     if (batch.parentSceneId !== null && !sceneIds.has(batch.parentSceneId)) {
       throw new Error("方向批次引用了未知父场景");
@@ -76,10 +85,22 @@ export function buildContinuationTreeView(
       throw new Error("设定增量引用了未知锚点场景");
     }
   }
+  for (const lifecycle of settingDeltaLifecycles) {
+    if (!deltaIds.has(lifecycle.targetDeltaId)) {
+      throw new Error("设定增量生命周期引用了未知规则");
+    }
+  }
   directionBatches.sort(compareDirectionBatches);
   settingDeltas.sort(compareSettingDeltas);
+  settingDeltaLifecycles.sort(compareSettingDeltaLifecycles);
 
-  return { worldlineId, scenes, directionBatches, settingDeltas };
+  return {
+    worldlineId,
+    scenes,
+    directionBatches,
+    settingDeltas,
+    settingDeltaLifecycles,
+  };
 }
 
 /** 把新生成的方向/场景 Artifact 合并进视图；同 id 幂等。 */
@@ -110,6 +131,23 @@ export function appendContinuationArtifact(
       settingDeltas: [...view.settingDeltas, artifact.settingDelta].sort(
         compareSettingDeltas,
       ),
+    };
+  }
+
+  if (artifact.artifactType === "setting_delta_lifecycle") {
+    if (
+      view.settingDeltaLifecycles.some(
+        (lifecycle) => lifecycle.id === artifact.lifecycle.id,
+      )
+    ) {
+      return view;
+    }
+    return {
+      ...view,
+      settingDeltaLifecycles: [
+        ...view.settingDeltaLifecycles,
+        artifact.lifecycle,
+      ].sort(compareSettingDeltaLifecycles),
     };
   }
 
@@ -160,6 +198,17 @@ function compareDirectionBatches(
 function compareSettingDeltas(
   left: SettingDeltaV1,
   right: SettingDeltaV1,
+): number {
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt < right.createdAt ? -1 : 1;
+  }
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
+function compareSettingDeltaLifecycles(
+  left: SettingDeltaLifecycleV1,
+  right: SettingDeltaLifecycleV1,
 ): number {
   if (left.createdAt !== right.createdAt) {
     return left.createdAt < right.createdAt ? -1 : 1;

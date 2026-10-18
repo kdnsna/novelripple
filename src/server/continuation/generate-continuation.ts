@@ -15,15 +15,16 @@ import {
 } from "@/domain/continuation/canon-context";
 import { buildPathSummary } from "@/domain/continuation/path-summary";
 import {
+  buildSettingDeltaContextItems,
   deriveActiveSettingDeltas,
   type ActiveSettingDelta,
+  type SettingDeltaContextItem,
 } from "@/domain/continuation/setting-deltas";
 import {
   buildSceneTree,
   derivePathState,
   getScenePath,
   type SceneNode,
-  type SceneTree,
 } from "@/domain/continuation/scene-tree";
 import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { isUncertainImpact } from "@/domain/ripple/derive-uncertain-impact-ids";
@@ -59,6 +60,7 @@ import {
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
   listScenesForDirection,
+  listSettingDeltaLifecyclesForWorldline,
   listSettingDeltasForWorldline,
   stableDirectionsArtifactIdV2,
   stableSceneArtifactIdV2,
@@ -90,13 +92,12 @@ export async function generateContinuationDirections(input: {
   const parentSceneId = input.parentSceneId ?? null;
   const newBatch = input.newBatch ?? false;
   const context = loadContinuationContext(input);
-  const { path, tree, activeSettingDeltas } = resolveScenePath({
+  const { path, activeSettingDeltas } = resolveScenePath({
     worldlineId: context.worldline.id,
     parentSceneId,
   });
-  const settingDeltas = buildContextSettingDeltas({
+  const settingDeltas = buildSettingDeltaContextItems({
     active: activeSettingDeltas,
-    tree,
     characters: context.storyMapArtifact.storyMap.characters,
   });
 
@@ -233,15 +234,14 @@ export async function generateContinuationScene(input: {
       return { artifact: existing, generation: null };
     }
 
-    const { path, parent, tree, activeSettingDeltas } = resolveScenePath({
+    const { path, parent, activeSettingDeltas } = resolveScenePath({
       worldlineId: context.worldline.id,
       parentSceneId,
     });
     const depth = parent === null ? 1 : parent.depth + 1;
     const pathState = derivePathState(context.baseState, path);
-    const settingDeltas = buildContextSettingDeltas({
+    const settingDeltas = buildSettingDeltaContextItems({
       active: activeSettingDeltas,
-      tree,
       characters: context.storyMapArtifact.storyMap.characters,
     });
     const material = buildContextMaterial({
@@ -379,7 +379,6 @@ function resolveScenePath(input: {
 }): {
   path: SceneNode[];
   parent: SceneNode | null;
-  tree: SceneTree;
   activeSettingDeltas: ActiveSettingDelta[];
 } {
   const { scenes } = listContinuationArtifactsForWorldline(input.worldlineId);
@@ -396,60 +395,17 @@ function resolveScenePath(input: {
   const activeSettingDeltas = deriveActiveSettingDeltas({
     tree,
     deltas: listSettingDeltasForWorldline(input.worldlineId),
+    lifecycles: listSettingDeltaLifecyclesForWorldline(input.worldlineId),
     path,
   });
-  return { path, parent, tree, activeSettingDeltas };
-}
-
-type ContextSettingDelta = {
-  subject:
-    | { kind: "character"; characterId: string; name: string }
-    | { kind: "term"; name: string };
-  statement: string;
-  anchor: string;
-};
-
-/**
- * 把生效设定增量整理成 worldline_setup 中的读者规则条目。
- *
- * 人物主体附带 Story Map 中的姓名；锚点写成读者可读的“分歧点”/“第 n 幕”。
- * 这些规则属于 `worldline_setup`，不进入 statePatch 或路径状态。
- */
-function buildContextSettingDeltas(input: {
-  active: readonly ActiveSettingDelta[];
-  tree: SceneTree;
-  characters: readonly { id: string; name: string }[];
-}): ContextSettingDelta[] {
-  const charactersById = new Map(
-    input.characters.map((character) => [character.id, character]),
-  );
-  return input.active.map(({ active }) => {
-    const subject =
-      active.subject.kind === "character"
-        ? {
-            kind: "character" as const,
-            characterId: active.subject.characterId,
-            name:
-              charactersById.get(active.subject.characterId)?.name ??
-              active.subject.characterId,
-          }
-        : { kind: "term" as const, name: active.subject.name };
-    return {
-      subject,
-      statement: active.statement,
-      anchor:
-        active.anchorSceneId === null
-          ? "分歧点"
-          : `第 ${input.tree.nodes.get(active.anchorSceneId)?.depth ?? 0} 幕`,
-    };
-  });
+  return { path, parent, activeSettingDeltas };
 }
 
 function buildContextMaterial(input: {
   context: ContinuationContext;
   path: readonly SceneNode[];
   pathState: WorldlineDelta;
-  settingDeltas: readonly ContextSettingDelta[];
+  settingDeltas: readonly SettingDeltaContextItem[];
   selectedDirection: ContinuationDirection | null;
 }): ContextAssemblerResult {
   const storyMap = input.context.storyMapArtifact.storyMap;
@@ -506,17 +462,10 @@ function buildContextMaterial(input: {
     text: node.prose,
     ...(node.summary === null ? {} : { summary: node.summary }),
   }));
-  const worldlineSetup = buildWorldlineSetup(
-    input.context,
-    input.pathState,
-    input.settingDeltas,
-    true,
-  );
+  const worldlineSetup = buildWorldlineSetup(input.context, input.pathState);
   const worldlineSetupCompact = buildWorldlineSetup(
     input.context,
     compactCurrentState(input.pathState),
-    input.settingDeltas,
-    false,
   );
   const anchorReminder = buildAnchorReminder(input.context);
   const selectedDirection =
@@ -529,13 +478,9 @@ function buildContextMaterial(input: {
     sections: {
       worldlineSetup,
       worldlineSetupCompact,
-      worldlineSetupCompactRemoved: [
-        ...WORLDLINE_SETUP_COMPACT_REMOVED,
-        ...(input.settingDeltas.length > 0
-          ? ["settingDeltas[].anchor"]
-          : []),
-      ],
+      worldlineSetupCompactRemoved: [...WORLDLINE_SETUP_COMPACT_REMOVED],
       canonEvents,
+      settingDeltas: input.settingDeltas,
       pathSummary: pathSummary.text,
       pathSummaryCoveredSceneIds: pathSummary.coveredSceneIds,
       pathSummaryWatermarkSceneId: pathSummary.watermarkSceneId,
@@ -559,8 +504,6 @@ const WORLDLINE_SETUP_COMPACT_REMOVED = [
 function buildWorldlineSetup(
   context: ContinuationContext,
   currentState: unknown,
-  settingDeltas: readonly ContextSettingDelta[],
-  includeSettingDeltaAnchors: boolean,
 ): string {
   const storyMap = context.storyMapArtifact.storyMap;
   const plan = context.acceptedImpactPlanArtifact.impactPlan;
@@ -579,11 +522,6 @@ function buildWorldlineSetup(
       name: character.name,
       aliases: character.aliases,
       role: character.role,
-    })),
-    settingDeltas: settingDeltas.map((delta) => ({
-      subject: delta.subject,
-      statement: delta.statement,
-      ...(includeSettingDeltaAnchors ? { anchor: delta.anchor } : {}),
     })),
     acceptedImpactPlan: {
       id: plan.id,

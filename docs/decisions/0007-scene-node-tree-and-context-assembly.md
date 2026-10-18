@@ -27,6 +27,8 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 
 ### 3. 上下文按固定七段组装
 
+> 0011 后续修订：新增独立、可裁剪的 `setting_deltas` 段（位于 `canon_events` 之后、`path_summary` 之前），读者规则不再进入 `worldline_setup`；段顺序变为八段，降级阶梯相应在 `canon_evidence` 与 `recent_scenes` 之间加入规则裁剪。以下保留 0007 采纳时的七段与阶梯描述。
+
 素材按固定顺序进入 `<continuation_context>`：
 
 1. `worldline_setup`；
@@ -90,7 +92,7 @@ v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树�
 
 ## 后续工作（P1）
 
-1. **路径作用域设定条目（已由 0011 交付）**：人物/术语规则按 `anchorSceneId` 沿当前路径生效并注入 `worldline_setup`（full 与 compact）；0011 未实现按 `name ∪ aliases` 的关键词命中、`always` 必需段分流，也没有把场景 `characterChanges` 转成以场景节点为锚的 progression。
+1. **路径作用域设定条目（已由 0011 交付）**：人物/术语规则按 `anchorSceneId` 沿当前路径生效；0011 未实现按 `name ∪ aliases` 的关键词命中、`always` 必需段分流，也没有把场景 `characterChanges` 转成以场景节点为锚的 progression。后续评审修订把规则从 `worldline_setup` 移到独立、可裁剪的 `setting_deltas` 段（位于 `canon_events` 之后），并增加不可变停用/软删除生命周期与写时上限。
 2. **世界线树视图（已由 0010 以大纲形式交付）**：用只读大纲展示当前路径、已访问旁支和未选择的方向；幽灵方向以角标/方向列表表达，不生成节点，也不使用 React Flow。默认展开分歧点与当前路径，用户展开只增不减，大树用折叠，不预生成未选方向；React Flow 图布局与大树两档渲染仍留待真实需要时评估。
 3. **书签与位置**：“从这里重来”已由 0010 交付（任意节点重开，阅读位置目前只是客户端状态）；仍待持久化命名书签和 `headNodeId`，使刷新后能恢复位置。基线 Story Map revision 变化时把旧世界线标成 stale，允许在旧版本只读继续或按新版本重开，不做自动迁移。
 4. **流式生成**：场景生成改为可中止的流式请求，带 `requestKey` 丢弃过期回包；流式失败不得留下半提交场景，仍以完整 Schema 校验后的 Artifact 为唯一提交点。

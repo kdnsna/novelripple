@@ -99,6 +99,7 @@ export default async function ProjectPage({
       ...artifacts.directions,
       ...artifacts.scenes,
       ...artifacts.settingDeltas,
+      ...artifacts.settingDeltaLifecycles,
     ]);
   });
 

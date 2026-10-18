@@ -12,6 +12,9 @@ import {
   ContinuationSceneModelOutputV3Schema,
   ContinuationSchema,
   SettingDeltaArtifactSchema,
+  SettingDeltaLifecycleArtifactSchema,
+  SettingDeltaLifecycleStatusSchema,
+  SettingDeltaLifecycleV1Schema,
   SettingDeltaSubjectSchema,
   SettingDeltaV1Schema,
   type ContinuationArtifact,
@@ -22,11 +25,32 @@ import {
   type ContextManifest,
   type ImpactPlanArtifact,
   type SettingDeltaArtifact,
+  type SettingDeltaLifecycleArtifact,
+  type SettingDeltaLifecycleStatus,
+  type SettingDeltaLifecycleV1,
   type SettingDeltaSubject,
   type SettingDeltaV1,
   type Worldline,
 } from "@/domain/schemas";
-import { SETTING_DELTA_MAX_PER_WORLDLINE } from "@/domain/continuation/setting-delta-limits";
+import {
+  SETTING_DELTA_CONTEXT_MAX_CHARS,
+  SETTING_DELTA_MAX_ACTIVE,
+  SETTING_DELTA_MAX_PER_WORLDLINE,
+} from "@/domain/continuation/setting-delta-limits";
+import {
+  buildSceneTree,
+  getScenePath,
+  type SceneTree,
+} from "@/domain/continuation/scene-tree";
+import {
+  buildSettingDeltaContextItems,
+  derivePathSettingDeltas,
+  normalizedContextChars,
+  serializeSettingDeltasForContext,
+  settingDeltaLifecycleStatuses,
+  subjectKey,
+  type ActiveSettingDelta,
+} from "@/domain/continuation/setting-deltas";
 import { getDatabase } from "@/server/db/client";
 import { artifacts } from "@/server/db/schema";
 import { getGenerationRun } from "@/server/repositories/generation-run-repository";
@@ -37,6 +61,7 @@ export type ContinuationArtifactLists = {
   directions: ContinuationDirectionsArtifact[];
   scenes: ContinuationSceneArtifact[];
   settingDeltas: SettingDeltaArtifact[];
+  settingDeltaLifecycles: SettingDeltaLifecycleArtifact[];
 };
 
 export function createContinuationDirectionsArtifact(input: {
@@ -442,10 +467,16 @@ export function createSettingDeltaArtifact(input: {
     return existing;
   }
 
-  if (
-    listSettingDeltaArtifactsForWorldline(worldline.id).length >=
-    SETTING_DELTA_MAX_PER_WORLDLINE
-  ) {
+  const state = loadSettingDeltaState(worldline.id);
+  const path =
+    input.anchorSceneId === null
+      ? []
+      : getScenePath(state.tree, input.anchorSceneId);
+  const statuses = settingDeltaLifecycleStatuses(state.lifecycles);
+  const nonDeletedCount = state.deltas.filter(
+    (delta) => statuses.get(delta.id) !== "deleted",
+  ).length;
+  if (nonDeletedCount >= SETTING_DELTA_MAX_PER_WORLDLINE) {
     throw new Error(
       `设定增量已达到每条世界线的上限（${SETTING_DELTA_MAX_PER_WORLDLINE} 条）`,
     );
@@ -461,6 +492,37 @@ export function createSettingDeltaArtifact(input: {
     contentKind: "user",
     createdAt,
   });
+
+  // 写时按新规则所在的锚点路径检查：同一主体的替换不增加 active 数，
+  // 新主体在已有 20 个生效主体时直接拒绝，而不是靠派生时静默截断。
+  const activeBefore = derivePathSettingDeltas({
+    tree: state.tree,
+    deltas: state.deltas,
+    lifecycles: state.lifecycles,
+    path,
+  }).filter((entry) => entry.status === "active");
+  const replacesActiveSubject = activeBefore.some(
+    (entry) => entry.subjectKey === subjectKey(subject),
+  );
+  const proposedActive = derivePathSettingDeltas({
+    tree: state.tree,
+    deltas: [...state.deltas, settingDelta],
+    lifecycles: state.lifecycles,
+    path,
+  }).filter((entry) => entry.status === "active");
+  if (
+    proposedActive.length > SETTING_DELTA_MAX_ACTIVE &&
+    !replacesActiveSubject
+  ) {
+    throw new Error(
+      `当前路径最多保留 ${SETTING_DELTA_MAX_ACTIVE} 条生效设定增量：请先停用或删除本路径上的已有规则，或为已有主体改写说明`,
+    );
+  }
+  assertSettingDeltaContextFits({
+    active: proposedActive,
+    characters: storyMapArtifact.storyMap.characters,
+  });
+
   const artifact = SettingDeltaArtifactSchema.parse({
     id,
     projectId: input.projectId,
@@ -486,6 +548,168 @@ export function createSettingDeltaArtifact(input: {
     throw new Error("设定增量 Artifact 写入失败");
   }
   return stored;
+}
+
+/**
+ * 追加一条设定增量生命周期事件（停用 / 重新启用 / 软删除）。
+ *
+ * 原始 `setting_delta` 行永不 UPDATE；id 由 (worldlineId, targetDeltaId,
+ * idempotencyKey) 确定性派生，重复/并发请求返回同一事件。
+ * `reactivated` 会重新把规则算回生效集合，因此必须重新检查路径 active 数与
+ * 序列化上限；停用和软删除只会释放名额。
+ */
+export function createSettingDeltaLifecycleArtifact(input: {
+  projectId: string;
+  worldlineId: string;
+  targetDeltaId: string;
+  status: SettingDeltaLifecycleStatus;
+  idempotencyKey: string;
+}): SettingDeltaLifecycleArtifact {
+  const status = SettingDeltaLifecycleStatusSchema.parse(input.status);
+  const idempotencyKey = input.idempotencyKey.trim();
+  if (idempotencyKey.length === 0 || idempotencyKey.length > 200) {
+    throw new Error("设定增量生命周期幂等键必须为 1–200 个字符");
+  }
+
+  const worldline = getWorldline(input.worldlineId);
+  if (!worldline || worldline.projectId !== input.projectId) {
+    throw new Error("Worldline 不存在或不属于当前项目");
+  }
+  const target = getContinuationArtifact(input.targetDeltaId);
+  if (
+    !target ||
+    target.artifactType !== "setting_delta" ||
+    target.projectId !== input.projectId ||
+    target.worldlineId !== worldline.id
+  ) {
+    throw new Error("设定增量不存在或不属于当前 Worldline");
+  }
+  const storyMapArtifact = getStoryMapArtifact(
+    worldline.baseStoryMapArtifactId,
+  );
+  if (
+    !storyMapArtifact ||
+    storyMapArtifact.projectId !== input.projectId ||
+    storyMapArtifact.storyMap.status !== "confirmed"
+  ) {
+    throw new Error("设定增量必须绑定当前项目的 confirmed Story Map 基线");
+  }
+
+  const id = stableSettingDeltaLifecycleArtifactId(
+    worldline.id,
+    target.id,
+    idempotencyKey,
+  );
+  const existing = getContinuationArtifact(id);
+  if (existing) {
+    if (
+      existing.artifactType !== "setting_delta_lifecycle" ||
+      existing.lifecycle.targetDeltaId !== target.id ||
+      existing.lifecycle.status !== status
+    ) {
+      throw new Error("设定增量生命周期幂等键已被其他内容占用");
+    }
+    return existing;
+  }
+
+  const createdAt = new Date().toISOString();
+  const lifecycle = SettingDeltaLifecycleV1Schema.parse({
+    id,
+    worldlineId: worldline.id,
+    targetDeltaId: target.id,
+    status,
+    contentKind: "user",
+    createdAt,
+  });
+
+  if (status === "reactivated") {
+    const state = loadSettingDeltaState(worldline.id);
+    const targetDelta = state.deltas.find((delta) => delta.id === target.id);
+    if (!targetDelta) {
+      throw new Error("设定增量不存在或不属于当前 Worldline");
+    }
+    const path =
+      targetDelta.anchorSceneId === null
+        ? []
+        : getScenePath(state.tree, targetDelta.anchorSceneId);
+    const active = derivePathSettingDeltas({
+      tree: state.tree,
+      deltas: state.deltas,
+      lifecycles: [...state.lifecycles, lifecycle],
+      path,
+    }).filter((entry) => entry.status === "active");
+    if (active.length > SETTING_DELTA_MAX_ACTIVE) {
+      throw new Error(
+        `当前路径最多保留 ${SETTING_DELTA_MAX_ACTIVE} 条生效设定增量：请先停用或删除本路径上的其他规则后重试`,
+      );
+    }
+    assertSettingDeltaContextFits({
+      active,
+      characters: storyMapArtifact.storyMap.characters,
+    });
+  }
+
+  const artifact = SettingDeltaLifecycleArtifactSchema.parse({
+    id,
+    projectId: input.projectId,
+    sourceId: target.sourceId,
+    worldlineId: worldline.id,
+    kind: "continuation",
+    artifactType: "setting_delta_lifecycle",
+    schemaVersion: 1,
+    lifecycle,
+    basedOnArtifactId: null,
+    generationRunId: null,
+    createdAt,
+  });
+
+  insertContinuationArtifact(artifact);
+  const stored = getContinuationArtifact(artifact.id);
+  if (
+    !stored ||
+    stored.artifactType !== "setting_delta_lifecycle" ||
+    stored.lifecycle.targetDeltaId !== target.id ||
+    stored.lifecycle.status !== status
+  ) {
+    throw new Error("设定增量生命周期 Artifact 写入失败");
+  }
+  return stored;
+}
+
+type SettingDeltaState = {
+  tree: SceneTree;
+  deltas: SettingDeltaV1[];
+  lifecycles: SettingDeltaLifecycleV1[];
+};
+
+function loadSettingDeltaState(worldlineId: string): SettingDeltaState {
+  const { scenes, settingDeltas, settingDeltaLifecycles } =
+    listContinuationArtifactsForWorldline(worldlineId);
+  return {
+    tree: buildSceneTree(scenes.map((scene) => scene.continuation)),
+    deltas: settingDeltas.map((artifact) => artifact.settingDelta),
+    lifecycles: settingDeltaLifecycles.map(
+      (artifact) => artifact.lifecycle,
+    ),
+  };
+}
+
+function assertSettingDeltaContextFits(input: {
+  active: readonly ActiveSettingDelta[];
+  characters: readonly { id: string; name: string }[];
+}): void {
+  const items = buildSettingDeltaContextItems({
+    active: input.active,
+    characters: input.characters,
+  });
+  const length = normalizedContextChars(
+    serializeSettingDeltasForContext(items),
+  );
+  if (length > SETTING_DELTA_CONTEXT_MAX_CHARS) {
+    throw new Error(
+      `设定增量上下文最多 ${SETTING_DELTA_CONTEXT_MAX_CHARS} 字（当前约 ${length} 字）：请缩短规则说明，或停用/删除本路径上的其他规则`,
+    );
+  }
 }
 
 export function getContinuationArtifact(
@@ -516,7 +740,19 @@ export function listContinuationArtifactsForWorldline(
       (artifact): artifact is SettingDeltaArtifact =>
         artifact.artifactType === "setting_delta",
     ),
+    settingDeltaLifecycles: all.filter(
+      (artifact): artifact is SettingDeltaLifecycleArtifact =>
+        artifact.artifactType === "setting_delta_lifecycle",
+    ),
   };
+}
+
+/** 当前世界线的设定增量生命周期 payload，按 createdAt、id 升序。 */
+export function listSettingDeltaLifecyclesForWorldline(
+  worldlineId: string,
+): SettingDeltaLifecycleV1[] {
+  return listContinuationArtifactsForWorldline(worldlineId)
+    .settingDeltaLifecycles.map((artifact) => artifact.lifecycle);
 }
 
 /** 当前世界线的设定增量 payload，按 createdAt、id 升序。 */
@@ -736,7 +972,20 @@ function assertGenerationRun(input: {
 }
 
 function insertContinuationArtifact(artifact: ContinuationArtifact): void {
-  if (artifact.artifactType === "setting_delta") {
+  if (
+    artifact.artifactType === "setting_delta" ||
+    artifact.artifactType === "setting_delta_lifecycle"
+  ) {
+    const packet =
+      artifact.artifactType === "setting_delta"
+        ? {
+            artifactType: artifact.artifactType,
+            settingDelta: artifact.settingDelta,
+          }
+        : {
+            artifactType: artifact.artifactType,
+            lifecycle: artifact.lifecycle,
+          };
     getDatabase()
       .insert(artifacts)
       .values({
@@ -747,10 +996,7 @@ function insertContinuationArtifact(artifact: ContinuationArtifact): void {
         kind: artifact.kind,
         schemaVersion: artifact.schemaVersion,
         version: null,
-        dataJson: JSON.stringify({
-          artifactType: artifact.artifactType,
-          settingDelta: artifact.settingDelta,
-        }),
+        dataJson: JSON.stringify(packet),
         basedOnArtifactId: null,
         generationRunId: null,
         createdAt: artifact.createdAt,
@@ -795,6 +1041,7 @@ function parseContinuationArtifact(
     artifactType?: unknown;
     continuation?: unknown;
     settingDelta?: unknown;
+    lifecycle?: unknown;
   };
   const base = {
     id: row.id,
@@ -812,6 +1059,12 @@ function parseContinuationArtifact(
     return ContinuationArtifactSchema.parse({
       ...base,
       settingDelta: packet.settingDelta,
+    });
+  }
+  if (packet.artifactType === "setting_delta_lifecycle") {
+    return ContinuationArtifactSchema.parse({
+      ...base,
+      lifecycle: packet.lifecycle,
     });
   }
   if (row.basedOnArtifactId === null || row.generationRunId === null) {
@@ -876,6 +1129,19 @@ export function stableSettingDeltaArtifactId(
     )
     .digest("hex");
   return `artifact_setting_delta_${digest.slice(0, 24)}`;
+}
+
+export function stableSettingDeltaLifecycleArtifactId(
+  worldlineId: string,
+  targetDeltaId: string,
+  idempotencyKey: string,
+): string {
+  const digest = createHash("sha256")
+    .update(
+      `setting_delta_lifecycle:${worldlineId}:${targetDeltaId}:${idempotencyKey}`,
+    )
+    .digest("hex");
+  return `artifact_setting_delta_lifecycle_${digest.slice(0, 24)}`;
 }
 
 function stableDirectionId(artifactId: string, index: number): string {
