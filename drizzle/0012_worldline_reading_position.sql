@@ -1,6 +1,6 @@
 ALTER TABLE `worldlines` ADD `head_kind` text CHECK (`head_kind` IN ('root','scene') OR `head_kind` IS NULL);
 --> statement-breakpoint
-ALTER TABLE `worldlines` ADD `head_node_id` text CHECK ((`head_kind` IS NULL AND `head_node_id` IS NULL) OR (`head_kind` IS 'root' AND `head_node_id` IS NULL) OR (`head_kind` IS 'scene' AND `head_node_id` IS NOT NULL AND trim(`head_node_id`, char(32, 9, 10, 11, 12, 13, 133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279)) <> ''));
+ALTER TABLE `worldlines` ADD `head_node_id` text CHECK ((`head_kind` IS NULL AND `head_node_id` IS NULL) OR (`head_kind` IS 'root' AND `head_node_id` IS NULL) OR (`head_kind` IS 'scene' AND `head_node_id` IS NOT NULL AND trim(`head_node_id`, char(32, 9, 10, 11, 12, 13, 133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8203, 8204, 8205, 8232, 8233, 8239, 8287, 8288, 12288, 65279)) <> ''));
 --> statement-breakpoint
 CREATE TABLE `worldline_bookmarks` (
 	`id` text PRIMARY KEY NOT NULL,

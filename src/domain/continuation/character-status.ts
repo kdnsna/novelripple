@@ -289,10 +289,10 @@ export const DEATH_REVIVAL_MARKERS = [
  *   stateChange 点名了其中一人。当前 Event Schema 没有结构化的「死者」
  *   字段（`stateChanges` 是自由文本），因此无法可靠地从多人事件中挑出
  *   被推断者；未来若新增该字段，可以在那一分支使用，而不是解析自由文本；
- * - 单一参与者事件中，stateChange 必须命中显式句型白名单
- *   （`matchesExplicitDeathShape`）：某分句以人物姓名/别名开头，姓名后
- *   至多两个固定连接词，然后直接跟短死亡动词；分句没有点名参与者时
- *   unknown，整句含否定/不确定/比喻措辞时 unknown；
+ * - 单一参与者事件中，stateChange 必须整行命中显式句型白名单
+ *   （`matchesExplicitDeathShape`）：整行恰好是一个「姓名 + 有限连接词
+ *   + 短死亡动词」的分句；整行没有点名参与者或还带有任何前/后分句时
+ *   unknown，整行含否定/不确定/比喻措辞时 unknown；
  * - 若同一句还整词提到**其他**角色，死亡可能属于别人，跳过；
  * - 推断出 dead 后，若死亡事件之后、分歧点之前的事件再次把该人物列为
  *   参与者或整词点名，并出现复活/生还标记，则撤销推断（回到 unknown）。
@@ -413,18 +413,21 @@ export function deriveSourceBaselineStatuses(input: {
 }
 
 /**
- * 显式死亡句型白名单：stateChange 按中文标点与空白切成若干分句，某个
- * 分句必须以人物姓名/别名（≥2 个码点）开头；姓名前至多一个固定时间
- * 副词，姓名后至多两个固定连接词，然后可选一个 `DEATH_CAUSE_PHRASES`
- * 中的固定原因短语，再直接跟 `DEATH_VERBS` 中的动词。
- * 裸「死 / 死了」只在分句末尾成立。
+ * 显式死亡句型白名单（整行匹配，不切分句）。
  *
- * 姓名左边界是分句开头、右边界是连接词/动词，因此「张三丰」不会命中
- * 「张三」，「艾伦·坡」不会命中「艾伦」，「林青的马」不会命中「林青」，
- * 地点名「韩松岭」也不会命中「韩松」。死亡分句必须是整个 stateChange
- * 的最后一个分句：其后只允许一个终止的「。」或「！」/「!」与空白；
- * 任何后续分句/句子（即使只是「众人悲痛」「葬于城外」）都会改成 unknown。
- * 整句任意位置出现问号、否定/不确定措辞、假设/梦境/预感标记或笑死/
+ * 去掉首尾空白后，整个 stateChange 必须**恰好**是一个分句：
+ * [可选一个 `DEATH_LEADING_ADVERBS` 时间副词] + 人物姓名/别名（≥2 个码点）
+ * + [至多两个 `DEATH_CONNECTORS`] + [可选一个 `DEATH_CAUSE_PHRASES`]
+ * + `DEATH_VERBS` 中的动词（或裸「死 / 死了」）
+ * + [「了」或一个由「于 / 在」引出的纯短语] + [可选的单个「。」/「！」/「!」]
+ * + 行尾。
+ *
+ * 除末尾这一个终止符外，整行任何位置出现标点、引号、括号、省略号或
+ * 空白都判 unknown；因此任何前置/后置分句或句子（「城破，林青战死」
+ * 「林青身亡，众人悲痛」「众人不信。林青阵亡」）都不会命中。姓名左边界
+ * 是行首（或那个时间副词之后），右边界是连接词/动词，因此「张三丰」
+ * 不会命中「张三」，地点名「韩松岭」也不会命中「韩松」。
+ * 整行任意位置出现问号、否定/不确定措辞、假设/梦境/预感标记或笑死/
  * 气死等比喻时也一律不匹配。
  */
 export function matchesExplicitDeathShape(
@@ -437,31 +440,36 @@ export function matchesExplicitDeathShape(
   if (hasAnyMarker(stateChange, DEATH_FIGURATIVE_MARKERS)) return false;
   const usableNames = names.filter((name) => Array.from(name).length >= 2);
   if (usableNames.length === 0) return false;
-  const clause = lastClauseOf(stateChange);
-  if (clause === null) return false;
-  return usableNames.some((name) => matchesDeathClause(clause, name));
+  const line = toSingleDeathLine(stateChange);
+  if (line === null) return false;
+  return usableNames.some((name) => matchesDeathLine(line, name));
 }
 
-const CLAUSE_SEPARATOR_RUN = /[\s，。；;！!？?、]+/u;
-const ALLOWED_TERMINAL_PUNCTUATION = /[。！!]$/u;
+/** 末尾允许的唯一终止符；出现两个或出现在其它位置都算标点。 */
+const ALLOWED_TERMINAL_MARKS = ["。", "！", "!"] as const;
+/** 行内（终止符之外）不允许出现任何标点或空白。 */
+const INNER_PUNCTUATION_OR_SPACE = /[\p{P}\s]/u;
 
 /**
- * 取整个文本的最后一个分句；只允许末尾出现一个「。」或「！」/「!」，
- * 以及其后的空白。若末尾是逗号/分号/问号/引号/括号等，或终止标点后
- * 还跟着内容，返回 null，从而让死亡推断保持 unknown。
+ * 去掉行尾空白与至多一个终止符，并拒绝其余任何标点/空白。
+ * 不切分句：任何逗号、句号、冒号、引号、括号、省略号或句内空白都会
+ * 让整行不再是单一死亡分句，返回 null（unknown）。
  */
-function lastClauseOf(text: string): string | null {
-  const trimmed = text.trimEnd();
-  const withoutTerminal = ALLOWED_TERMINAL_PUNCTUATION.test(trimmed)
-    ? trimmed.slice(0, -1)
-    : trimmed;
-  const segments = withoutTerminal.split(CLAUSE_SEPARATOR_RUN);
-  const last = segments[segments.length - 1] ?? "";
-  return last.length > 0 ? last : null;
+function toSingleDeathLine(text: string): string | null {
+  let line = text.trim();
+  for (const mark of ALLOWED_TERMINAL_MARKS) {
+    if (line.endsWith(mark)) {
+      line = line.slice(0, -mark.length);
+      break;
+    }
+  }
+  if (line.length === 0) return null;
+  if (INNER_PUNCTUATION_OR_SPACE.test(line)) return null;
+  return line;
 }
 
-function matchesDeathClause(clause: string, name: string): boolean {
-  let rest = clause;
+function matchesDeathLine(line: string, name: string): boolean {
+  let rest = line;
   // 只允许一个前导时间副词，且去掉后必须紧接姓名；否则保持原样。
   for (const adverb of DEATH_LEADING_ADVERBS) {
     if (!rest.startsWith(adverb)) continue;

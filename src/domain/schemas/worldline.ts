@@ -5,6 +5,17 @@ import { DivergenceSchema } from "./divergence";
 import { findForbiddenSettingDeltaChar } from "./setting-delta";
 
 /**
+ * 场景 id 是否“只有空白”。除了 JS 空白，还剥掉 SQLite trim 覆盖不到的
+ * 零宽字符 U+200B/U+200C/U+200D/U+2060/U+FEFF；Schema、仓储与迁移 0012
+ * 的 CHECK 使用同一套字符集合。
+ */
+const BLANK_SCENE_ID_CHARS = /[\s\u200B-\u200D\u2060\uFEFF]/gu;
+
+export function isBlankSceneId(value: string): boolean {
+  return value.replace(BLANK_SCENE_ID_CHARS, "").length === 0;
+}
+
+/**
  * 世界线阅读游标：最近一次阅读到分歧点或某个场景。
  *
  * 这是可更新的“阅读位置”，不是叙事 Artifact。`null` 表示从未设置
@@ -19,7 +30,7 @@ export const WorldlineHeadSchema = z.discriminatedUnion("kind", [
       sceneId: z
         .string()
         .min(1)
-        .refine((value) => value.trim().length > 0, {
+        .refine((value) => !isBlankSceneId(value), {
           message: "场景 id 不能只包含空白字符",
         }),
     })

@@ -92,6 +92,11 @@ describe("worldline reading head constraints", () => {
       ["scene", "\u00A0"],
       ["scene", "\u2003"],
       ["scene", " \t\u3000\u00A0\u2003\n"],
+      // 零宽字符同样不能伪装成非空场景 id。
+      ["scene", "\u200B"],
+      ["scene", "\u200C\u200D"],
+      ["scene", "\u2060"],
+      ["scene", "\u200B\u3000\uFEFF"],
       [null, "scene_1"],
       ["bogus", null],
     ] as const) {
@@ -169,6 +174,10 @@ describe("worldline reading head constraints", () => {
       "\u00A0",
       "\u2003",
       " \t\u3000\u00A0\u2003\n",
+      "\u200B",
+      "\u200C\u200D",
+      "\u2060",
+      "\u200B\u3000\uFEFF",
     ].entries()) {
       expect(() =>
         insert.run(

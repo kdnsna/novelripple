@@ -404,6 +404,11 @@ describe("reading position repository", () => {
       "\u00A0",
       "\u2003",
       " \t\u3000\u00A0\u2003\n",
+      // 零宽字符不能被当作非空场景 id。
+      "\u200B",
+      "\u200C\u200D",
+      "\u2060",
+      "\u200B\u3000\uFEFF",
     ];
 
     for (const sceneId of whitespaceSceneIds) {

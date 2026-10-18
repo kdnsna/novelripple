@@ -596,10 +596,6 @@ const negativeProbes: NegativeProbe[] = [
       single("韩松被杀——众人不信", { participants: ["character_han"] }),
   },
   {
-    label: "trailing quote after death verb",
-    baseline: () => single("林青身亡。」"),
-  },
-  {
     label: "trailing bracket after death verb",
     baseline: () => single("韩松被杀］", { participants: ["character_han"] }),
   },
@@ -608,6 +604,87 @@ const negativeProbes: NegativeProbe[] = [
     baseline: () =>
       single("沈墨病故。】", { participants: ["character_shenmo"] }),
   },
+  // I. 整行白名单：死亡分句之前出现任何前置分句/句子都不再命中。
+  // 以下每一类都至少三条，姓名与措辞各不相同。
+  // I-1. 转述/传言框架。
+  {
+    label: "hearsay frame before valid death clause",
+    baseline: () => single("有人说，林青战死"),
+  },
+  {
+    label: "letter frame before valid death clause",
+    baseline: () =>
+      single("信里写着，韩松阵亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "someone insists before valid death clause",
+    baseline: () =>
+      single("某人坚称沈墨遇害", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "reported frame before valid death clause",
+    baseline: () =>
+      single("据报，艾伦病故", { participants: ["character_alan"] }),
+  },
+  {
+    label: "street rumor frame before valid death clause",
+    baseline: () => single("坊间盛传，林青身亡"),
+  },
+  // I-2. 愿望/计划/密谋。
+  {
+    label: "wish frame before valid death clause",
+    baseline: () => single("盼着林青阵亡"),
+  },
+  {
+    label: "plan frame before valid death clause",
+    baseline: () =>
+      single("按计划，韩松被杀", { participants: ["character_han"] }),
+  },
+  {
+    label: "plot frame before valid death clause",
+    baseline: () =>
+      single("依照密谋，沈墨遇害", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "hoped-for death in another clause",
+    baseline: () =>
+      single("众人希望艾伦战死", { participants: ["character_alan"] }),
+  },
+  // I-3. 前一句否定/怀疑，后一句才是死亡句。
+  {
+    label: "doubt sentence before valid death sentence",
+    baseline: () => single("无人相信此事。林青阵亡。"),
+  },
+  {
+    label: "undecided sentence before valid death sentence",
+    baseline: () =>
+      single("尚无定论。韩松身亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "disbelief sentence before valid death sentence",
+    baseline: () =>
+      single("众人不肯相信。沈墨战死。", { participants: ["character_shenmo"] }),
+  },
+  // I-4. 梦境/幻觉/占卜等未实现语境。
+  {
+    label: "illusion realm before valid death clause",
+    baseline: () => single("幻境之中，林青身亡"),
+  },
+  {
+    label: "dazed moment before valid death clause",
+    baseline: () =>
+      single("恍惚间，韩松被杀", { participants: ["character_han"] }),
+  },
+  {
+    label: "divination sign before valid death clause",
+    baseline: () =>
+      single("卦象显示，沈墨阵亡", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "divination result before valid death clause",
+    baseline: () =>
+      single("占卜结果：艾伦遇害", { participants: ["character_alan"] }),
+  },
 ];
 
 /**
@@ -615,6 +692,12 @@ const negativeProbes: NegativeProbe[] = [
  * 它们必须保持 unknown，但不算 false positive；优先漏报而不是误报。
  */
 const knownMisses: NegativeProbe[] = [
+  {
+    // 语义上确实战死，但整行白名单只接受单一死亡分句，前置的「城破」
+    // 让整行不再是白名单形状；优先漏报而不是误报。
+    label: "preceding clause before death clause",
+    baseline: () => single("城破，林青战死"),
+  },
   {
     label: "location phrase before death verb",
     baseline: () => single("林青在乱军中被杀"),
@@ -651,6 +734,26 @@ const knownMisses: NegativeProbe[] = [
     label: "neutral burial tail in a second sentence",
     baseline: () =>
       single("沈墨病故。三日后下葬", { participants: ["character_shenmo"] }),
+  },
+  // 语义上确实死亡，但结尾带引号/省略号/ASCII 句点，不属于整行白名单。
+  {
+    label: "death line ending with closing quote",
+    baseline: () => single("林青身亡。」"),
+  },
+  {
+    label: "death line ending with curly quote",
+    baseline: () =>
+      single("韩松阵亡。”", { participants: ["character_han"] }),
+  },
+  {
+    label: "death line ending with ellipsis",
+    baseline: () =>
+      single("沈墨病故……", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "death line ending with ascii period",
+    baseline: () =>
+      single("艾伦遇害.", { participants: ["character_alan"] }),
   },
 ];
 
@@ -710,11 +813,6 @@ const positiveProbes: PositiveProbe[] = [
     label: "unfortunately killed",
     characterId: "character_lin",
     baseline: () => single("林青不幸遇难"),
-  },
-  {
-    label: "second clause names the participant",
-    characterId: "character_lin",
-    baseline: () => single("城破，林青战死"),
   },
   {
     label: "leading time adverb",
@@ -820,6 +918,24 @@ const positiveProbes: PositiveProbe[] = [
     characterId: "character_shenmo",
     baseline: () =>
       single("随后沈墨因重伤阵亡", { participants: ["character_shenmo"] }),
+  },
+  // 边界：行尾空白/换行在匹配前被裁掉，仍是合法单行句型。
+  {
+    label: "trailing whitespace and newline",
+    characterId: "character_lin",
+    baseline: () => single("林青被杀  \n"),
+  },
+  {
+    label: "trailing newline after terminal mark",
+    characterId: "character_han",
+    baseline: () =>
+      single("韩松阵亡。\n", { participants: ["character_han"] }),
+  },
+  {
+    label: "ascii exclamation terminal",
+    characterId: "character_shenmo",
+    baseline: () =>
+      single("沈墨病逝!", { participants: ["character_shenmo"] }),
   },
 ];
 

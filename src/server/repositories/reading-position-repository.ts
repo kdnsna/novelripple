@@ -6,6 +6,7 @@ import {
   WORLDLINE_BOOKMARK_MAX_PER_WORLDLINE,
   WorldlineBookmarkNameSchema,
   WorldlineBookmarkSchema,
+  isBlankSceneId,
   type Worldline,
   type WorldlineBookmark,
   type WorldlineHead,
@@ -71,11 +72,12 @@ export function setWorldlineHeadNode(input: {
       "原著世界线没有可阅读的场景，阅读位置只能为空。",
     );
   }
-  // DB CHECK 只能拦 ASCII 与常见 Unicode 空白；这里用 JS trim 对齐仓储边界，
-  // 让纯空白场景 id 在写库前就以 typed error fail closed。
+  // DB CHECK 的 trim 集合已覆盖常见 Unicode 空白与零宽字符；这里复用
+  // 同一个共享 helper 对齐仓储边界，让纯空白场景 id 在写库前就以
+  // typed error fail closed。
   if (
     input.head?.kind === "scene" &&
-    input.head.sceneId.trim().length === 0
+    isBlankSceneId(input.head.sceneId)
   ) {
     throw new ReadingPositionError(
       "invalid_head",
