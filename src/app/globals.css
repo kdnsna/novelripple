@@ -1435,6 +1435,11 @@ input:focus-visible,
   font-size: 12px;
 }
 
+/* 续写预算错误带可执行出路，多行文案按换行展示。 */
+.continuation-action-error {
+  white-space: pre-line;
+}
+
 .review-workspace-grid {
   display: grid;
   height: max(680px, calc(100vh - 286px));

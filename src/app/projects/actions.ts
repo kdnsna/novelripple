@@ -22,6 +22,7 @@ import {
   generateConfiguredContinuationDirections,
   generateConfiguredContinuationScene,
 } from "@/server/continuation/generate-configured-continuation";
+import { continuationErrorMessage } from "@/server/continuation/continuation-error";
 import {
   runStoryMapGenerationJob,
   startStoryMapGenerationJob,
@@ -379,7 +380,10 @@ export async function generateContinuationDirectionsAction(
     revalidatePath(`/projects/${parsed.data.projectId}`);
     return { ok: true, artifact: generated.artifact };
   } catch (error) {
-    return { ok: false, error: continuationErrorMessage(error) };
+    return {
+      ok: false,
+      error: continuationErrorMessage(error, "directions"),
+    };
   }
 }
 
@@ -405,7 +409,7 @@ export async function generateContinuationSceneAction(
     revalidatePath(`/projects/${parsed.data.projectId}`);
     return { ok: true, artifact: generated.artifact };
   } catch (error) {
-    return { ok: false, error: continuationErrorMessage(error) };
+    return { ok: false, error: continuationErrorMessage(error, "scene") };
   }
 }
 
@@ -422,40 +426,6 @@ function sourceImportErrorMessage(error: unknown): string {
   return safeMessages.includes(error.message)
     ? error.message
     : "Source 导入失败，请重试。";
-}
-
-function continuationErrorMessage(error: unknown): string {
-  if (error instanceof z.ZodError) {
-    return "AI 配置不完整：请检查模型与结构化输出模式。";
-  }
-  if (!(error instanceof Error)) {
-    return "Continuation 生成失败，未保存 Artifact。";
-  }
-  const safeMessages = [
-    "Continuation 只能从 active Worldline 生成",
-    "Worldline 未绑定 accepted Impact Plan",
-    "Worldline 未绑定 confirmed Story Map 基线",
-    "找不到 Worldline 对应的不可变 Source",
-    "找不到当前 Worldline 的后续方向 Artifact",
-    "找不到选中的后续方向",
-    "父场景不属于当前 Worldline",
-    "后续场景父节点与方向批次不一致",
-    "后续场景深度必须等于父场景深度加一",
-    "根场景深度必须为 1",
-    "Mock AI 只支持 ripple-001 的标准 rerouted Worldline",
-    "Mock AI 找不到选中的 ripple-001 后续方向",
-    "Mock AI 找不到当前路径的父场景",
-    "Mock AI 只能用于测试或本地验证",
-  ];
-  if (safeMessages.includes(error.message)) return error.message;
-  if (
-    error.message.includes("CONTINUATION_CONTEXT_MAX_CHARS") ||
-    error.message.includes("必需上下文段超过预算") ||
-    error.message.includes("必需上下文段与最新场景超过预算")
-  ) {
-    return error.message;
-  }
-  return "Continuation 生成失败；结构化输出未通过校验，未保存 Artifact。";
 }
 
 function storyMapRevisionErrorMessage(error: unknown): string {

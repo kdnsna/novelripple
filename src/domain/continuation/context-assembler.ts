@@ -21,6 +21,53 @@ export const RELATED_EVIDENCE_PRIORITY = 2;
 /** 代表片段与人物证据：先于相关事件证据丢弃。 */
 export const STYLE_EVIDENCE_PRIORITY = 1;
 
+/** 上下文预算 fail closed 的稳定错误码，服务端边界据此映射用户文案。 */
+export const CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE =
+  "continuation_context_budget_exceeded" as const;
+
+/**
+ * 必需段仍超过预算时的类型化错误。
+ *
+ * `message` 保留长度等内部细节供日志使用；`code`、`neededChars` 与
+ * `maxChars` 供服务端 / API 边界映射为面向用户的说明，不直接把内部
+ * 句子透传给界面。
+ */
+export class ContinuationContextBudgetError extends Error {
+  readonly code = CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE;
+  readonly neededChars: number;
+  readonly maxChars: number;
+
+  constructor(input: {
+    neededChars: number;
+    maxChars: number;
+    /** 技术细节，例如“必需上下文段超过预算：…”。 */
+    message: string;
+  }) {
+    super(input.message);
+    this.name = "ContinuationContextBudgetError";
+    this.neededChars = input.neededChars;
+    this.maxChars = input.maxChars;
+  }
+}
+
+/** 允许跨打包边界按 `code` 识别，而不只依赖 `instanceof`。 */
+export function isContinuationContextBudgetError(
+  value: unknown,
+): value is ContinuationContextBudgetError {
+  if (value instanceof ContinuationContextBudgetError) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as {
+    code?: unknown;
+    neededChars?: unknown;
+    maxChars?: unknown;
+  };
+  return (
+    candidate.code === CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE &&
+    typeof candidate.neededChars === "number" &&
+    typeof candidate.maxChars === "number"
+  );
+}
+
 /**
  * 原著证据条目由调用方提供。
  *
@@ -263,13 +310,17 @@ export function assembleContext(
   // 8. 所有可用降级都试过仍放不下：fail closed，不返回半成品。
   const mandatoryPrompt = renderMandatoryPrompt(live);
   if (mandatoryPrompt.length > maxChars) {
-    throw new Error(
-      `必需上下文段超过预算：需要 ${mandatoryPrompt.length} 字符，maxChars=${maxChars}`,
-    );
+    throw new ContinuationContextBudgetError({
+      neededChars: mandatoryPrompt.length,
+      maxChars,
+      message: `必需上下文段超过预算：需要 ${mandatoryPrompt.length} 字符，maxChars=${maxChars}`,
+    });
   }
-  throw new Error(
-    `必需上下文段与最新场景超过预算：需要 ${prompt.length} 字符，maxChars=${maxChars}`,
-  );
+  throw new ContinuationContextBudgetError({
+    neededChars: prompt.length,
+    maxChars,
+    message: `必需上下文段与最新场景超过预算：需要 ${prompt.length} 字符，maxChars=${maxChars}`,
+  });
 }
 
 function renderPrompt(sections: LiveSections): string {

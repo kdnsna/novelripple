@@ -60,9 +60,17 @@ export function selectRelatedCanon(input: {
 }
 
 /**
- * 生成 `canon_events` 段。字段与旧 `readonlyCanonical` 一致：
- * 相关事件保留 id/title/summary/sequence/participants/stateChanges，
- * 只保留相关事件之间的边和 Anchor 目标结局，不包含整本 Source。
+ * 生成 `canon_events` 段（必需段，不参与裁剪阶梯）。
+ *
+ * 只为相关事件保留 id/title/summary/sequence/participants/stateChanges；
+ * 人物只保留 id/name/aliases/role（worldline_setup 已携带同一份 slim 列表）；
+ * 边保留 id/from/to/type/explanation/confidence/confirmed，Anchor 目标结局
+ * 保留 id/targetEventId/requirement。
+ *
+ * 这里刻意不包含任何 `evidence[]`：原著证据已经由 `buildRelatedEvidenceItems`
+ * 单独放进可裁剪的 `canon_evidence`（相关事件切片优先、最后丢弃）。若把同一份
+ * 证据再塞进必需段，证据就无法被降级阶梯裁掉，strict 模式首次方向生成会因
+ * 证据体积直接超预算；证据只属于 `canon_evidence`，不回到必需段。
  */
 export function buildCanonEventsSection(input: {
   storyMap: StoryMap;
@@ -76,7 +84,12 @@ export function buildCanonEventsSection(input: {
     sourceId: input.source.id,
     storyMapArtifactId: input.storyMapArtifactId,
     storyMapId: input.storyMap.id,
-    characters: input.storyMap.characters,
+    characters: input.storyMap.characters.map((character) => ({
+      id: character.id,
+      name: character.name,
+      aliases: character.aliases,
+      role: character.role,
+    })),
     events: related.events.map((event) => ({
       id: event.id,
       title: event.title,
@@ -85,8 +98,20 @@ export function buildCanonEventsSection(input: {
       participants: event.participants,
       stateChanges: event.stateChanges,
     })),
-    edges: related.edges,
-    endingCandidates: related.endingCandidates,
+    edges: related.edges.map((edge) => ({
+      id: edge.id,
+      from: edge.from,
+      to: edge.to,
+      type: edge.type,
+      explanation: edge.explanation,
+      confidence: edge.confidence,
+      confirmed: edge.confirmed,
+    })),
+    endingCandidates: related.endingCandidates.map((ending) => ({
+      id: ending.id,
+      targetEventId: ending.targetEventId,
+      requirement: ending.requirement,
+    })),
   });
 }
 

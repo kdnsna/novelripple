@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   assembleContext,
+  CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE,
+  ContinuationContextBudgetError,
   CONTEXT_SECTION_ORDER,
   TRUNCATION_MARKER,
   type ContextAssemblerInput,
@@ -660,6 +662,24 @@ describe("assembleContext", () => {
 
   it("fails closed when the mandatory sections alone exceed the budget", () => {
     expect(() => assemble(150)).toThrow("必需上下文段超过预算");
+  });
+
+  it("throws a typed budget error carrying needed and max chars", () => {
+    let thrown: unknown;
+    try {
+      assemble(100);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ContinuationContextBudgetError);
+    const budgetError = thrown as ContinuationContextBudgetError;
+    expect(budgetError.code).toBe(
+      CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE,
+    );
+    expect(budgetError.maxChars).toBe(100);
+    expect(budgetError.neededChars).toBeGreaterThan(100);
+    expect(budgetError.message).toContain("必需上下文段超过预算");
   });
 
   it("fails closed instead of dropping the mandatory sections or the newest scene", () => {
