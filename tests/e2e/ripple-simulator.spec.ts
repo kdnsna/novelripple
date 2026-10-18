@@ -298,6 +298,36 @@ test("adds a path-scoped setting delta and keeps it visible on descendants", asy
   await expect(settingDeltas).toContainText("旧灯塔已被封锁");
   await expect(settingDeltas).toContainText("自第 1 幕起");
 
+  // 设定更新后旧批次 stale：不自动重建，只提示换一批；未生成方向不可选。
+  const staleBanner = page.getByTestId("setting-delta-stale-banner");
+  await expect(staleBanner).toBeVisible();
+  await expect(staleBanner).toHaveText("设定已更新，请换一批以生效");
+  await expect(
+    page
+      .locator(".direction-card")
+      .first()
+      .getByRole("button", { name: "再写一版" }),
+  ).toBeDisabled();
+  await expect(
+    page
+      .locator(".direction-card")
+      .nth(1)
+      .getByRole("button", { name: "选择此方向" }),
+  ).toBeDisabled();
+  await expect(
+    page
+      .locator(".direction-card")
+      .nth(2)
+      .getByRole("button", { name: "选择此方向" }),
+  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: "换一批" })).toBeEnabled();
+
+  // 显式换一批得到新批次；新批次基于更新后的规则，stale 提示消失。
+  await page.getByRole("button", { name: "换一批" }).click();
+  await expect(page.getByText("方向批次 2")).toBeVisible();
+  await expect(staleBanner).toHaveCount(0);
+  await expect(page.locator(".direction-card")).toHaveCount(3);
+
   // 选一个尚未探索的方向创建兄弟第 2 幕：规则作为祖先对后代可见。
   await page
     .locator(".direction-card")

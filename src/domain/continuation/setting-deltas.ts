@@ -337,6 +337,121 @@ export function deriveActiveSettingDeltas(input: {
   }));
 }
 
+/**
+ * 只回放 `createdAt <= asOfCreatedAt` 的规则与生命周期，得到“当时”的生效集合。
+ *
+ * 用于判断方向批次是否早于当前设定：批次创建时的 active 集合与当前不同即为
+ * stale。未来才出现的生命周期不会提前生效；指向尚未回放规则的 lifecycle 会被
+ * 忽略（正常只追加数据不会出现，历史/损坏数据也不应让回放直接抛“未知规则”
+ * 而掩盖真正差异）。
+ */
+export function deriveActiveSettingDeltasAsOf(input: {
+  tree: SceneTree;
+  deltas: readonly SettingDeltaV1[];
+  lifecycles?: readonly SettingDeltaLifecycleV1[];
+  path: readonly SceneNode[];
+  asOfCreatedAt: string;
+}): ActiveSettingDelta[] {
+  const deltas = input.deltas.filter(
+    (delta) => delta.createdAt <= input.asOfCreatedAt,
+  );
+  const deltaIds = new Set(deltas.map((delta) => delta.id));
+  const lifecycles = (input.lifecycles ?? []).filter(
+    (lifecycle) =>
+      lifecycle.createdAt <= input.asOfCreatedAt &&
+      deltaIds.has(lifecycle.targetDeltaId),
+  );
+  return deriveActiveSettingDeltas({
+    tree: input.tree,
+    deltas,
+    lifecycles,
+    path: input.path,
+  });
+}
+
+/**
+ * 生效集合的稳定指纹。
+ *
+ * 只包含会进入生成上下文的语义（主体、说明、作用域）与稳定 delta id；排序后
+ * 序列化，因此“停用后重新启用回同一条规则”与批次创建时完全相同，不会误报
+ * stale。新增/改写/停用/软删除只要改变当前 active 集合就会得到不同指纹。
+ */
+export function settingDeltaActiveFingerprint(
+  active: readonly ActiveSettingDelta[],
+): string {
+  return JSON.stringify(
+    active
+      .map(({ subjectKey: key, active: delta }) => [
+        key,
+        delta.id,
+        delta.anchorSceneId,
+        delta.statement,
+      ])
+      .sort((left, right) => {
+        const leftKey = `${left[0]}\u0000${left[1]}`;
+        const rightKey = `${right[0]}\u0000${right[1]}`;
+        if (leftKey === rightKey) return 0;
+        return leftKey < rightKey ? -1 : 1;
+      }),
+  );
+}
+
+/** 方向批次 stale 时统一使用的可展示中文错误/横幅文案。 */
+export const SETTING_DELTA_STALE_BATCH_MESSAGE = "设定已更新，请换一批以生效";
+
+/**
+ * 方向批次是否早于当前设定增量（纯函数）。
+ *
+ * 回放批次 `createdAt` 时的 active 集合，与当前 active 集合比较：任何在批次
+ * 之后新增、改写、停用、重新启用或软删除且影响该父路径的规则都会让两者不同。
+ * 兄弟路径上的规则对 `pathToParent` 不可见，因此不会让批次变 stale。
+ *
+ * 不自动重新生成：stale 只阻止继续选择/重试方向，用户必须显式「换一批」。
+ */
+export function isDirectionBatchStale(input: {
+  batch: { id: string; parentSceneId: string | null; createdAt: string };
+  tree: SceneTree;
+  /** root→父节点；根批次为空数组。 */
+  pathToParent: readonly SceneNode[];
+  deltas: readonly SettingDeltaV1[];
+  lifecycles?: readonly SettingDeltaLifecycleV1[];
+}): boolean {
+  assertBatchParentPath(input.batch.parentSceneId, input.pathToParent);
+  const current = settingDeltaActiveFingerprint(
+    deriveActiveSettingDeltas({
+      tree: input.tree,
+      deltas: input.deltas,
+      lifecycles: input.lifecycles,
+      path: input.pathToParent,
+    }),
+  );
+  const asOf = settingDeltaActiveFingerprint(
+    deriveActiveSettingDeltasAsOf({
+      tree: input.tree,
+      deltas: input.deltas,
+      lifecycles: input.lifecycles,
+      path: input.pathToParent,
+      asOfCreatedAt: input.batch.createdAt,
+    }),
+  );
+  return current !== asOf;
+}
+
+function assertBatchParentPath(
+  parentSceneId: string | null,
+  pathToParent: readonly SceneNode[],
+): void {
+  if (parentSceneId === null) {
+    if (pathToParent.length !== 0) {
+      throw new Error("根方向批次的父路径必须为空");
+    }
+    return;
+  }
+  if (pathToParent[pathToParent.length - 1]?.id !== parentSceneId) {
+    throw new Error("方向批次的父路径与 parentSceneId 不一致");
+  }
+}
+
 function assertPath(
   tree: SceneTree,
   path: readonly SceneNode[],

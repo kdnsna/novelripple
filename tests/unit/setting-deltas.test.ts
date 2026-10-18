@@ -8,9 +8,12 @@ import {
 import {
   buildSettingDeltaContextItems,
   deriveActiveSettingDeltas,
+  deriveActiveSettingDeltasAsOf,
   derivePathSettingDeltas,
+  isDirectionBatchStale,
   normalizedContextChars,
   serializeSettingDeltasForContext,
+  settingDeltaActiveFingerprint,
   settingDeltaLifecycleStatuses,
   subjectKey,
 } from "@/domain/continuation/setting-deltas";
@@ -563,5 +566,193 @@ describe("setting delta context serialization", () => {
     expect(normalizedContextChars(`${padding}\n${padding}`)).toBe(0);
     // NFKC 后全角字符按统一形式计数。
     expect(normalizedContextChars("ＡＢＣ")).toBe(3);
+  });
+});
+
+describe("stale direction batches", () => {
+  const tree = buildTree();
+  const pathToSceneA = getScenePath(tree, "scene_a");
+  const batch = {
+    id: "batch_a_0",
+    parentSceneId: "scene_a",
+    createdAt: "2026-08-11T00:05:00.000Z",
+  };
+  const beforeBatch = settingDelta({
+    id: "delta_before",
+    anchorSceneId: "scene_a",
+    subject: { kind: "term", name: "旧灯塔" },
+    statement: "旧灯塔还能通行。",
+    createdAt: "2026-08-11T00:01:00.000Z",
+  });
+
+  function stale(
+    deltas: SettingDeltaV1[],
+    lifecycles: SettingDeltaLifecycleV1[] = [],
+  ): boolean {
+    return isDirectionBatchStale({
+      batch,
+      tree,
+      pathToParent: pathToSceneA,
+      deltas,
+      lifecycles,
+    });
+  }
+
+  it("replays only rules and lifecycles created at or before the batch", () => {
+    const later = settingDelta({
+      id: "delta_later",
+      anchorSceneId: "scene_a",
+      subject: { kind: "term", name: "渡船" },
+      statement: "夜班渡船已经停航。",
+      createdAt: "2026-08-11T00:06:00.000Z",
+    });
+    const current = deriveActiveSettingDeltas({
+      tree,
+      deltas: [beforeBatch, later],
+      path: pathToSceneA,
+    });
+    const asOf = deriveActiveSettingDeltasAsOf({
+      tree,
+      deltas: [beforeBatch, later],
+      path: pathToSceneA,
+      asOfCreatedAt: batch.createdAt,
+    });
+    expect(current.map((entry) => entry.active.id)).toEqual([
+      "delta_before",
+      "delta_later",
+    ]);
+    expect(asOf.map((entry) => entry.active.id)).toEqual(["delta_before"]);
+    expect(settingDeltaActiveFingerprint(current)).not.toBe(
+      settingDeltaActiveFingerprint(asOf),
+    );
+  });
+
+  it("is fresh when no rule changed after the batch", () => {
+    expect(stale([beforeBatch])).toBe(false);
+  });
+
+  it("becomes stale when a visible rule is added after the batch", () => {
+    expect(
+      stale([
+        beforeBatch,
+        settingDelta({
+          id: "delta_after",
+          anchorSceneId: "scene_a",
+          subject: { kind: "term", name: "渡船" },
+          statement: "夜班渡船已经停航。",
+          createdAt: "2026-08-11T00:06:00.000Z",
+        }),
+      ]),
+    ).toBe(true);
+  });
+
+  it("ignores a rule added only on a sibling path", () => {
+    expect(
+      stale([
+        beforeBatch,
+        settingDelta({
+          id: "delta_sibling",
+          anchorSceneId: "scene_b1",
+          subject: { kind: "term", name: "北侧石阶" },
+          statement: "北侧石阶已经塌方，不能通行。",
+          createdAt: "2026-08-11T00:06:00.000Z",
+        }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("becomes stale when the visible rule is deactivated", () => {
+    expect(
+      stale(
+        [beforeBatch],
+        [
+          lifecycle({
+            id: "lifecycle_deactivate",
+            targetDeltaId: "delta_before",
+            status: "deactivated",
+            createdAt: "2026-08-11T00:06:00.000Z",
+          }),
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it("is fresh again when deactivate then reactivate restores the same rule", () => {
+    expect(
+      stale(
+        [beforeBatch],
+        [
+          lifecycle({
+            id: "lifecycle_deactivate",
+            targetDeltaId: "delta_before",
+            status: "deactivated",
+            createdAt: "2026-08-11T00:06:00.000Z",
+          }),
+          lifecycle({
+            id: "lifecycle_reactivate",
+            targetDeltaId: "delta_before",
+            status: "reactivated",
+            createdAt: "2026-08-11T00:07:00.000Z",
+          }),
+        ],
+      ),
+    ).toBe(false);
+  });
+
+  it("becomes stale when a later rule changes the subject statement", () => {
+    expect(
+      stale([
+        beforeBatch,
+        settingDelta({
+          id: "delta_replacement",
+          anchorSceneId: "scene_a",
+          subject: { kind: "term", name: "旧灯塔" },
+          statement: "旧灯塔已被封锁，不能进入。",
+          createdAt: "2026-08-11T00:06:00.000Z",
+        }),
+      ]),
+    ).toBe(true);
+  });
+
+  it("is fresh when a new rule is added and deactivated after the batch", () => {
+    const added = settingDelta({
+      id: "delta_added_then_deactivated",
+      anchorSceneId: "scene_a",
+      subject: { kind: "term", name: "渡船" },
+      statement: "夜班渡船已经停航。",
+      createdAt: "2026-08-11T00:06:00.000Z",
+    });
+    expect(
+      stale(
+        [beforeBatch, added],
+        [
+          lifecycle({
+            id: "lifecycle_added_deactivated",
+            targetDeltaId: added.id,
+            status: "deactivated",
+            createdAt: "2026-08-11T00:07:00.000Z",
+          }),
+        ],
+      ),
+    ).toBe(false);
+  });
+
+  it("fails closed when the parent path does not match the batch", () => {
+    expect(() =>
+      isDirectionBatchStale({
+        batch: { ...batch, parentSceneId: "scene_b" },
+        tree,
+        pathToParent: pathToSceneA,
+        deltas: [beforeBatch],
+      }),
+    ).toThrow("方向批次的父路径与 parentSceneId 不一致");
+    expect(() =>
+      isDirectionBatchStale({
+        batch: { ...batch, parentSceneId: null },
+        tree,
+        pathToParent: pathToSceneA,
+        deltas: [beforeBatch],
+      }),
+    ).toThrow("根方向批次的父路径必须为空");
   });
 });

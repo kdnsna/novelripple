@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-10-18
-- 范围：P1 / I2 Phase 3 — Continuation 新增读者写下的路径作用域设定规则；不改变 Source、Story Map、Impact Plan、Worldline Delta、Evidence 或 fail-closed 合同；不新增数据库表、迁移或运行时依赖；生效规则进入独立的可裁剪上下文段
+- 范围：P1 / I2 Phase 3 — Continuation 新增读者写下的路径作用域设定规则、stale 方向批次与生成后分歧前 Canon 校验；不改变 Source、Story Map、Impact Plan、Worldline Delta、Evidence 或 fail-closed 合同；不新增数据库表、迁移或运行时依赖；生效规则进入独立的可裁剪上下文段
 
 ## 背景
 
@@ -98,7 +98,17 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 表单无效、当前路径 active ≥ 20 或达到每条世界线非删除上限时禁用提交/添加；
 - 停用、重新启用、软删除各调用独立 Server Action，全部 `revalidatePath` 且不调用模型；服务端错误已是中文可执行提示。
 
-### 9. 上下文阶梯与单调性
+### 9. 陈旧方向批次与生成后分歧前 Canon 校验
+
+设定增量发生变化后，已确认场景永不改变；未确认的方向批次只要早于当前规则就视为 stale（最终以 active 集合指纹为准，停用后重新启用回原规则不算）：
+
+- 纯函数 `isDirectionBatchStale({ batch, tree, pathToParent, deltas, lifecycles })` 先用 `deriveActiveSettingDeltasAsOf` 只回放 `createdAt <= batch.createdAt` 的规则与生命周期，得到批次创建时的 active 集合，再与当前 `deriveActiveSettingDeltas` 的集合比较稳定指纹（subjectKey + delta id + anchorSceneId + statement，排序后序列化）。两者不同即 stale。兄弟路径上的规则对 `pathToParent` 不可见，因此不会误报；停用后重新启用回同一条规则时指纹相同，也不 stale。
+- 任何设定增量的新增、改写、停用、重新启用或软删除都可能让受影响父路径上的未确认批次 stale。界面显示 `data-testid="setting-delta-stale-banner"`、文案固定为「设定已更新，请换一批以生效」，禁用「选择此方向」与「再写一版」，保留「换一批」与「查看已生成」。已生成场景是 confirmed 内容，仍可回读。
+- 系统绝不自动重新生成方向；只有用户显式点击「换一批」（`newBatch: true`）才创建新批次。`generateContinuationScene` 在服务端重新派生并检查批次，stale 时以同一中文文案 fail closed，不写新场景 Artifact；`generateContinuationDirections(newBatch: false)` 遇到 stale 的最新批次同样拒绝复用。
+- 生成后、保存 Artifact 前增加确定性校验 `validateAgainstPreDivergenceCanon({ textFields, storyMap, baseDelta })`：锁定集合是 Story Map 中 `event:<id>` **不在** `baseDelta.factsRemoved` 的事件（被分歧删除/改写的事件允许重写）。以事件标题和长度 ≥4 的摘要为 needle，若同一字段在匹配处 ±40 字窗口或同一句内出现固定改写/否定线索（`没有发生|并未发生|不曾|不再|改写|推翻|取消|抹去|从未|并没有|其实没有|其实并未`），或锁定标题前后 8 字内紧邻 `没有|并非|取消了`，即返回 issue。方向校验覆盖标题、前提与预期后果，场景校验覆盖标题、正文与摘要。
+- 校验与既有 Schema / `statePatch` 校验并列；任一 issue 都走既有 `generateStructured` 失败路径（repair 一次后仍失败即 fail closed）。**从不静默裁剪、修补或编造事实**；Generation Run 记录失败，且不写 Artifact。
+
+### 10. 上下文阶梯与单调性
 
 `setting_deltas` 是可裁剪段，不再依赖“20 × 260 字必有界”的假设。`CONTINUATION_CONTEXT_MAX_CHARS` 的降级阶梯仍是单一嵌套序列，顺序更新为：
 
@@ -124,8 +134,9 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 同一主体的新规则会覆盖旧规则，旧版本保留在“此前：…”中；停用/重新启用/软删除只追加生命周期事件，原规则永不 UPDATE。
 - 生效规则进入独立的 `setting_deltas` 段，写时已保证每条路径 ≤20 个生效主体且序列化 ≤2k；上下文预算不足时规则会从最浅/最旧开始整条裁剪，不影响必需段。
 - 同一路径已有 20 个生效主体时，新主体写入会 fail closed，替换已有主体仍可写入；界面提前提示并禁用添加。
-- Prompt 同时要求规则优先于更早路径状态/分歧后推演，并明确禁止改写分歧点之前的原著事实。模型仍可能不遵守，系统只做指令约束，没有对生成场景逐条自动验证规则是否被违反。
-- 失败是整体失败：派生错误不返回部分列表；写入错误不留下半条规则；达到 active / 序列化 / 世界线上限时服务端 fail closed、界面禁用添加。
+- 设定变化后，受影响的未确认方向批次显示 stale 提示并禁止继续选择/重试；系统不会自动换批，已确认场景保持可读。
+- Prompt 同时要求规则优先于更早路径状态/分歧后推演，并明确禁止改写分歧点之前的原著事实。生成后还会对“被改写的分歧前事件”做确定性校验，命中即拒绝整个候选；但校验基于标题/摘要与固定线索字符串，不能理解所有同义改写，也不会逐条验证每条读者规则是否被遵守。
+- 失败是整体失败：派生错误不返回部分列表；写入错误不留下半条规则；达到 active / 序列化 / 世界线上限时服务端 fail closed、界面禁用添加；stale 批次或改写分歧前事件的候选不写 Artifact。
 
 ### 已知限制
 
@@ -134,7 +145,8 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 没有关键词触发或 `name ∪ aliases` 匹配；所有当前路径生效规则都会注入，依赖 20 个主体与 2k 序列化上限保持有界。
 - 裁剪只按锚点深度/创建时间决定，不按规则对当前场景的重要性排序；更深/更新的规则保留更久，但同层规则可能被整条丢弃。
 - 没有把场景 `statePatch.characterChanges` 自动转成以场景为锚的 progression；人物变化仍只属于路径状态，设定增量由读者显式添加。
-- 模型只被 Prompt 约束，没有被系统自动校验每一个场景是否遵守了规则；若需要硬保证，应在后续加入生成后校验与 repair，而不是把规则伪装成 Canon。
+- 生成后校验只覆盖“分歧前已确认事件被否定/改写”，不校验每条读者设定规则是否被遵守，也不做语义等价判断；需要更强保证时应扩展同一拒绝路径，而不是静默修补或把规则伪装成 Canon。
+- stale 判断使用毫秒 ISO `createdAt` 回放；同一毫秒内先后发生的增量与批次无法仅靠时间戳区分（正常交互与“先换批再写入”的顺序不会触发）。
 
 ## 不变的部分
 
@@ -151,4 +163,4 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - [SillyTavern World Info](https://docs.sillytavern.app/usage/core-concepts/worldinfo/)：SillyTavern 采用 AGPL-3.0；只借鉴 `name ∪ aliases` 关键词触发的 lorebook 模式，未复制任何代码；因当前上限已让“全部注入”保持有界，本次不引入关键词触发。
 - 复用 NovelRipple 既有的 Zod Schema、Drizzle `artifacts` 存储、确定性派生函数、分段上下文组装与 fail-closed 测试设施；没有新增上下文框架、lorebook 库或 UI 组件库。
 
-新依赖：**none**。
+新依赖：**none**。本次评审修正（stale 批次与生成后分歧前校验）同样不执行网络访问、不新增依赖，复用既有场景树 / 设定增量派生函数与 `generateStructured` 的 validate → repair → fail-closed 路径；stale 判断是纯函数，不引入调度器、缓存或后台自动生成。

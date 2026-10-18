@@ -233,6 +233,8 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 写入时按规则的 `anchorSceneId` 构造路径（`null` = 分歧点空路径）并检查该路径的生效主体：新主体会让 active 数超过 `SETTING_DELTA_MAX_ACTIVE = 20` 时 fail closed，已有生效主体的改写属于替换、不增加 active 数。写入与重新启用还要检查 post-write active 集合的序列化长度：`serializeSettingDeltasForContext` 产生逐条紧凑文本，`normalizedContextChars` 做 NFKC、换行转空格、移除其余 C0/C1 控制字符并合并连续空格，超过 `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000` 时 fail closed。每条 Worldline 最多 `SETTING_DELTA_MAX_PER_WORLDLINE = 50` 条非软删除规则，软删除释放名额。设定增量是读者规则，不是 Canon 证据，也不写入 `statePatch` 或路径状态；生效规则进入独立的可裁剪 `setting_deltas` 段，不再放入 `worldline_setup`。Prompt 要求其覆盖更早的路径状态与分歧后的推演，但不能改写分歧点之前已发生的原著事实。
 
+设定增量的新增、改写、停用、重新启用或软删除都可能让受影响父路径上**早于该变化的未确认方向批次**变为 stale（以当前 active 集合指纹是否变化为准；停用后重新启用回原规则不算）；已确认场景不变。stale 批次在界面显示「设定已更新，请换一批以生效」，禁用选择与重试方向，系统绝不自动换批，只有用户显式「换一批」才创建新批次；`generateContinuationScene` 对 stale 批次 fail closed 且不写 Artifact。生成后、落库前还会用 `validateAgainstPreDivergenceCanon` 拒绝改写分歧前 Canon 的候选：锁定集合是 Story Map 中 `event:<id>` 不在 `baseDelta.factsRemoved` 的事件，命中固定改写/否定线索即走既有 repair→fail-closed 路径，绝不静默裁剪或修补。
+
 ### 上下文组装与清单
 
 每次生成只从当前路径和当前 Worldline 组装上下文，固定顺序为：

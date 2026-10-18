@@ -17,6 +17,8 @@ import { buildPathSummary } from "@/domain/continuation/path-summary";
 import {
   buildSettingDeltaContextItems,
   deriveActiveSettingDeltas,
+  isDirectionBatchStale,
+  SETTING_DELTA_STALE_BATCH_MESSAGE,
   type ActiveSettingDelta,
   type SettingDeltaContextItem,
 } from "@/domain/continuation/setting-deltas";
@@ -25,11 +27,13 @@ import {
   derivePathState,
   getScenePath,
   type SceneNode,
+  type SceneTree,
 } from "@/domain/continuation/scene-tree";
 import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { isUncertainImpact } from "@/domain/ripple/derive-uncertain-impact-ids";
 import {
   deriveWorldlineDelta,
+  validateAgainstPreDivergenceCanon,
   validateContinuationDirections,
   validateContinuationStatePatch,
 } from "@/domain/invariants/validate-continuation";
@@ -44,6 +48,8 @@ import {
   type ContinuationDirectionsArtifact,
   type ContinuationSceneModelOutput,
   type ImpactPlanArtifact,
+  type SettingDeltaLifecycleV1,
+  type SettingDeltaV1,
   type Source,
   type StoryMapArtifact,
   type Worldline,
@@ -60,8 +66,6 @@ import {
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
   listScenesForDirection,
-  listSettingDeltaLifecyclesForWorldline,
-  listSettingDeltasForWorldline,
   stableDirectionsArtifactIdV2,
   stableSceneArtifactIdV2,
 } from "@/server/repositories/continuation-repository";
@@ -92,10 +96,11 @@ export async function generateContinuationDirections(input: {
   const parentSceneId = input.parentSceneId ?? null;
   const newBatch = input.newBatch ?? false;
   const context = loadContinuationContext(input);
-  const { path, activeSettingDeltas } = resolveScenePath({
+  const resolvedPath = resolveScenePath({
     worldlineId: context.worldline.id,
     parentSceneId,
   });
+  const { path, activeSettingDeltas } = resolvedPath;
   const settingDeltas = buildSettingDeltaContextItems({
     active: activeSettingDeltas,
     characters: context.storyMapArtifact.storyMap.characters,
@@ -106,6 +111,18 @@ export async function generateContinuationDirections(input: {
     parentSceneId,
   );
   if (!newBatch && latestBatch) {
+    // 只复用“仍然最新”的批次；stale 批次绝不在用户未点「换一批」时自动重建。
+    if (
+      isDirectionBatchStale({
+        batch: directionBatchDescriptor(latestBatch),
+        tree: resolvedPath.tree,
+        pathToParent: path,
+        deltas: resolvedPath.deltas,
+        lifecycles: resolvedPath.lifecycles,
+      })
+    ) {
+      throw new Error(SETTING_DELTA_STALE_BATCH_MESSAGE);
+    }
     return { artifact: latestBatch, generation: null };
   }
   const batchIndex =
@@ -142,11 +159,21 @@ export async function generateContinuationDirections(input: {
         schemaName: "continuation_directions",
         schema: ContinuationDirectionsModelOutputSchema,
         modelConfig: input.modelConfig,
-        validate: (output) =>
-          validateContinuationDirections(
+        validate: (output) => [
+          ...validateContinuationDirections(
             output,
             context.storyMapArtifact.storyMap,
           ),
+          ...validateAgainstPreDivergenceCanon({
+            textFields: output.directions.flatMap((direction) => [
+              direction.title,
+              direction.premise,
+              direction.expectedConsequence,
+            ]),
+            storyMap: context.storyMapArtifact.storyMap,
+            baseDelta: context.baseState,
+          }),
+        ],
       },
       input.provider,
     );
@@ -198,6 +225,12 @@ export async function generateContinuationScene(input: {
     directionsArtifact.continuation.schemaVersion === 2
       ? directionsArtifact.continuation.parentSceneId
       : null;
+  // 设定增量在该批次之后变化时，批次已不代表当前路径规则；fail closed，
+  // 让用户显式「换一批」。已生成的场景是 confirmed 内容，不受影响。
+  assertDirectionsBatchIsCurrent({
+    worldlineId: context.worldline.id,
+    directionsArtifact,
+  });
   const siblings = listScenesForDirection(
     directionsArtifact.id,
     selectedDirection.id,
@@ -267,14 +300,20 @@ export async function generateContinuationScene(input: {
         schemaName: "continuation_scene",
         schema: ContinuationSceneModelOutputV3Schema,
         modelConfig: input.modelConfig,
-        validate: (output) =>
-          validateContinuationStatePatch(
+        validate: (output) => [
+          ...validateContinuationStatePatch(
             output.statePatch,
             pathState,
             context.storyMapArtifact.storyMap,
             divergenceEventId,
             context.worldline.anchors.map((anchor) => anchor.targetEventId),
           ),
+          ...validateAgainstPreDivergenceCanon({
+            textFields: [output.title, output.prose, output.summary],
+            storyMap: context.storyMapArtifact.storyMap,
+            baseDelta: context.baseState,
+          }),
+        ],
       },
       input.provider,
     );
@@ -377,12 +416,20 @@ function resolveScenePath(input: {
   worldlineId: string;
   parentSceneId: string | null;
 }): {
+  tree: SceneTree;
   path: SceneNode[];
   parent: SceneNode | null;
   activeSettingDeltas: ActiveSettingDelta[];
+  deltas: SettingDeltaV1[];
+  lifecycles: SettingDeltaLifecycleV1[];
 } {
-  const { scenes } = listContinuationArtifactsForWorldline(input.worldlineId);
+  const { scenes, settingDeltas, settingDeltaLifecycles } =
+    listContinuationArtifactsForWorldline(input.worldlineId);
   const tree = buildSceneTree(scenes.map((scene) => scene.continuation));
+  const deltas = settingDeltas.map((artifact) => artifact.settingDelta);
+  const lifecycles = settingDeltaLifecycles.map(
+    (artifact) => artifact.lifecycle,
+  );
   let parent: SceneNode | null = null;
   let path: SceneNode[] = [];
   if (input.parentSceneId !== null) {
@@ -394,11 +441,52 @@ function resolveScenePath(input: {
   }
   const activeSettingDeltas = deriveActiveSettingDeltas({
     tree,
-    deltas: listSettingDeltasForWorldline(input.worldlineId),
-    lifecycles: listSettingDeltaLifecyclesForWorldline(input.worldlineId),
+    deltas,
+    lifecycles,
     path,
   });
-  return { path, parent, activeSettingDeltas };
+  return { tree, path, parent, activeSettingDeltas, deltas, lifecycles };
+}
+
+/** 方向批次的稳定元组；v1 批次视为根批次。 */
+function directionBatchDescriptor(
+  artifact: ContinuationDirectionsArtifact,
+): { id: string; parentSceneId: string | null; createdAt: string } {
+  return {
+    id: artifact.id,
+    parentSceneId:
+      artifact.continuation.schemaVersion === 2
+        ? artifact.continuation.parentSceneId
+        : null,
+    createdAt: artifact.continuation.createdAt,
+  };
+}
+
+/**
+ * 重新读取该 Worldline 的场景树与设定增量，检查方向批次是否 stale。
+ *
+ * 与界面使用同一纯函数；服务端不信任客户端，stale 时拒绝继续生成场景。
+ */
+function assertDirectionsBatchIsCurrent(input: {
+  worldlineId: string;
+  directionsArtifact: ContinuationDirectionsArtifact;
+}): void {
+  const { scenes, settingDeltas, settingDeltaLifecycles } =
+    listContinuationArtifactsForWorldline(input.worldlineId);
+  const tree = buildSceneTree(scenes.map((scene) => scene.continuation));
+  const batch = directionBatchDescriptor(input.directionsArtifact);
+  const path =
+    batch.parentSceneId === null
+      ? []
+      : getScenePath(tree, batch.parentSceneId);
+  const stale = isDirectionBatchStale({
+    batch,
+    tree,
+    pathToParent: path,
+    deltas: settingDeltas.map((artifact) => artifact.settingDelta),
+    lifecycles: settingDeltaLifecycles.map((artifact) => artifact.lifecycle),
+  });
+  if (stale) throw new Error(SETTING_DELTA_STALE_BATCH_MESSAGE);
 }
 
 function buildContextMaterial(input: {

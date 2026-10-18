@@ -220,6 +220,120 @@ export function validateContinuationStatePatch(
   return issues;
 }
 
+/**
+ * 生成后、落库前的“分歧前 Canon 保护”校验（纯函数、确定、无模型）。
+ *
+ * 锁定集合 = Story Map 中 `event:<id>` 不在 `baseDelta.factsRemoved` 的事件。
+ * 被分歧删除/改写的事件可以重写，那正是涟漪；其余分歧前已确认事件不能在新
+ * 内容里被说成没发生/被取消/被改写。命中即返回 issue，由调用方 fail closed，
+ * 绝不静默裁剪或改写模型输出。
+ *
+ * 检测只在固定字符串上做普通 substring 与窗口扫描：不用正则回溯，也不调用
+ * 模型。标题与（长度 ≥4 的）摘要作为匹配 needle；短字段直接跳过。
+ */
+export function validateAgainstPreDivergenceCanon(input: {
+  textFields: readonly string[];
+  storyMap: StoryMap;
+  /** factsRemoved 标记已因分歧被删除/改写的事件。 */
+  baseDelta: WorldlineDelta;
+}): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
+  const removedFactKeys = new Set(input.baseDelta.factsRemoved);
+  const lockedEvents = input.storyMap.events.filter(
+    (event) => !removedFactKeys.has(eventFactKey(event.id)),
+  );
+
+  for (const [fieldIndex, field] of input.textFields.entries()) {
+    if (field.trim().length < 2) continue;
+    for (const event of lockedEvents) {
+      const needles =
+        event.summary.length >= 4
+          ? [event.title, event.summary]
+          : [event.title];
+      if (needles.some((needle) => containsRewrittenCanon(field, needle))) {
+        issues.push({
+          path: `textFields.${fieldIndex}`,
+          message: `生成内容改写了分歧前已确认的事件：${event.title}`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+/** 否定/改写线索：命中窗口或同一句内即视为对该事件的改写。 */
+const CANON_REWRITE_CUES = [
+  "没有发生",
+  "并未发生",
+  "不曾",
+  "不再",
+  "改写",
+  "推翻",
+  "取消",
+  "抹去",
+  "从未",
+  "并没有",
+  "其实没有",
+  "其实并未",
+] as const;
+
+/** 紧邻事件的直接否定：`没有`/`并非`/`取消了` 在 8 字以内。 */
+const CANON_ADJACENT_NEGATIONS = ["没有", "并非", "取消了"] as const;
+
+const CANON_WINDOW_CHARS = 40;
+const CANON_ADJACENT_CHARS = 8;
+const SENTENCE_BOUNDARY = /[。！？!?；;\n\r]/u;
+
+function containsRewrittenCanon(text: string, needle: string): boolean {
+  if (needle.length < 2) return false;
+  let index = text.indexOf(needle);
+  while (index !== -1) {
+    if (hasRewriteCue(text, index, needle.length)) return true;
+    index = text.indexOf(needle, index + 1);
+  }
+  return false;
+}
+
+function hasRewriteCue(
+  text: string,
+  index: number,
+  needleLength: number,
+): boolean {
+  const windowStart = Math.max(0, index - CANON_WINDOW_CHARS);
+  const windowEnd = Math.min(
+    text.length,
+    index + needleLength + CANON_WINDOW_CHARS,
+  );
+  const window = text.slice(windowStart, windowEnd);
+  if (CANON_REWRITE_CUES.some((cue) => window.includes(cue))) return true;
+  if (
+    CANON_REWRITE_CUES.some((cue) => sentenceAround(text, index).includes(cue))
+  ) {
+    return true;
+  }
+
+  const before = text.slice(
+    Math.max(0, index - CANON_ADJACENT_CHARS),
+    index,
+  );
+  const after = text.slice(
+    index + needleLength,
+    Math.min(text.length, index + needleLength + CANON_ADJACENT_CHARS),
+  );
+  return CANON_ADJACENT_NEGATIONS.some(
+    (negation) => before.includes(negation) || after.includes(negation),
+  );
+}
+
+function sentenceAround(text: string, index: number): string {
+  let start = index;
+  while (start > 0 && !SENTENCE_BOUNDARY.test(text[start - 1]!)) start -= 1;
+  let end = index;
+  while (end < text.length && !SENTENCE_BOUNDARY.test(text[end]!)) end += 1;
+  return text.slice(start, end);
+}
+
 function eventFactKey(eventId: string): string {
   return `event:${eventId}`;
 }

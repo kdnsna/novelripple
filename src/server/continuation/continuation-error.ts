@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { isContinuationContextBudgetError } from "@/domain/continuation/context-assembler";
+import { SETTING_DELTA_STALE_BATCH_MESSAGE } from "@/domain/continuation/setting-deltas";
 import { CONTINUATION_CONTEXT_MAX_CHARS_ENV } from "@/server/continuation/continuation-limits";
 
 export type ContinuationGenerationStage = "directions" | "scene";
@@ -39,6 +40,7 @@ export function continuationErrorMessage(
     "找不到 Worldline 对应的不可变 Source",
     "找不到当前 Worldline 的后续方向 Artifact",
     "找不到选中的后续方向",
+    SETTING_DELTA_STALE_BATCH_MESSAGE,
     "父场景不属于当前 Worldline",
     "后续场景父节点与方向批次不一致",
     "后续场景深度必须等于父场景深度加一",

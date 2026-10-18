@@ -20,6 +20,10 @@ import {
   type ContinuationDirectionBatchView,
   type ReadingPosition,
 } from "@/domain/continuation/worldline-tree";
+import {
+  isDirectionBatchStale,
+  SETTING_DELTA_STALE_BATCH_MESSAGE,
+} from "@/domain/continuation/setting-deltas";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import type {
   ContextManifest,
@@ -217,6 +221,35 @@ export function WorldlineContinuationPanel({
     return directionOptions.find((option) => option.batch.id === latest.id) ?? null;
   }, [activeBatchId, currentNodeId, directionOptions, view.directionBatches]);
   const activeBatch = activeBatchOption?.batch ?? null;
+
+  /**
+   * 批次是否早于当前设定增量。activeBatch 始终属于当前节点，因此父路径就是
+   * currentPath；派生失败时由服务端继续 fail closed，这里不伪装成 stale。
+   */
+  const activeBatchStale = useMemo(() => {
+    if (!activeBatch) return false;
+    try {
+      return isDirectionBatchStale({
+        batch: {
+          id: activeBatch.id,
+          parentSceneId: activeBatch.parentSceneId,
+          createdAt: activeBatch.createdAt,
+        },
+        tree,
+        pathToParent: currentPath,
+        deltas: view.settingDeltas,
+        lifecycles: view.settingDeltaLifecycles,
+      });
+    } catch {
+      return false;
+    }
+  }, [
+    activeBatch,
+    currentPath,
+    tree,
+    view.settingDeltaLifecycles,
+    view.settingDeltas,
+  ]);
 
   function movePosition(next: ReadingPosition): void {
     // 阅读位置只通过这里和 selectGeneratedScene 改变；在此并入新路径的
@@ -636,6 +669,15 @@ export function WorldlineContinuationPanel({
               {pendingKind === "newBatch" ? "正在换一批…" : "换一批"}
             </button>
           </div>
+          {activeBatchStale ? (
+            <p
+              className="setting-delta-stale-banner"
+              data-testid="setting-delta-stale-banner"
+              role="status"
+            >
+              {SETTING_DELTA_STALE_BATCH_MESSAGE}
+            </p>
+          ) : null}
           <div className="direction-card-list">
             {activeBatchOption?.directions.map(({ direction, sceneIds }) => {
               const generated = sceneIds.length > 0;
@@ -670,7 +712,7 @@ export function WorldlineContinuationPanel({
                       </button>
                       <button
                         className="text-button"
-                        disabled={pending}
+                        disabled={pending || activeBatchStale}
                         onClick={() =>
                           generateScene(activeBatch, direction.id, true)
                         }
@@ -685,7 +727,7 @@ export function WorldlineContinuationPanel({
                   ) : (
                     <button
                       className="secondary-button"
-                      disabled={pending}
+                      disabled={pending || activeBatchStale}
                       onClick={() => generateScene(activeBatch, direction.id)}
                       type="button"
                     >

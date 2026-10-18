@@ -1353,4 +1353,124 @@ describe("Continuation scene tree generation", () => {
       "旧灯塔已被封锁，任何人不得进入。",
     );
   });
+
+  it("rejects directions that rewrite a locked pre-divergence event", async () => {
+    const context = await createAcceptedWorldline();
+    const violatingDirections: ContinuationDirectionsModelOutput = {
+      directions: directionOutput.directions.map((direction, index) =>
+        index === 0
+          ? {
+              ...direction,
+              premise: "铜门被打开其实并未发生，许澄仍被挡在门外。",
+            }
+          : direction,
+      ),
+    };
+    const provider = new MockAIProvider([
+      JSON.stringify(violatingDirections),
+      JSON.stringify(violatingDirections),
+    ]);
+
+    await expect(
+      generateContinuationDirections({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        provider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("Structured generation failed schema validation");
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]?.repair?.validationIssues.join(" ")).toContain(
+      "分歧前已确认的事件",
+    );
+    expect(
+      listContinuationArtifactsForWorldline(context.worldline.id).directions,
+    ).toHaveLength(0);
+    expect(
+      listProjectGenerationRuns(context.project.id).find(
+        (run) => run.kind === "continuation_directions",
+      ),
+    ).toMatchObject({ status: "failed" });
+  });
+
+  it("rejects a scene that rewrites a locked pre-divergence event without writing an artifact", async () => {
+    const context = await createAcceptedWorldline();
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const violatingScene: ContinuationSceneModelOutputV3 = {
+      ...sceneOutput,
+      prose: `${M1_06_LONG_SCENE_PROSE}\n\n铜门被打开并未发生，许澄仍在门外等待。`,
+    };
+    const provider = new MockAIProvider([
+      JSON.stringify(violatingScene),
+      JSON.stringify(violatingScene),
+    ]);
+
+    await expect(
+      generateContinuationScene({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        directionsArtifactId: directions.artifact.id,
+        selectedDirectionId:
+          directions.artifact.continuation.directions[0]!.id,
+        provider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("Structured generation failed schema validation");
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1]?.repair?.validationIssues.join(" ")).toContain(
+      "分歧前已确认的事件",
+    );
+    expect(
+      listContinuationArtifactsForWorldline(context.worldline.id).scenes,
+    ).toHaveLength(0);
+    expect(
+      listProjectGenerationRuns(context.project.id).find(
+        (run) => run.kind === "continuation_scene",
+      ),
+    ).toMatchObject({ status: "failed" });
+  });
+
+  it("rejects scene generation from a stale direction batch after a setting delta", async () => {
+    const context = await createAcceptedWorldline();
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    // 批次与增量都用毫秒 ISO 时间；让 delta 的 createdAt 严格晚于批次。
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    createSettingDeltaArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      anchorSceneId: null,
+      subject: { kind: "term", name: "旧灯塔" },
+      statement: "旧灯塔已被封锁，任何人不得进入。",
+      idempotencyKey: "stale-batch-delta",
+    });
+    const provider = new MockAIProvider([JSON.stringify(sceneOutput)]);
+
+    await expect(
+      generateContinuationScene({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        directionsArtifactId: directions.artifact.id,
+        selectedDirectionId:
+          directions.artifact.continuation.directions[0]!.id,
+        provider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("设定已更新，请换一批以生效");
+    expect(provider.requests).toHaveLength(0);
+    expect(
+      listContinuationArtifactsForWorldline(context.worldline.id).scenes,
+    ).toHaveLength(0);
+  });
 });
