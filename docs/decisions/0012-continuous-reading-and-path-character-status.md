@@ -32,11 +32,13 @@ alive | dead | absent | unknown
 
 `deriveSourceBaselineStatuses` 是确定性纯函数，不调用模型。只有同时满足以下条件才把人物基线设为 `dead`：
 
-- Story Map 事件 `sequence` 严格早于分歧事件（分歧事件自身与之后事件不算），且 `evidenceKind === "fact"`、evidence 非空；
-- 人物在该事件 `participants` 中，且某条 `stateChanges` 同时包含死亡关键词与人物姓名/别名；事件恰好只有一个参与者时允许省略姓名；
-- 该条 stateChange 不含否定/假死措辞（没死/未死/不死/假死/装死/诈死/险些/差点）。
+- Story Map `status === "confirmed"`；草稿/候选一律不推断（全体 `unknown`）；
+- 事件 `sequence` 严格早于分歧事件（分歧事件自身与之后事件不算），且 `evidenceKind === "fact"`、evidence 非空；
+- 事件**恰好只有一名参与者**，且该参与者是已知 Character。多参与者事件一律不推断，即使 `stateChanges` 只点名其中一人：当前 Event Schema 没有结构化的「死者」字段（`stateChanges` 是自由文本），无法可靠挑人，也绝不解析自由文本去猜；
+- 某条 `stateChanges` 包含死亡关键词，且不含否定/假死措辞（没死/未死/不死/假死/装死/诈死/险些/差点）；
+- 歧义守卫：该条 stateChange 若整词提到**其他** Story Map 角色的姓名/别名，跳过（死亡可能属于别人）。整词匹配规则：少于 2 个字符的姓名/别名永不命中；命中不得落在另一个角色的更长姓名/别名内部（「张三」不算命中「张三丰」）；ASCII 姓名两侧不得是字母/数字（「Li」不算命中「Lily」）。所有匹配只用于让推断更保守。
 
-其余人物默认为 `unknown`（source `default`）。这是有意保守的启发式：宁可漏报，也不把传闻、推断或否定句当成原著死亡。
+其余人物默认为 `unknown`（source `default`）。这是有意保守的启发式：宁可漏报，也不把多人混战、传闻、推断或否定句当成原著死亡。若未来 Event Schema 增加结构化的 deceased 字段，可在该字段上放开多人事件，而不是依赖本启发式。
 
 #### 读者覆盖
 
@@ -54,6 +56,7 @@ alive | dead | absent | unknown
 - `head_kind = 'root'` 表示用户明确停在分歧点；`head_node_id` 为 null。
 - `head_kind = 'scene'` 表示停在某个场景；`head_node_id` 必须是该 Worldline 上真实存在的 Continuation 场景 Artifact。
 - 旧行迁移后为 null，不会把“从未设置”误当成 root，也不会在刷新后跳到默认路径叶子。
+- 迁移同时加 DB CHECK：`head_kind` 只能是 `root` / `scene` / NULL；`head_node_id` 必须与 `head_kind` 一致（NULL/NULL、root/NULL、scene/非空），非法组合在 INSERT 与 UPDATE 时都被 SQLite 拒绝。仓库当前没有 drizzle `check()` 模式，schema.ts 只留注释说明约束由迁移 0012 维护，避免 schema 快照漂移。
 - 这是 Artifact/revision 不可变合同之外唯一允许 UPDATE 的指针列；它不参与 Delta、路径状态、摘要或生成上下文，也不产生 Generation Run。
 - 不建到 `artifacts` 的外键，避免循环/删除语义耦合；由仓储层做领域校验。
 
@@ -119,7 +122,7 @@ Continuation 场景 Prompt 升级为 `continuation-scene.v7`（保留 v6）：v6
 
 ### 已知限制
 
-- 原著基线是关键词启发式，不处理隐喻、转述或跨事件的复杂否定。
+- 原著基线是关键词启发式，不处理隐喻、转述或跨事件的复杂否定；多人事件、草稿 Story Map、短名/同名歧义一律保持 `unknown`，优先避免把活人标死。
 - 书签没有重命名；改名等于删除后新建。
 - 状态不校验模型是否在正文里兑现该状态。
 - head/bookmark 没有版本历史；它们被设计成可覆盖的阅读游标，而不是可审计叙事行。

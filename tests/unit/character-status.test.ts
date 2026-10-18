@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   derivePathCharacterStatuses,
   deriveSourceBaselineStatuses,
+  mentionsWholeWord,
 } from "@/domain/continuation/character-status";
 import {
   buildSceneTree,
@@ -240,6 +241,197 @@ describe("deriveSourceBaselineStatuses", () => {
         divergence: { ...divergence, eventId: "event_missing" },
       }),
     ).toThrow("分歧事件不在当前 Story Map 中");
+  });
+});
+
+describe("deriveSourceBaselineStatuses: exactly-one-person rule", () => {
+  const baselineDivergence = {
+    id: "divergence_inference_probe",
+    eventId: "event_divergence",
+    type: "prevent" as const,
+    instruction: "自建短句构造的分歧",
+  };
+  const baselineCharacters = [
+    { id: "character_jia", name: "甲川", aliases: [] },
+    { id: "character_yi", name: "乙河", aliases: [] },
+    { id: "character_han", name: "韩", aliases: [] },
+    { id: "character_zhang", name: "张三", aliases: [] },
+    { id: "character_zhangfeng", name: "张三丰", aliases: [] },
+  ];
+
+  function baselineStoryMap(input: {
+    status?: "draft" | "confirmed";
+    events: Array<{
+      id: string;
+      sequence: number;
+      participants: string[];
+      stateChanges: string[];
+      evidenceKind?: "fact" | "inference";
+    }>;
+  }) {
+    return StoryMapSchema.parse({
+      schemaVersion: 1,
+      id: "story_map_inference_probe",
+      sourceId: "source_inference_probe",
+      version: 1,
+      status: input.status ?? "confirmed",
+      title: "推断探针",
+      logline: "自建短句构造的人物状态推断测试",
+      characters: baselineCharacters.map((character) => ({
+        ...character,
+        role: "supporting",
+        initialState: "在场",
+      })),
+      events: [
+        ...input.events.map((event) => ({
+          id: event.id,
+          title: event.id,
+          summary: event.id,
+          sequence: event.sequence,
+          participants: event.participants,
+          stateChanges: event.stateChanges,
+          evidenceKind: event.evidenceKind ?? "fact",
+          ...(event.evidenceKind === "inference" ? { confidence: 0.5 } : {}),
+          evidence: [reference],
+        })),
+        {
+          id: "event_divergence",
+          title: "分歧",
+          summary: "自建短句构造的分歧事件",
+          sequence: 10,
+          participants: ["character_jia"],
+          stateChanges: ["甲川改变了选择"],
+          evidenceKind: "fact",
+          evidence: [reference],
+        },
+      ],
+      edges: [],
+      endingCandidates: [
+        {
+          id: "ending_1",
+          targetEventId: "event_divergence",
+          requirement: "保留分歧点",
+          evidence: [reference],
+        },
+      ],
+    });
+  }
+
+  function baseline(
+    input: Parameters<typeof baselineStoryMap>[0],
+  ): ReturnType<typeof deriveSourceBaselineStatuses> {
+    return deriveSourceBaselineStatuses({
+      storyMap: baselineStoryMap(input),
+      divergence: baselineDivergence,
+    });
+  }
+
+  it("does not infer anyone in a multi-participant death event", () => {
+    const result = baseline({
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_jia", "character_yi"],
+          stateChanges: ["甲川被杀，乙河逃走"],
+        },
+      ],
+    });
+    expect([...result.keys()]).toEqual([]);
+  });
+
+  it("never picks the named deceased out of a multi-participant event", () => {
+    // 当前 Event Schema 没有结构化的死者字段；自由文本不足以挑人。
+    const result = baseline({
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_jia", "character_yi"],
+          stateChanges: ["甲川被杀"],
+        },
+      ],
+    });
+    expect([...result.keys()]).toEqual([]);
+  });
+
+  it("infers a single participant fact death", () => {
+    const result = baseline({
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_jia"],
+          stateChanges: ["甲川病故"],
+        },
+      ],
+    });
+    expect(result.get("character_jia")).toEqual({
+      status: "dead",
+      source: "source_inference",
+      eventId: "event_1",
+    });
+  });
+
+  it("skips a single participant event that also whole-word-names another character", () => {
+    const result = baseline({
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_jia"],
+          stateChanges: ["乙河为甲川收尸，乙河身亡"],
+        },
+      ],
+    });
+    expect([...result.keys()]).toEqual([]);
+  });
+
+  it("does not false-match a single-char name inside a longer word", () => {
+    const result = baseline({
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_han", "character_jia"],
+          stateChanges: ["韩国使者死亡"],
+        },
+      ],
+    });
+    expect(result.has("character_han")).toBe(false);
+  });
+
+  it("does not infer from a draft Story Map", () => {
+    const result = baseline({
+      status: "draft",
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_jia"],
+          stateChanges: ["甲川病故"],
+        },
+      ],
+    });
+    expect([...result.keys()]).toEqual([]);
+  });
+});
+
+describe("mentionsWholeWord", () => {
+  it("never matches names shorter than two characters", () => {
+    expect(mentionsWholeWord("韩国使者死亡", "韩")).toBe(false);
+    expect(mentionsWholeWord("甲川病故", "甲")).toBe(false);
+  });
+
+  it("does not match a shorter name inside another character's longer name", () => {
+    expect(mentionsWholeWord("张三丰上山", "张三", ["张三丰"])).toBe(false);
+    expect(mentionsWholeWord("张三来了", "张三", ["张三丰"])).toBe(true);
+  });
+
+  it("requires letter/digit boundaries for ASCII names", () => {
+    expect(mentionsWholeWord("Lily来了", "Li")).toBe(false);
+    expect(mentionsWholeWord("Li来了", "Li")).toBe(true);
+    expect(mentionsWholeWord("Li 来了", "Li")).toBe(true);
   });
 });
 

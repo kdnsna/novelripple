@@ -80,12 +80,17 @@ const NEGATED_DEATH_KEYWORDS = [
  * 从「分歧点之前、有证据的 fact 事件」推断原著人物基线状态。
  *
  * 这是确定性启发式，不调用模型：
+ * - 只在 Story Map 已 confirmed 时推断；草稿/候选一律不推断；
  * - 只读 `sequence < 分歧事件.sequence` 的事件，分歧事件自身与之后事件
  *   都不参与；
  * - 只看 `evidenceKind === "fact"` 且 evidence 非空的事件；
- * - 状态变化必须同时包含死亡关键词与人物姓名/别名；事件恰好只有一个
- *   参与者时允许省略姓名；
- * - 同一句出现否定/假死措辞时跳过。
+ * - 只有事件**恰好一名参与者**时才可能归因：多人事件一律 unknown，即使
+ *   stateChange 点名了其中一人。当前 Event Schema 没有结构化的「死者」
+ *   字段（`stateChanges` 是自由文本），因此无法可靠地从多人事件中挑出
+ *   被推断者；未来若新增该字段，可以在那一分支使用，而不是解析自由文本；
+ * - 单一参与者事件中，某条 stateChange 需包含死亡关键词且不含否定/假死
+ *   措辞；若同一句还整词提到**其他**角色，死亡可能属于别人，跳过；
+ * - 以上所有命中只用于让推断更保守。
  *
  * 只返回基线为 dead 的人物；其余人物由调用方默认为 unknown。
  */
@@ -101,10 +106,19 @@ export function deriveSourceBaselineStatuses(input: {
     throw new Error(`分歧事件不在当前 Story Map 中：${divergence.eventId}`);
   }
 
+  const result = new Map<string, SourceBaselineStatus>();
+  // 未确认的 Story Map 还可能被改写；宁可全部 unknown，也不把草稿当原著。
+  if (storyMap.status !== "confirmed") return result;
+
   const charactersById = new Map(
     storyMap.characters.map((character) => [character.id, character]),
   );
-  const result = new Map<string, SourceBaselineStatus>();
+  const characterNames = storyMap.characters.map((character) => ({
+    characterId: character.id,
+    names: [character.name, ...character.aliases].filter(
+      (name) => name.length > 0,
+    ),
+  }));
   const events = [...storyMap.events]
     .filter(
       (event) =>
@@ -115,30 +129,104 @@ export function deriveSourceBaselineStatuses(input: {
     .sort((left, right) => left.sequence - right.sequence);
 
   for (const event of events) {
-    for (const participant of event.participants) {
-      const character = charactersById.get(participant);
-      if (!character) continue;
-      const names = [character.name, ...character.aliases].filter(
-        (name) => name.length > 0,
-      );
-      for (const stateChange of event.stateChanges) {
-        if (!hasDeathKeyword(stateChange)) continue;
-        if (hasNegatedDeathKeyword(stateChange)) continue;
-        const namesCharacter =
-          names.some((name) => stateChange.includes(name)) ||
-          event.participants.length === 1;
-        if (!namesCharacter) continue;
-        result.set(participant, {
-          status: "dead",
-          source: "source_inference",
-          eventId: event.id,
-        });
-        break;
-      }
+    // 多人事件没有结构化归因；任何“谁死了”的猜测都可能把活人标死。
+    if (event.participants.length !== 1) continue;
+    const [participant] = event.participants;
+    if (!charactersById.has(participant)) continue;
+
+    for (const stateChange of event.stateChanges) {
+      if (!hasDeathKeyword(stateChange)) continue;
+      if (hasNegatedDeathKeyword(stateChange)) continue;
+      if (mentionsOtherCharacter(stateChange, participant)) continue;
+      result.set(participant, {
+        status: "dead",
+        source: "source_inference",
+        eventId: event.id,
+      });
+      break;
     }
   }
 
+  /**
+   * 歧义守卫：stateChange 若整词提到其他角色，死亡可能不是单一参与者的。
+   * 对每个其他角色，用「其余角色」的姓名作为更长姓名边界，避免把
+   * 「张三」误当成「张三丰」的命中。
+   */
+  function mentionsOtherCharacter(
+    stateChange: string,
+    participant: string,
+  ): boolean {
+    return characterNames.some((entry) => {
+      if (entry.characterId === participant) return false;
+      const longerNames = characterNames
+        .filter((other) => other.characterId !== entry.characterId)
+        .flatMap((other) => other.names);
+      return entry.names.some((name) =>
+        mentionsWholeWord(stateChange, name, longerNames),
+      );
+    });
+  }
+
   return result;
+}
+
+/**
+ * 整词姓名匹配；只用于让死亡推断更保守，命中不会放宽任何规则。
+ *
+ * - 少于 2 个码点的姓名/别名永不命中（中文单字名歧义过大）；
+ * - 命中不得落在 `otherCharacterNames` 中某个更长姓名/别名的内部：
+ *   「张三」不算命中「张三丰」（当「张三丰」属于另一个角色时）；
+ * - ASCII 姓名要求两侧不是字母/数字：`Li` 不算命中 `Lily`。
+ */
+export function mentionsWholeWord(
+  text: string,
+  name: string,
+  otherCharacterNames: readonly string[] = [],
+): boolean {
+  if (Array.from(name).length < 2) return false;
+  const longerNames = otherCharacterNames.filter(
+    (other) =>
+      other !== name && Array.from(other).length > Array.from(name).length,
+  );
+  const requireAsciiBoundary = /^[\x00-\x7f]+$/.test(name);
+
+  let from = 0;
+  while (from <= text.length - name.length) {
+    const start = text.indexOf(name, from);
+    if (start === -1) return false;
+    const end = start + name.length;
+    const isMatch =
+      (!requireAsciiBoundary || hasAsciiBoundaries(text, start, end)) &&
+      !longerNames.some((longer) =>
+        overlapsOccurrence(text, longer, start, end),
+      );
+    if (isMatch) return true;
+    from = start + 1;
+  }
+  return false;
+}
+
+function hasAsciiBoundaries(text: string, start: number, end: number): boolean {
+  const before = start > 0 ? text[start - 1] : "";
+  const after = end < text.length ? text[end] : "";
+  return !/[A-Za-z0-9]/.test(before) && !/[A-Za-z0-9]/.test(after);
+}
+
+/** longer 是否在 [start, end) 范围内出现，从而覆盖短名命中。 */
+function overlapsOccurrence(
+  text: string,
+  longer: string,
+  start: number,
+  end: number,
+): boolean {
+  let from = 0;
+  while (from <= text.length - longer.length) {
+    const index = text.indexOf(longer, from);
+    if (index === -1) return false;
+    if (index < end && index + longer.length > start) return true;
+    from = index + 1;
+  }
+  return false;
 }
 
 /**

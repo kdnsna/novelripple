@@ -216,7 +216,12 @@ export const worldlines = sqliteTable(
     acceptedImpactPlanId: text("accepted_impact_plan_id").references(
       () => artifacts.id,
     ),
-    /** 阅读游标：null 表示从未设置；root/scene 区分分歧点与场景。 */
+    /**
+     * 阅读游标：null 表示从未设置；root/scene 区分分歧点与场景。
+     * DB CHECK（head_kind ∈ root/scene/NULL，且与 head_node_id 组合一致）
+     * 由迁移 0012 原地维护；本仓库未使用 drizzle `check()`，避免 schema
+     * 快照与既有迁移的生成 SQL 漂移。
+     */
     headKind: text("head_kind", { enum: ["root", "scene"] }),
     headNodeId: text("head_node_id"),
     idempotencyKey: text("idempotency_key").notNull(),
