@@ -6,7 +6,7 @@ import {
 } from "./continuation";
 import {
   SettingDeltaLifecycleV1Schema,
-  SettingDeltaV1Schema,
+  SettingDeltaV1StoredSchema,
 } from "./setting-delta";
 import { SourceReferenceSchema } from "./source";
 import { ImpactPlanSchema } from "./impact-plan";
@@ -533,7 +533,9 @@ export const ContinuationSceneArtifactSchema =
 export const SettingDeltaArtifactSchema = ContinuationArtifactBaseSchema.extend({
   artifactType: z.literal("setting_delta"),
   schemaVersion: z.literal(1),
-  settingDelta: SettingDeltaV1Schema,
+  // 读取历史行时放宽 forbidden-char 检查；创建路径在仓储层仍先走严格
+  // `SettingDeltaV1Schema`，所以新内容不会绕过写入校验。
+  settingDelta: SettingDeltaV1StoredSchema,
   basedOnArtifactId: z.null(),
   generationRunId: z.null(),
 })

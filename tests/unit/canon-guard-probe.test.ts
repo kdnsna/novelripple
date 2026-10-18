@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CANON_GUARD_DIALOGUE_LIE,
+  CANON_GUARD_FRAME_THEN_NARRATOR,
   CANON_GUARD_LEGITIMATE,
   CANON_GUARD_NEUTRAL_PROSE,
   CANON_GUARD_PROBE_PATH_STATE,
@@ -23,6 +24,7 @@ const shouldRejectCount = CANON_GUARD_SHOULD_REJECT.length;
 const legitimateCount = CANON_GUARD_LEGITIMATE.length;
 const dialogueCount = CANON_GUARD_DIALOGUE_LIE.length;
 const reviewerDialogueCount = CANON_GUARD_REVIEWER_DIALOGUE.length;
+const frameThenNarratorCount = CANON_GUARD_FRAME_THEN_NARRATOR.length;
 
 describe("canon guard labeled probe", () => {
   it(
@@ -32,7 +34,9 @@ describe("canon guard labeled probe", () => {
       legitimateCount
     }, neutral ${stats.neutralHardRejects}, dialogue hard-reject ${
       stats.dialogueHardRejects
-    }/${dialogueCount}, dialogue warnings ${stats.dialogueWarnings}/${dialogueCount}, reviewer dialogue hard-reject ${
+    }/${dialogueCount}, dialogue warnings ${stats.dialogueWarnings}/${dialogueCount}, frame-then-narrator caught ${
+      stats.frameThenNarratorCaught
+    }/${frameThenNarratorCount}, reviewer dialogue hard-reject ${
       stats.reviewerDialogueHardRejects
     }/${reviewerDialogueCount}, reviewer dialogue warnings ${
       stats.reviewerDialogueWarnings
@@ -43,6 +47,8 @@ describe("canon guard labeled probe", () => {
       expect(stats.neutralHardRejects).toBe(0);
       expect(stats.dialogueHardRejects).toBe(0);
       expect(stats.reviewerDialogueHardRejects).toBe(0);
+      // 前一分句的框架不能豁免后一分句的叙述者否定：整组都必须硬拒绝。
+      expect(stats.frameThenNarratorCaught).toBe(frameThenNarratorCount);
       // 每一类都应至少产生低置信 warning，而不是静默丢失信号。
       expect(stats.warningsOnLegitimate).toBeGreaterThan(0);
       expect(stats.dialogueWarnings).toBeGreaterThan(0);
@@ -53,7 +59,8 @@ describe("canon guard labeled probe", () => {
         {
           "caught": 14,
           "dialogueHardRejects": 0,
-          "dialogueWarnings": 14,
+          "dialogueWarnings": 17,
+          "frameThenNarratorCaught": 20,
           "hardFalseRejects": 0,
           "neutralHardRejects": 0,
           "reviewerDialogueHardRejects": 0,
@@ -91,7 +98,8 @@ describe("canon guard labeled probe", () => {
   it("records the expected probe sizes", () => {
     expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(20);
     expect(CANON_GUARD_LEGITIMATE).toHaveLength(19);
-    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(14);
+    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(17);
+    expect(CANON_GUARD_FRAME_THEN_NARRATOR).toHaveLength(20);
     expect(CANON_GUARD_REVIEWER_DIALOGUE).toHaveLength(8);
     expect(CANON_GUARD_NEUTRAL_PROSE.length).toBeGreaterThan(200);
   });

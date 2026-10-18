@@ -343,6 +343,26 @@ function settingDeltaTextSchema(
 }
 
 /**
+ * 已存储行的宽松文本 Schema：保留 NFC/trim 与长度上限，但不重复检查
+ * 不可见/畸形字符。
+ *
+ * 历史行的文本在写入当时可能合法，之后规则收紧；读取、派生与生命周期
+ * 操作必须仍能处理这些行，否则旧规则会变得无法停用或删除。新内容的
+ * 创建路径继续使用 `settingDeltaTextSchema`（含 forbidden-char 检查）。
+ */
+function settingDeltaStoredTextSchema(maxChars: number, label: string) {
+  return z
+    .string()
+    .transform(normalizeSettingDeltaText)
+    .pipe(
+      z
+        .string()
+        .min(1, `${label}不能为空`)
+        .max(maxChars, `${label}不能超过 ${maxChars} 个字符`),
+    );
+}
+
+/**
  * 只拒绝不可见/畸形字符、不做 NFC/trim 或长度限制的说明 Schema。
  *
  * Server Action 用它在进入仓储前把具体码位错误回给读者；trim/NFC 与
@@ -412,6 +432,45 @@ export const SettingDeltaV1Schema = z
   .strict();
 
 /**
+ * 读取已存储设定增量时使用的宽松 Schema。
+ *
+ * 只跳过 forbidden-char refinement：创建/写入仍必须走上面的严格 Schema，
+ * 历史行即使包含今天禁止的字符，也必须能读取、派生、停用、删除与重新启用。
+ */
+export const SettingDeltaSubjectStoredSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("character"),
+      characterId: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("term"),
+      name: settingDeltaStoredTextSchema(
+        SETTING_DELTA_TERM_NAME_MAX_CHARS,
+        "设定词条名称",
+      ),
+    })
+    .strict(),
+]);
+
+export const SettingDeltaV1StoredSchema = z
+  .object({
+    id: z.string().min(1),
+    worldlineId: z.string().min(1),
+    anchorSceneId: z.string().min(1).nullable(),
+    subject: SettingDeltaSubjectStoredSchema,
+    statement: settingDeltaStoredTextSchema(
+      SETTING_DELTA_STATEMENT_MAX_CHARS,
+      "设定说明",
+    ),
+    contentKind: z.literal("user"),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+
+/**
  * 设定增量的不可变生命周期事件。
  *
  * Artifact 只追加：停用、重新启用与软删除都不 UPDATE 原 `setting_delta` 行，
@@ -436,7 +495,11 @@ export const SettingDeltaLifecycleV1Schema = z
   .strict();
 
 export type SettingDeltaSubject = z.infer<typeof SettingDeltaSubjectSchema>;
+export type SettingDeltaSubjectStored = z.infer<
+  typeof SettingDeltaSubjectStoredSchema
+>;
 export type SettingDeltaV1 = z.infer<typeof SettingDeltaV1Schema>;
+export type SettingDeltaV1Stored = z.infer<typeof SettingDeltaV1StoredSchema>;
 export type SettingDeltaLifecycleStatus = z.infer<
   typeof SettingDeltaLifecycleStatusSchema
 >;

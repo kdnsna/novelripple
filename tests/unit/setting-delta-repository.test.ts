@@ -34,6 +34,7 @@ import {
 } from "@/app/projects/actions";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
+import { artifacts } from "@/server/db/schema";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import {
@@ -44,6 +45,7 @@ import {
   getContinuationArtifact,
   listSettingDeltaLifecyclesForWorldline,
   listSettingDeltasForWorldline,
+  stableSettingDeltaArtifactId,
 } from "@/server/repositories/continuation-repository";
 import {
   createGenerationRun,
@@ -440,14 +442,25 @@ describe("setting delta repository and action", () => {
         settingDeltaForbiddenCharMessage(codePoint!, "设定说明"),
       );
 
-      expect(() =>
+      let caughtTerm: unknown;
+      try {
         createSettingDeltaArtifact({
           ...base,
           idempotencyKey: `forbidden-term-${index}`,
           subject: { kind: "term", name: `旧灯${value}塔` },
           statement: "旧灯塔已被封锁。",
-        }),
-      ).toThrow(settingDeltaForbiddenCharMessage(codePoint!, "词条名"));
+        });
+      } catch (error) {
+        caughtTerm = error;
+      }
+      expect(caughtTerm).toBeInstanceOf(SettingDeltaError);
+      expect((caughtTerm as SettingDeltaError).code).toBe("forbidden_char");
+      // 仓储路径同样必须同时指出字段（词条名）与具体码位。
+      expect((caughtTerm as SettingDeltaError).message).toBe(
+        settingDeltaForbiddenCharMessage(codePoint!, "词条名"),
+      );
+      expect((caughtTerm as SettingDeltaError).message).toContain("词条名");
+      expect((caughtTerm as SettingDeltaError).message).toMatch(/U\+[0-9A-F]{4,5}/u);
     }
     expect(listSettingDeltasForWorldline(accepted.worldline.id)).toHaveLength(0);
 
@@ -463,6 +476,118 @@ describe("setting delta repository and action", () => {
       ok: false,
       error: "设定说明包含不允许的字符 U+200B（零宽空格）",
     });
+  });
+
+  it("keeps legacy rows with now-forbidden characters readable, deactivatable and deletable", async () => {
+    const accepted = await createChildWorldline(context);
+    const { worldline } = accepted;
+    const createdAt = new Date().toISOString();
+    const id = stableSettingDeltaArtifactId(
+      worldline.id,
+      null,
+      "legacy-forbidden-char",
+    );
+    // 直接插入历史行，绕过 create 的字符校验：模拟规则收紧前已经存在的规则。
+    getDatabase()
+      .insert(artifacts)
+      .values({
+        id,
+        projectId: context.project.id,
+        sourceId: context.source.id,
+        worldlineId: worldline.id,
+        kind: "continuation",
+        schemaVersion: 1,
+        version: null,
+        dataJson: JSON.stringify({
+          artifactType: "setting_delta",
+          settingDelta: {
+            id,
+            worldlineId: worldline.id,
+            anchorSceneId: null,
+            subject: { kind: "term", name: "旧灯\u200B塔" },
+            statement: "旧灯\u200B塔已被封锁。",
+            contentKind: "user",
+            createdAt,
+          },
+        }),
+        basedOnArtifactId: null,
+        generationRunId: null,
+        createdAt,
+      })
+      .run();
+
+    // 读取与派生必须容忍历史行中的 U+200B。
+    const listed = listSettingDeltasForWorldline(worldline.id);
+    expect(listed).toEqual([
+      expect.objectContaining({
+        id,
+        subject: { kind: "term", name: "旧灯\u200B塔" },
+        statement: "旧灯\u200B塔已被封锁。",
+      }),
+    ]);
+    const emptyTree = buildSceneTree([]);
+    expect(
+      deriveActiveSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        path: [],
+      }).map((item) => item.active.id),
+    ).toEqual([id]);
+
+    const deactivated = createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: worldline.id,
+      targetDeltaId: id,
+      status: "deactivated",
+      idempotencyKey: "legacy-forbidden-deactivate",
+    });
+    expect(deactivated.lifecycle.status).toBe("deactivated");
+    expect(
+      deriveActiveSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        lifecycles: [deactivated.lifecycle],
+        path: [],
+      }),
+    ).toEqual([]);
+
+    const reactivated = createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: worldline.id,
+      targetDeltaId: id,
+      status: "reactivated",
+      idempotencyKey: "legacy-forbidden-reactivate",
+    });
+    expect(reactivated.lifecycle.status).toBe("reactivated");
+    expect(
+      deriveActiveSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        lifecycles: [deactivated.lifecycle, reactivated.lifecycle],
+        path: [],
+      }).map((item) => item.active.id),
+    ).toEqual([id]);
+
+    const deleted = createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: worldline.id,
+      targetDeltaId: id,
+      status: "deleted",
+      idempotencyKey: "legacy-forbidden-delete",
+    });
+    expect(deleted.lifecycle.status).toBe("deleted");
+    expect(
+      derivePathSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        lifecycles: [
+          deactivated.lifecycle,
+          reactivated.lifecycle,
+          deleted.lifecycle,
+        ],
+        path: [],
+      }),
+    ).toEqual([]);
   });
 
   it("accepts legitimate emoji sequences while rejecting broken ones", async () => {

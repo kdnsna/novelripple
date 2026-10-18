@@ -110,7 +110,7 @@ export const CANON_GUARD_PROBE_PATH_STATE: WorldlineDelta =
     threadsClosed: [],
   });
 
-/** 11 条语义上应被拒绝的改写；字面护栏只能覆盖其中一部分。 */
+/** 20 条语义上应被拒绝的改写；字面护栏只能覆盖其中一部分。 */
 export const CANON_GUARD_SHOULD_REJECT = [
   "灯塔熄灭从未发生。",
   "灯塔熄灭根本没有发生过。",
@@ -165,7 +165,7 @@ export const CANON_GUARD_LEGITIMATE = [
 ] as const;
 
 /**
- * 14 条对白/谎言/传闻/怀疑/角色断言/愿望/被转述的句子。
+ * 17 条对白/谎言/传闻/怀疑/角色断言/愿望/被转述/冒号直接引语的句子。
  *
  * 这些句子里的“未发生/不存在/是假的”属于角色话语或叙述者的不确定转述，
  * 不是叙述者的直接断言；只允许 warning，必须 0 条硬拒绝。
@@ -186,6 +186,43 @@ export const CANON_GUARD_DIALOGUE_LIE = [
   "但愿交出钥匙从未发生过。",
   "她坚持说灯塔熄灭根本没有发生过。",
   "他矢口否认交出钥匙存在过。",
+  // 冒号直接跟在框架动词后引入直接引语：引语直到句末都受框架治理，
+  // 引语内逗号不打断。
+  "他说：灯塔熄灭从未发生过。",
+  "据说：交出钥匙根本没有发生过。",
+  "她喊道：别担心，灯塔熄灭从来没有发生过。",
+] as const;
+
+/**
+ * 框架在第一分句、叙述者否定在第二分句的句子。
+ *
+ * 框架词只治理自己的分句：逗号/分号/转折连接词之后，叙述者的“从未发生”
+ * 必须硬拒绝，不能因为前一句出现希望/怀疑/声称等词就降级为 warning。
+ * 覆盖愿望、maybe、以为、告诉、怀疑、发誓、否认、喊道、听说/据说、
+ * 咬定、说完/说起、骗，以及同一分句内被“但/可”打断治理的情形。
+ */
+export const CANON_GUARD_FRAME_THEN_NARRATOR = [
+  "她希望能早点回家，灯塔熄灭从未发生过。",
+  "但愿明天风平浪静，交出钥匙根本没有发生过。",
+  "他可能已经忘了，灯塔熄灭从来没有发生过。",
+  "也许是她听错了，交出钥匙压根没有发生过。",
+  "或许风浪太大，灯塔熄灭未曾发生。",
+  "他以为自己听错了，交出钥匙根本没有发生过。",
+  "他告诉我风暴要来，灯塔熄灭从未发生过。",
+  "村长怀疑有人偷了船；灯塔熄灭从未发生过。",
+  "他发誓自己没撒谎，交出钥匙从来没有发生过。",
+  "她否认见过那盏灯，灯塔熄灭根本没有发生过。",
+  "她喊道快点走，交出钥匙从未发生过。",
+  "他听说风暴要来了，灯塔熄灭从来没有发生过。",
+  "据说那年很冷；交出钥匙根本没有发生过。",
+  "她咬定是风浪的错，可交出钥匙根本没有发生过。",
+  "她坚称，交出钥匙从来没有发生过。",
+  "众人说完后便散了，灯塔熄灭从未发生过。",
+  "他说起旧年的灯，交出钥匙从来没有发生过。",
+  "他骗众人说风浪很大，灯塔熄灭根本没有发生过。",
+  // 叙述者切换连接词打破治理：逗号版与真正同一分句版都必须硬拒绝。
+  "他以为没人知道，但灯塔熄灭从未发生过。",
+  "他以为没人知道但灯塔熄灭从未发生过。",
 ] as const;
 
 /**
@@ -231,6 +268,8 @@ export type CanonGuardProbeStats = {
   dialogueHardRejects: number;
   /** 对白/谎言/传闻样本中出现 warning 的数量。 */
   dialogueWarnings: number;
+  /** 框架在前一分句、叙述者否定在后一分句的样本中被硬拒绝的数量。 */
+  frameThenNarratorCaught: number;
   /** 评审方类别对白样本中被硬拒绝的数量（必须为 0）。 */
   reviewerDialogueHardRejects: number;
   /** 评审方类别对白样本中出现 warning 的数量。 */
@@ -252,6 +291,7 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
   const legitimate = CANON_GUARD_LEGITIMATE.map(evaluate);
   const dialogue = CANON_GUARD_DIALOGUE_LIE.map(evaluate);
   const reviewerDialogue = CANON_GUARD_REVIEWER_DIALOGUE.map(evaluate);
+  const frameThenNarrator = CANON_GUARD_FRAME_THEN_NARRATOR.map(evaluate);
   const neutral = evaluate(CANON_GUARD_NEUTRAL_PROSE);
   return {
     caught: shouldReject.filter((result) => result.issues.length > 0).length,
@@ -268,6 +308,9 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
       .length,
     dialogueWarnings: dialogue.filter((result) => result.warnings.length > 0)
       .length,
+    frameThenNarratorCaught: frameThenNarrator.filter(
+      (result) => result.issues.length > 0,
+    ).length,
     reviewerDialogueHardRejects: reviewerDialogue.filter(
       (result) => result.issues.length > 0,
     ).length,

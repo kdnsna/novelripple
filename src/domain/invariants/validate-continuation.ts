@@ -454,9 +454,10 @@ const CANON_LOSS_CUES = ["没有了", "再也没有"] as const;
 /**
  * 引述/对白/传闻/怀疑/撒谎等框架只产生 warning，不硬拒绝。
  *
- * 这些线索必须出现在匹配之前（同一句）；硬检查前还会先剥离成对引号内的
- * 内容，因此角色对白里的否定不会被当成叙述者的直接断言。裸 `说` 与 `骗`
- * 太短，改用下方更窄的 `hasReportingSayCue` / `hasDeceptionCue` 判定。
+ * 框架必须“治理”匹配：与匹配处于同一分句且位于其前，或由紧跟框架动词的
+ * 冒号引入直接引语。硬检查前还会先剥离成对引号内的内容，因此角色对白里的
+ * 否定不会被当成叙述者的直接断言。裸 `说` 与 `骗` 太短，改用下方更窄的
+ * `hasReportingSayCue` / `hasDeceptionCue` 判定。
  */
 const CANON_DIALOGUE_CUES = [
   "有人说",
@@ -484,7 +485,8 @@ const CANON_DIALOGUE_CUES = [
 
 /**
  * 角色断言框架：角色“咬定/坚持/否认/发誓”的内容仍是角色话语，不是
- * 叙述者的直接断言，只产生 warning。线索必须出现在匹配之前（同一句）。
+ * 叙述者的直接断言，只产生 warning。框架同样必须治理匹配（见
+ * `hasGoverningFrameCue`）。
  */
 const CANON_CHARACTER_ASSERTION_CUES = [
   "一口咬定",
@@ -519,11 +521,39 @@ const CANON_WISH_CUES = [
 
 /** `说` 只有作为引述动词时才豁免；这些后续字说明它是“说完/说明/起来”等。 */
 const CANON_SAY_BLOCKED_FOLLOWERS = new Set(["完", "明", "起", "来", "法", "服"]);
-/** 说：/ 说: / 说，是明确的引述框架，即使逗号后已跨分句。 */
-const CANON_SAY_IMMEDIATE_PUNCTUATION = new Set(["：", ":", "，"]);
 
-/** 分句边界：只在同一分句内判断反事实线索与否定谓词的关系。 */
-const CANON_CLAUSE_DELIMITER = /[，,；;：:、]/u;
+/**
+ * 叙述者切换连接词：框架线索与否定谓词之间出现转折时，前面的框架不再
+ * 治理后面的否定。例如「他以为没人知道，但灯塔熄灭从未发生过。」中的
+ * “但”把叙述者拉回直接断言。
+ */
+const CANON_NARRATOR_SWITCH_CUES = [
+  "事实上",
+  "实际上",
+  "但是",
+  "可是",
+  "然而",
+  "不过",
+  "其实",
+  "但",
+  "可",
+  "却",
+] as const;
+
+/**
+ * 反事实/失去义的原有分句边界（冒号也切分）。
+ *
+ * 这两类线索的语义保持不变，因此不复用下面“框架治理”的边界。
+ */
+const CANON_COUNTERFACTUAL_CLAUSE_DELIMITER = /[，,；;：:、]/u;
+
+/**
+ * 框架治理的分句边界：逗号、顿号、句末标点与换行切分，冒号不切分。
+ *
+ * 冒号直接跟在框架动词后时引入直接引语（`他说：…`、`据说：…`），引语到
+ * 下一个句末标点/换行为止都由该框架治理；该特例由 `frameCueGoverns` 处理。
+ */
+const CANON_GOVERNANCE_CLAUSE_DELIMITER = /[，,。；;！!？?、\n\r]/u;
 
 const CANON_QUOTE_PAIRS: Readonly<Record<string, string>> = {
   "「": "」",
@@ -610,7 +640,7 @@ function hasExplicitOccurrenceNegation(
   return matched ? "nonAssertive" : null;
 }
 
-/** 该硬匹配是否被同一分句的反事实、失去义或之前的引述框架豁免。 */
+/** 该硬匹配是否被同一分句的反事实、失去义或治理它的引述框架豁免。 */
 function isNonAssertionMatch(
   sentence: string,
   match: RegExpMatchArray,
@@ -618,10 +648,22 @@ function isNonAssertionMatch(
 ): boolean {
   const start = match.index ?? 0;
   const end = start + match[0].length;
-  const clauseStart = clauseStartBefore(sentence, start);
-  const clauseEnd = clauseEndAfter(sentence, end);
-  const clause = sentence.slice(clauseStart, clauseEnd);
-  const prefix = sentence.slice(clauseStart, start);
+  // 反事实/失去义沿用原有分句边界；框架治理使用自己的边界。
+  const counterfactualClauseStart = clauseStartBefore(
+    sentence,
+    start,
+    CANON_COUNTERFACTUAL_CLAUSE_DELIMITER,
+  );
+  const counterfactualClauseEnd = clauseEndAfter(
+    sentence,
+    end,
+    CANON_COUNTERFACTUAL_CLAUSE_DELIMITER,
+  );
+  const clause = sentence.slice(
+    counterfactualClauseStart,
+    counterfactualClauseEnd,
+  );
+  const prefix = sentence.slice(counterfactualClauseStart, start);
   if (CANON_COUNTERFACTUAL_CUES.some((cue) => prefix.includes(cue))) {
     return true;
   }
@@ -634,7 +676,7 @@ function isNonAssertionMatch(
       const cueIndex = clause.indexOf(cue);
       return (
         cueIndex >= 0 &&
-        clauseStart + cueIndex < start &&
+        counterfactualClauseStart + cueIndex < start &&
         new RegExp(
           `${escapeRegExp(cue)}(?:${CANON_PARTICLE_GAP})?${escapedTitle}`,
           "u",
@@ -645,25 +687,116 @@ function isNonAssertionMatch(
     return true;
   }
 
+  const governanceClauseStart = clauseStartBefore(
+    sentence,
+    start,
+    CANON_GOVERNANCE_CLAUSE_DELIMITER,
+  );
   return (
-    CANON_DIALOGUE_CUES.some((cue) =>
-      sentence.slice(0, start).includes(cue),
+    hasGoverningFrameCue(
+      sentence,
+      start,
+      governanceClauseStart,
+      CANON_DIALOGUE_CUES,
     ) ||
-    CANON_CHARACTER_ASSERTION_CUES.some((cue) =>
-      sentence.slice(0, start).includes(cue),
+    hasGoverningFrameCue(
+      sentence,
+      start,
+      governanceClauseStart,
+      CANON_CHARACTER_ASSERTION_CUES,
     ) ||
-    CANON_WISH_CUES.some((cue) => sentence.slice(0, start).includes(cue)) ||
-    hasReportingSayCue(sentence, start, clauseStart) ||
-    hasDeceptionCue(sentence.slice(0, start))
+    hasGoverningFrameCue(
+      sentence,
+      start,
+      governanceClauseStart,
+      CANON_WISH_CUES,
+    ) ||
+    hasReportingSayCue(sentence, start, governanceClauseStart) ||
+    hasDeceptionCue(sentence, start, governanceClauseStart)
   );
 }
 
 /**
- * `说` 仅在引述框架中豁免：
- * - 与匹配处于同一分句（`他说了…`、`他转述说…`）；或
- * - 紧跟 `：` / `:` / `，`（`他说：…`、`他说，…`）。
+ * 通用框架规则：框架线索只有“治理”否定时才豁免，返回 true。
  *
- * 但“说完/说明/说起/说来/说法/说服/说过了”不是引述动词，因此像
+ * 治理条件：
+ * (a) 与匹配处于同一分句且位于其前，且两者之间没有叙述者切换连接词；
+ * (b) 框架后紧跟全角/半角冒号，引入直接引语；冒号不切分句，因此引语内
+ *     直到下一个句末标点/换行前的否定都由该框架治理（引语内逗号不打断）。
+ *
+ * 不同框架族共用这一条规则，避免“前面一句出现希望/怀疑，后一句的叙述者
+ * 否定也被放过”。
+ */
+function hasGoverningFrameCue(
+  sentence: string,
+  matchStart: number,
+  clauseStart: number,
+  cues: readonly string[],
+): boolean {
+  for (const cue of cues) {
+    let index = sentence.indexOf(cue);
+    while (index >= 0 && index < matchStart) {
+      if (
+        frameCueGoverns(
+          sentence,
+          index,
+          index + cue.length,
+          matchStart,
+          clauseStart,
+        )
+      ) {
+        return true;
+      }
+      index = sentence.indexOf(cue, index + 1);
+    }
+  }
+  return false;
+}
+
+/** 单个框架线索是否治理后面的匹配。 */
+function frameCueGoverns(
+  sentence: string,
+  cueStart: number,
+  cueEnd: number,
+  matchStart: number,
+  clauseStart: number,
+): boolean {
+  if (cueEnd > matchStart) return false;
+  // (b) 冒号直接跟在框架动词后：直接引语直到句末/换行都受该框架治理。
+  const colonIndex = colonDirectlyAfter(sentence, cueEnd);
+  if (colonIndex !== null && colonIndex < matchStart) return true;
+  // (a) 同一分句、位于匹配之前，且中间没有叙述者切换。
+  if (cueStart < clauseStart) return false;
+  const between = sentence.slice(cueEnd, matchStart);
+  return !CANON_NARRATOR_SWITCH_CUES.some((cue) =>
+    between.includes(cue),
+  );
+}
+
+/** 框架结尾后（允许普通/全角空格）是否紧跟冒号；返回冒号下标。 */
+function colonDirectlyAfter(
+  sentence: string,
+  index: number,
+): number | null {
+  let cursor = index;
+  while (
+    cursor < sentence.length &&
+    (sentence[cursor] === " " || sentence[cursor] === "\u3000")
+  ) {
+    cursor += 1;
+  }
+  return sentence[cursor] === "：" || sentence[cursor] === ":"
+    ? cursor
+    : null;
+}
+
+/**
+ * `说` 仅在治理匹配时豁免：
+ * - 与匹配处于同一分句（`他说了…`、`他转述说…`）；或
+ * - 紧跟 `：` / `:`（`他说：…`）。
+ *
+ * 逗号是真实分句边界，因此「她坚称，交出钥匙从来没有发生过。」不再豁免。
+ * “说完/说明/说起/说来/说法/说服/说过了”不是引述动词，因此像
  * 「众人说完后便散了，灯塔熄灭从未发生过。」「这么说来，……」仍会硬拒绝。
  */
 function hasReportingSayCue(
@@ -671,15 +804,10 @@ function hasReportingSayCue(
   matchStart: number,
   clauseStart: number,
 ): boolean {
-  for (let index = clauseStart; index < matchStart; index += 1) {
-    if (sentence[index] !== "说") continue;
-    if (isBlockedReportingSay(sentence, index)) continue;
-    return true;
-  }
   for (let index = 0; index < matchStart; index += 1) {
     if (sentence[index] !== "说") continue;
     if (isBlockedReportingSay(sentence, index)) continue;
-    if (CANON_SAY_IMMEDIATE_PUNCTUATION.has(sentence[index + 1] ?? "")) {
+    if (frameCueGoverns(sentence, index, index + 1, matchStart, clauseStart)) {
       return true;
     }
   }
@@ -693,23 +821,61 @@ function isBlockedReportingSay(sentence: string, index: number): boolean {
   return next === "过" && sentence[index + 2] === "了";
 }
 
-/** `骗` 只在「骗…说」「骗人」「欺骗」中作为转述/谎言框架。 */
-function hasDeceptionCue(prefix: string): boolean {
-  if (prefix.includes("欺骗") || prefix.includes("骗人")) return true;
-  const lieIndex = prefix.indexOf("骗");
-  return lieIndex >= 0 && prefix.slice(lieIndex + 1).includes("说");
+/** `骗` 只在「骗…说」「骗人」「欺骗」中作为转述/谎言框架，且必须治理匹配。 */
+function hasDeceptionCue(
+  sentence: string,
+  matchStart: number,
+  clauseStart: number,
+): boolean {
+  for (const cue of ["欺骗", "骗人"] as const) {
+    let index = sentence.indexOf(cue);
+    while (index >= 0 && index < matchStart) {
+      if (
+        frameCueGoverns(
+          sentence,
+          index,
+          index + cue.length,
+          matchStart,
+          clauseStart,
+        )
+      ) {
+        return true;
+      }
+      index = sentence.indexOf(cue, index + 1);
+    }
+  }
+  for (let index = 0; index < matchStart; index += 1) {
+    if (sentence[index] !== "骗") continue;
+    if (sentence[index + 1] === "人") continue;
+    if (sentence[index - 1] === "欺") continue;
+    // 「骗…说」：中间必须有一个“说”作为转述标记。
+    const sayIndex = sentence.indexOf("说", index + 1);
+    if (sayIndex < 0 || sayIndex >= matchStart) continue;
+    if (frameCueGoverns(sentence, index, index + 1, matchStart, clauseStart)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-function clauseStartBefore(sentence: string, index: number): number {
+function clauseStartBefore(
+  sentence: string,
+  index: number,
+  delimiter: RegExp,
+): number {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (CANON_CLAUSE_DELIMITER.test(sentence[cursor]!)) return cursor + 1;
+    if (delimiter.test(sentence[cursor]!)) return cursor + 1;
   }
   return 0;
 }
 
-function clauseEndAfter(sentence: string, index: number): number {
+function clauseEndAfter(
+  sentence: string,
+  index: number,
+  delimiter: RegExp,
+): number {
   for (let cursor = index; cursor < sentence.length; cursor += 1) {
-    if (CANON_CLAUSE_DELIMITER.test(sentence[cursor]!)) return cursor;
+    if (delimiter.test(sentence[cursor]!)) return cursor;
   }
   return sentence.length;
 }
