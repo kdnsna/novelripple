@@ -638,11 +638,21 @@ export function applyMerge(
       });
     }
   }
+  // 同一情节的连续事件可提供覆盖整组的新 title / summary；省略时保留
+  // keepEventId 原文字。只替换文字字段，证据、参与者和状态变化仍取全组并集。
+  const textOverrides = new Map<string, { title?: string; summary?: string }>();
+  for (const group of merge.duplicateEventGroups) {
+    if (group.title === undefined && group.summary === undefined) continue;
+    textOverrides.set(group.keepEventId, {
+      ...(group.title !== undefined ? { title: group.title } : {}),
+      ...(group.summary !== undefined ? { summary: group.summary } : {}),
+    });
+  }
   const orderedIds = unique(pool.events.map((event) => resolve(event.id)));
   const events = orderedIds.map((id, index) => {
     const { chunkIndex: _chunkIndex, ...event } = merged.get(id)!;
     void _chunkIndex;
-    return { ...event, sequence: index + 1 };
+    return { ...event, ...(textOverrides.get(id) ?? {}), sequence: index + 1 };
   });
 
   // 同一 (from, to) 的边折叠为一条：保留最早出现的类型/说明，证据取并集。

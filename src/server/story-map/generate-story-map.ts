@@ -81,11 +81,11 @@ import {
  * 不写入 Artifact；Source 只读。
  */
 export const STORY_MAP_PROMPT_VERSIONS = {
-  extract: "story-map-chunk.v3",
-  glean: "story-map-glean.v3",
+  extract: "story-map-chunk.v4",
+  glean: "story-map-glean.v4",
   names: "story-map-names.v2",
   endings: "story-map-endings.v2",
-  merge: "story-map-merge.v3",
+  merge: "story-map-merge.v4",
 } as const;
 
 /** 结局轮次读取的全书末尾比例（按自然段数）。 */

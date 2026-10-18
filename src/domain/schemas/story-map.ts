@@ -200,7 +200,14 @@ export const StoryMapEndingPassCandidateSchema = z
   })
   .strict();
 
-/** 最终合并：指出重复或粒度过细的同场景事件、重复结局，补充跨块因果边，并给出全书标题与梗概。 */
+/**
+ * 最终合并：指出重复或同一情节的连续事件、重复结局，补充跨块因果边，
+ * 并给出全书标题与梗概。
+ *
+ * `duplicateEventGroups` 默认保留 `keepEventId` 的文字；当一组折叠的是同一
+ * 情节的不同步骤（不只是重复描述）时，可用可选的 `title` / `summary` 提供
+ * 覆盖整个情节的新文字，由服务端替换保留项的对应字段。
+ */
 export const StoryMapMergeCandidateSchema = z
   .object({
     title: z.string().min(1),
@@ -210,6 +217,8 @@ export const StoryMapMergeCandidateSchema = z
         .object({
           keepEventId: z.string().min(1),
           duplicateEventIds: z.array(z.string().min(1)).min(1),
+          title: z.string().min(1).optional(),
+          summary: z.string().min(1).optional(),
         })
         .strict(),
     ),
