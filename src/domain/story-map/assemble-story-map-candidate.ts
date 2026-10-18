@@ -571,6 +571,13 @@ export function applyMerge(
     }
   });
   const existingEdgeIds = new Set(pool.edges.map((item) => item.id));
+  // `dropEdgeIds` 按合并前的原始 Edge ID 校验和删除；事件合并不会改 Edge ID，
+  // 因此这里先于 `resolve` 处理，避免端点改写后找不到要删的边。
+  merge.dropEdgeIds.forEach((edgeId, index) => {
+    if (!existingEdgeIds.has(edgeId)) {
+      issues.push({ path: `dropEdgeIds.${index}`, message: `未知边：${edgeId}` });
+    }
+  });
   const endingIds = new Set(endings.map((item) => item.id));
   const duplicateEndingOf = new Map<string, string>();
   const endingKeepers = new Set<string>();
@@ -645,8 +652,11 @@ export function applyMerge(
     return { ...event, sequence: index + 1 };
   });
 
-  // 同一 (from, to) 的边折叠为一条：保留最早出现的类型/说明，证据取并集。
-  const edges = dedupeEdges([...pool.edges, ...merge.edges], resolve);
+  // 先按原始 ID 删除合并轮判定为纯先后 / 重复 / 已失效的边，再拼接新增边；
+  // 同一 (from, to) 随后由 dedupeEdges 按类型优先级折叠。
+  const droppedEdgeIds = new Set(merge.dropEdgeIds);
+  const keptPoolEdges = pool.edges.filter((edge) => !droppedEdgeIds.has(edge.id));
+  const edges = dedupeEdges([...keptPoolEdges, ...merge.edges], resolve);
 
   // 显式结局合并组先按“保留项文字 + 全组证据”归并，再做同目标同要求/同人物结局去重。
   const endingById = new Map(endings.map((ending) => [ending.id, ending]));
@@ -685,31 +695,44 @@ export function applyMerge(
 }
 
 /**
- * 合并后去重因果边：丢弃自环（含端点经事件合并后相同的边）；同一
- * (from, to, type) 只保留第一条边的说明，证据按出现顺序取并集。
- * 不同 type 各自保留，避免 enables / foreshadows 被 causes 吞掉。
+ * 合并后去重因果边：丢弃自环（含端点经事件合并后相同的边）；同一 `(from, to)`
+ * 只保留类型优先级最高的一条（`causes` > `enables` > `foreshadows`），同类保留
+ * 第一条的说明，证据按出现顺序取并集。两种关系都成立时，保留更强的类型比保留
+ * 两条并行边更可核对，也避免 gold 按 from→to 匹配时被重复边拉低精确率。
  */
+const EDGE_TYPE_PRIORITY: Record<StoryMapCandidateEdge["type"], number> = {
+  causes: 3,
+  enables: 2,
+  foreshadows: 1,
+};
+
 export function dedupeEdges(
   edges: readonly StoryMapCandidateEdge[],
   resolveEventId: (id: string) => string = (id) => id,
 ): StoryMapCandidateEdge[] {
   const seen = new Map<string, StoryMapCandidateEdge>();
-  const result: StoryMapCandidateEdge[] = [];
   for (const edge of edges) {
     const from = resolveEventId(edge.from);
     const to = resolveEventId(edge.to);
     if (from === to) continue;
-    const key = `${from}|${to}|${edge.type}`;
+    const key = `${from}|${to}`;
     const existing = seen.get(key);
-    if (existing) {
-      existing.evidenceUnitIds = unique([...existing.evidenceUnitIds, ...edge.evidenceUnitIds]);
+    if (!existing) {
+      seen.set(key, { ...edge, from, to });
       continue;
     }
-    const kept = { ...edge, from, to };
-    seen.set(key, kept);
-    result.push(kept);
+    const evidenceUnitIds = unique([
+      ...existing.evidenceUnitIds,
+      ...edge.evidenceUnitIds,
+    ]);
+    if (EDGE_TYPE_PRIORITY[edge.type] > EDGE_TYPE_PRIORITY[existing.type]) {
+      // 更强类型替换较弱并行边，说明取新边，证据继承先出现的边。
+      seen.set(key, { ...edge, from, to, evidenceUnitIds });
+    } else {
+      existing.evidenceUnitIds = evidenceUnitIds;
+    }
   }
-  return result;
+  return [...seen.values()];
 }
 
 /**

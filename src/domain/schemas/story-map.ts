@@ -200,7 +200,13 @@ export const StoryMapEndingPassCandidateSchema = z
   })
   .strict();
 
-/** 最终合并：指出重复或粒度过细的同场景事件、重复结局，补充跨块因果边，并给出全书标题与梗概。 */
+/**
+ * 最终合并：指出重复或粒度过细的同场景事件、重复结局，删除只靠阅读顺序的
+ * 既有边，补充跨块因果边，并给出全书标题与梗概。
+ *
+ * `dropEdgeIds` 只能引用本轮 `<edges>` 输入中的既有边 ID；服务端在事件合并
+ * 解析前按原始 ID 删除，再与新增边一起去重。缺省为空数组，兼容不删除的响应。
+ */
 export const StoryMapMergeCandidateSchema = z
   .object({
     title: z.string().min(1),
@@ -221,6 +227,7 @@ export const StoryMapMergeCandidateSchema = z
         })
         .strict(),
     ),
+    dropEdgeIds: z.array(z.string().min(1)).default([]),
     edges: z.array(StoryMapCandidateEdgeSchema),
   })
   .strict();

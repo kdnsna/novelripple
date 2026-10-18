@@ -882,7 +882,7 @@ describe("deterministic edge and ending dedupe", () => {
     return { id, targetEventId, requirement, evidenceUnitIds };
   }
 
-  it("collapses edges by (from, to, type), keeps the first label and unions evidence", () => {
+  it("keeps one edge per (from, to), preferring causes over enables and unioning evidence", () => {
     const edges = [
       edge("edge_a", "e1", "e2", "causes", ["u1"]),
       edge("edge_b", "e1", "e2", "enables", ["u2"]),
@@ -892,9 +892,20 @@ describe("deterministic edge and ending dedupe", () => {
     ];
 
     expect(dedupeEdges(edges)).toEqual([
-      { ...edges[0]!, evidenceUnitIds: ["u1", "u3"] },
-      edges[1],
+      { ...edges[0]!, evidenceUnitIds: ["u1", "u2", "u3"] },
       edges[4],
+    ]);
+  });
+
+  it("replaces a weaker parallel edge with the higher-priority type", () => {
+    const edges = [
+      edge("edge_weak", "e1", "e2", "foreshadows", ["u1"]),
+      edge("edge_mid", "e1", "e2", "enables", ["u2"]),
+      edge("edge_strong", "e1", "e2", "causes", ["u3"]),
+    ];
+
+    expect(dedupeEdges(edges)).toEqual([
+      { ...edges[2]!, evidenceUnitIds: ["u1", "u2", "u3"] },
     ]);
   });
 
@@ -955,6 +966,7 @@ describe("deterministic edge and ending dedupe", () => {
       duplicateEndingGroups: [
         { keepEndingId: "end_keep", duplicateEndingIds: ["end_dup", "end_dup2"] },
       ],
+      dropEdgeIds: [],
       edges: [],
     });
     if (!result.success) throw new Error(JSON.stringify(result.issues));
@@ -988,6 +1000,7 @@ describe("deterministic edge and ending dedupe", () => {
         { keepEndingId: "end_a", duplicateEndingIds: ["end_b"] },
         { keepEndingId: "end_b", duplicateEndingIds: ["end_missing"] },
       ],
+      dropEdgeIds: [],
       edges: [],
     });
 
@@ -999,6 +1012,81 @@ describe("deterministic edge and ending dedupe", () => {
         "duplicateEndingGroups.1.duplicateEndingIds",
       ]),
     );
+  });
+
+  function poolWithSuccession(): StoryMapPool {
+    return {
+      characters: [character("char_a", "甲")],
+      events: [
+        { ...event("e1", "u1", ["char_a"]), chunkIndex: 0 },
+        { ...event("e2", "u2", ["char_a"]), chunkIndex: 1 },
+        { ...event("e3", "u3", ["char_a"]), chunkIndex: 2 },
+      ],
+      edges: [
+        edge("edge_succession", "e1", "e2", "causes", ["u1"]),
+        edge("edge_keep", "e2", "e3", "foreshadows", ["u2"]),
+      ],
+    };
+  }
+
+  it("removes a dropped edge by its pre-merge id", () => {
+    const result = applyMerge(poolWithSuccession(), [], {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [],
+      duplicateEndingGroups: [],
+      dropEdgeIds: ["edge_succession"],
+      edges: [],
+    });
+    if (!result.success) throw new Error(JSON.stringify(result.issues));
+
+    expect(result.candidate.edges.map((item) => item.id)).toEqual(["edge_keep"]);
+  });
+
+  it("rejects dropEdgeIds that do not exist in the pre-merge pool", () => {
+    const result = applyMerge(poolWithSuccession(), [], {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [],
+      duplicateEndingGroups: [],
+      dropEdgeIds: ["edge_missing"],
+      edges: [],
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.issues).toEqual([
+      { path: "dropEdgeIds.0", message: "未知边：edge_missing" },
+    ]);
+  });
+
+  it("drops a succession-style edge while keeping a new cross-chunk edge in one merge", () => {
+    const pool = poolWithSuccession();
+    const result = applyMerge(pool, [], {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [],
+      duplicateEndingGroups: [],
+      dropEdgeIds: ["edge_succession"],
+      edges: [
+        {
+          id: "edge_cross_chunk",
+          from: "e1",
+          to: "e3",
+          type: "enables",
+          explanation: "甲留下的钥匙让乙能打开后门",
+          confidence: 0.8,
+          confirmed: false,
+          evidenceUnitIds: ["u3"],
+        },
+      ],
+    });
+    if (!result.success) throw new Error(JSON.stringify(result.issues));
+
+    expect(result.candidate.edges.map((item) => [item.id, item.from, item.to])).toEqual([
+      ["edge_keep", "e2", "e3"],
+      ["edge_cross_chunk", "e1", "e3"],
+    ]);
   });
 });
 
