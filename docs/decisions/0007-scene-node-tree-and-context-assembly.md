@@ -30,7 +30,7 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 素材按固定顺序进入 `<continuation_context>`：
 
 1. `worldline_setup`；
-2. `canon_events`（相关 Canon 事件、事件之间的边与 Anchor 目标结局）；
+2. `canon_events`（相关 Canon 事件、事件之间的边与 Anchor 目标结局；边和结局只带摘要字段，`evidence[]` 不进入必需段）；
 3. `path_summary`；
 4. `canon_evidence`（相关事件证据在前，代表窗口/人物证据在后，后者继续复用 `selectContinuationContext` 的 6000 字符 / Source 25% 上限）；
 5. `recent_scenes`（最近 2 个场景正文）；
@@ -49,14 +49,14 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 
 v2 packet 的字段去向：
 
-- `readonlyCanonical` → `canon_events`，字段不变：`sourceId`、`storyMapArtifactId`、`storyMapId`、`characters`、相关事件的 id/title/summary/sequence/participants/stateChanges、事件之间的 edges、Anchor 目标 endingCandidates。
+- `readonlyCanonical` → `canon_events`：`sourceId`、`storyMapArtifactId`、`storyMapId`、人物 id/name/aliases/role、相关事件的 id/title/summary/sequence/participants/stateChanges、事件之间的 edges（id/from/to/type/explanation/confidence/confirmed），以及 Anchor 目标 endingCandidates（id/targetEventId/requirement）。边与结局的 `evidence[]` 不进入该段；相关事件的原著证据仍放在可裁剪的 `canon_evidence`。
 - `relevantEvidence` → `canon_evidence` 的前半部分，id 为 `related:<eventId>:<n>`；相关事件证据优先级最高，裁剪时最后丢弃。
 - `styleContext.representativeExcerpts` / `styleContext.characterEvidence` → `canon_evidence` 的后半部分，仍由 `selectContinuationContext` 选择，先于相关事件证据被裁剪。
 - `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` → `worldline_setup`：世界线 id/mode、Divergence、anchors、Story Map id/title/logline、人物 id/name/aliases/role、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态。完整 worldline 行不再发送；省略的是数据库/审计字段（`parentWorldlineId`、`baseStoryMapArtifactId`、`acceptedImpactPlanId`、`idempotencyKey`、`createdAt`、`status` 等），不影响生成语义。
 - `stage` 由 Prompt 版本承担；`selectedDirection` 仍是 `selected_direction`。
 - 新增：`path_summary`、`recent_scenes`、`anchor_reminder`、Context Manifest 与段级字符预算。
 
-`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。
+`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。边与结局的 `evidence[]` 不进入必需段；相关事件的原著证据仍只存在于可裁剪的 `canon_evidence`（相关事件切片优先、最后丢弃），因此必需上下文不会随 edge / ending 的证据数量增长。
 
 ### 6. v1 保持可读，不做迁移
 

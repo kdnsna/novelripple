@@ -286,7 +286,9 @@ export function WorldlineContinuationPanel({
           ) : null}
           {!activeBatch && autoRootDirections.error ? (
             <div className="ripple-suggestions-error" role="alert">
-              <p>{autoRootDirections.error}</p>
+              <p className="continuation-action-error">
+                {autoRootDirections.error}
+              </p>
               <button
                 className="secondary-button compact-button"
                 onClick={onRetryRootDirections}
@@ -512,7 +514,10 @@ export function WorldlineContinuationPanel({
       ) : null}
 
       {error ? (
-        <p className="workspace-action-error" role="alert">
+        <p
+          className="workspace-action-error continuation-action-error"
+          role="alert"
+        >
           {error}
         </p>
       ) : null}
