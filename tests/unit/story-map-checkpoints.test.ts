@@ -373,7 +373,7 @@ describe("Story Map chunk checkpoints", () => {
         ...base,
         promptVersions: {
           ...STORY_MAP_PROMPT_VERSIONS,
-          extract: "story-map-chunk.v6",
+          extract: "story-map-chunk.v5",
         },
       }),
     ).not.toBe(key);
