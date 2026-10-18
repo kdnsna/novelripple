@@ -30,6 +30,28 @@ async function createConfirmedFixtureProject(page: Page, title: string) {
   await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
 }
 
+/** 走通标准 rerouted 分歧并进入第一条子 Worldline，供世界线树场景复用。 */
+async function enterReroutedWorldline(page: Page, title: string) {
+  await createConfirmedFixtureProject(page, title);
+  await page.getByTestId("event-node-event_07").click();
+  await page.getByRole("button", { name: "为所选事件创建 Ripple" }).click();
+  await page.getByLabel("分歧类型").selectOption("prevent");
+  await page
+    .getByLabel("改变内容")
+    .fill("许澄没有把红色账簿交给周岚");
+  await page.getByLabel("保留原结局").check();
+  await page
+    .getByLabel("白鸥号沉船事故的系统性真相最终进入公共记录")
+    .check();
+  await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
+  await expect(page.getByTestId("ripple-preview")).toBeVisible();
+  await page.getByRole("button", { name: "进入新世界线" }).click();
+  await expect(page.getByTestId("worldline-continuation")).toBeVisible();
+  await expect(page.locator(".direction-card")).toHaveCount(3, {
+    timeout: 15_000,
+  });
+}
+
 test("generates a strict rerouted preview and creates one child only after acceptance", async ({
   page,
 }) => {
@@ -139,6 +161,99 @@ test("generates a strict rerouted preview and creates one child only after accep
   for (const section of ["世界线设定", "原著证据", "最近场景", "所选方向"]) {
     await expect(page.getByTestId("context-viewer")).toContainText(section);
   }
+});
+
+test("reopens an inner scene from the worldline tree and branches a new sibling act", async ({
+  page,
+}) => {
+  await enterReroutedWorldline(page, `Worldline tree ${Date.now()}`);
+
+  // 根批次 → 第 1 幕；再为第 1 幕生成方向 → 第 2 幕。
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  const firstScene = page.getByTestId("continuation-scene");
+  await expect(firstScene).toContainText("潮标站的第二把锁");
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+
+  const tree = page.getByTestId("worldline-tree");
+  await expect(tree).toBeVisible();
+  await expect(tree.getByRole("treeitem")).toHaveCount(3);
+  await expect(
+    tree.getByRole("button", { name: "第 1 幕 · 潮标站的第二把锁" }),
+  ).toBeVisible();
+  await expect(
+    tree.getByRole("button", { name: "第 2 幕 · 潮标站之后" }),
+  ).toBeVisible();
+  await expect(tree).toContainText(
+    "点任意节点即可从那里重开；已有内容不会被覆盖，新内容会成为新的分支。",
+  );
+
+  // 从第 1 幕重开：路径只剩第 1 幕，旧方向批次仍可读，已生成方向显示查看入口。
+  await tree
+    .getByRole("button", { name: "第 1 幕 · 潮标站的第二把锁" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站的第二把锁",
+  );
+  await expect(page.getByTestId("continuation-scene")).not.toContainText(
+    "潮标站之后",
+  );
+  const firstDirection = page.locator(".direction-card").first();
+  await expect(firstDirection).toContainText("查看已生成（1 版）");
+  await expect(
+    firstDirection.getByRole("button", { name: "选择此方向" }),
+  ).toHaveCount(0);
+  await expect(
+    firstDirection.getByRole("button", { name: "再写一版" }),
+  ).toBeVisible();
+
+  // 选择同批次里尚未探索的方向，创建第 2 幕的新兄弟分支。
+  await page
+    .locator(".direction-card")
+    .nth(1)
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+  await expect(tree.getByRole("treeitem")).toHaveCount(4);
+  const secondActRows = tree
+    .getByTestId("worldline-tree-row")
+    .filter({ hasText: "第 2 幕 · 潮标站之后" });
+  await expect(secondActRows).toHaveCount(2);
+
+  // 原始第 2 幕仍可回读：它是第一个兄弟，导航显示 1/2。
+  await secondActRows
+    .first()
+    .getByRole("button", { name: "第 2 幕 · 潮标站之后" })
+    .click();
+  await expect(page.getByTestId("scene-siblings")).toContainText("1/2");
+  await expect(secondActRows.first()).toHaveAttribute("aria-current", "true");
+
+  // 回到分歧点：路径清空，根批次仍然显示，且第一个方向已生成第 1 幕。
+  await tree.getByRole("button", { name: "分歧点", exact: true }).click();
+  await expect(page.getByTestId("continuation-path")).toHaveCount(0);
+  await expect(page.getByTestId("continuation-directions")).toBeVisible();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
+  await expect(page.locator(".direction-card").first()).toContainText(
+    "查看已生成（1 版）",
+  );
+  await expect(
+    tree.getByTestId("worldline-tree-row").first(),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("path-character-states")).toBeVisible();
 });
 
 test("shows incompatible and blocks strict acceptance", async ({ page }) => {

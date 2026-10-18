@@ -8,11 +8,18 @@ import {
 } from "@/app/projects/actions";
 import {
   buildSceneTree,
-  getDefaultScenePath,
-  getScenePath,
+  derivePathState,
   type SceneNode,
 } from "@/domain/continuation/scene-tree";
-import { latestBatchForParent } from "@/domain/continuation/worldline-tree";
+import {
+  buildWorldlineTreeOutline,
+  derivePathCharacterTimeline,
+  latestBatchForParent,
+  listDirectionOptions,
+  resolveReadingPath,
+  type ContinuationDirectionBatchView,
+  type ReadingPosition,
+} from "@/domain/continuation/worldline-tree";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import type {
   ContextManifest,
@@ -24,11 +31,21 @@ import type {
 } from "@/domain/schemas";
 import {
   appendContinuationArtifact,
-  type ContinuationDirectionBatchView,
   type ContinuationTreeView,
 } from "./continuation-tree-view";
+import { PathCharacterStates } from "./path-character-states";
+import { WorldlineTreeNav } from "./worldline-tree-nav";
+import {
+  defaultExpandedTreeIds,
+  expandTreeIdsForPath,
+} from "./worldline-tree-ui";
 
-type PendingKind = "directions" | "newBatch" | "scene" | "retry";
+type PendingKind =
+  | "directions"
+  | "newBatch"
+  | "scene"
+  | "directionRetry"
+  | "retry";
 
 type AutoRootDirections = {
   loading: boolean;
@@ -67,7 +84,9 @@ export function WorldlineContinuationPanel({
   onClose,
 }: WorldlineContinuationPanelProps) {
   const [view, setView] = useState(initialContinuation);
-  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
+  const [position, setPosition] = useState<ReadingPosition>({
+    kind: "default",
+  });
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -100,15 +119,7 @@ export function WorldlineContinuationPanel({
 
   const storyMap = storyMapArtifact.storyMap;
   const plan = acceptedImpactPlanArtifact.impactPlan;
-  const currentState = useMemo(
-    () =>
-      deriveWorldlineDelta({
-        worldline,
-        impactPlan: plan,
-        storyMap,
-      }),
-    [plan, storyMap, worldline],
-  );
+
   const characterNames = Object.fromEntries(
     storyMap.characters.map((character) => [character.id, character.name]),
   );
@@ -117,22 +128,104 @@ export function WorldlineContinuationPanel({
   );
 
   const tree = useMemo(() => buildSceneTree(view.scenes), [view.scenes]);
-  const defaultPath = useMemo(() => getDefaultScenePath(tree), [tree]);
-  const selectedNode = selectedSceneId
-    ? tree.nodes.get(selectedSceneId) ?? null
-    : null;
   const currentPath = useMemo(
-    () => (selectedNode ? getScenePath(tree, selectedNode.id) : defaultPath),
-    [defaultPath, selectedNode, tree],
+    () => resolveReadingPath(tree, position),
+    [position, tree],
   );
-  const selectedScene = currentPath[currentPath.length - 1] ?? null;
+  const currentNode = currentPath[currentPath.length - 1] ?? null;
+  const currentNodeId = currentNode?.id ?? null;
 
-  const rootBatch = latestBatchForParent(view.directionBatches, null);
-  const activeBatch = activeBatchId
-    ? view.directionBatches.find((batch) => batch.id === activeBatchId) ?? null
-    : selectedScene
-      ? null
-      : rootBatch;
+  /**
+   * 展开集合是组件状态：初始为当前路径，位置变化时只并入新路径。
+   * 用户手动展开的旁支不会被位置切换丢弃。
+   */
+  const [expandedIds, setExpandedIds] = useState<Set<string | null>>(() =>
+    defaultExpandedTreeIds(currentPath),
+  );
+
+  const treeRows = useMemo(
+    () =>
+      buildWorldlineTreeOutline({
+        tree,
+        directionBatches: view.directionBatches,
+        currentPath,
+        expandedIds,
+      }),
+    [currentPath, expandedIds, tree, view.directionBatches],
+  );
+
+  /**
+   * baseDelta 与路径状态始终一起派生：任一步失败就整体 fail closed，
+   * 不展示半份 Delta 或人物状态。
+   */
+  const pathDerivation = useMemo(() => {
+    try {
+      const baseDelta = deriveWorldlineDelta({
+        worldline,
+        impactPlan: plan,
+        storyMap,
+      });
+      const pathState = derivePathState(baseDelta, currentPath);
+      const characters = derivePathCharacterTimeline({
+        baseDelta,
+        path: currentPath,
+        characters: storyMap.characters.map((character) => ({
+          id: character.id,
+          name: character.name,
+        })),
+      });
+      return { baseDelta, pathState, characters, error: null as string | null };
+    } catch {
+      return {
+        baseDelta: null,
+        pathState: null,
+        characters: [],
+        error: "无法沿当前路径推导状态，请刷新或返回 Evidence 后重试。",
+      };
+    }
+  }, [currentPath, plan, storyMap, worldline]);
+
+  const directionOptions = useMemo(
+    () =>
+      listDirectionOptions({
+        tree,
+        directionBatches: view.directionBatches,
+        parentSceneId: currentNodeId,
+      }),
+    [currentNodeId, tree, view.directionBatches],
+  );
+
+  /**
+   * activeBatchId 只在仍属于当前节点时生效；否则回退到当前节点的最新批次。
+   * 这样旧的 activeBatchId 不会把上一个节点的方向显示到新路径上。
+   */
+  const activeBatchOption = useMemo(() => {
+    const selected = activeBatchId
+      ? directionOptions.find(
+          (option) => option.batch.id === activeBatchId,
+        ) ?? null
+      : null;
+    if (selected) return selected;
+
+    const latest = latestBatchForParent(
+      view.directionBatches,
+      currentNodeId,
+    );
+    if (!latest) return null;
+    return directionOptions.find((option) => option.batch.id === latest.id) ?? null;
+  }, [activeBatchId, currentNodeId, directionOptions, view.directionBatches]);
+  const activeBatch = activeBatchOption?.batch ?? null;
+
+  function movePosition(next: ReadingPosition): void {
+    // 阅读位置只通过这里和 selectGeneratedScene 改变；在此并入新路径的
+    // 展开集合，避免用 effect 触发级联渲染。
+    setExpandedIds((current) =>
+      expandTreeIdsForPath(current, resolveReadingPath(tree, next)),
+    );
+    setPosition(next);
+    setActiveBatchId(null);
+    setError(null);
+  }
 
   function runDirections(parentSceneId: string | null, newBatch: boolean): void {
     if (!beginPending(newBatch ? "newBatch" : "directions")) return;
@@ -159,8 +252,12 @@ export function WorldlineContinuationPanel({
     });
   }
 
-  function generateScene(batch: ContinuationDirectionBatchView, directionId: string): void {
-    if (!beginPending("scene", directionId)) return;
+  function generateScene(
+    batch: ContinuationDirectionBatchView,
+    directionId: string,
+    retry = false,
+  ): void {
+    if (!beginPending(retry ? "directionRetry" : "scene", directionId)) return;
     setError(null);
     startTransition(async () => {
       try {
@@ -169,6 +266,7 @@ export function WorldlineContinuationPanel({
           worldlineId: worldline.id,
           directionsArtifactId: batch.id,
           selectedDirectionId: directionId,
+          ...(retry ? { retry: true } : {}),
         });
         if (!result.ok) {
           setError(result.error);
@@ -182,7 +280,7 @@ export function WorldlineContinuationPanel({
   }
 
   function retrySelectedScene(): void {
-    if (!selectedScene) return;
+    if (!currentNode) return;
     if (!beginPending("retry")) return;
     setError(null);
     startTransition(async () => {
@@ -190,8 +288,8 @@ export function WorldlineContinuationPanel({
         const result = await generateContinuationSceneAction({
           projectId,
           worldlineId: worldline.id,
-          directionsArtifactId: selectedScene.directionsArtifactId,
-          selectedDirectionId: selectedScene.selectedDirectionId,
+          directionsArtifactId: currentNode.directionsArtifactId,
+          selectedDirectionId: currentNode.selectedDirectionId,
           retry: true,
         });
         if (!result.ok) {
@@ -206,15 +304,36 @@ export function WorldlineContinuationPanel({
   }
 
   function selectGeneratedScene(artifact: ContinuationSceneArtifact): void {
+    const nextTree = buildSceneTree([...view.scenes, artifact.continuation]);
+    setExpandedIds((current) =>
+      expandTreeIdsForPath(
+        current,
+        resolveReadingPath(nextTree, {
+          kind: "scene",
+          sceneId: artifact.id,
+        }),
+      ),
+    );
     setView((current) => appendContinuationArtifact(current, artifact));
-    setSelectedSceneId(artifact.id);
+    setPosition({ kind: "scene", sceneId: artifact.id });
     setActiveBatchId(null);
   }
 
   function selectSibling(sibling: SceneNode): void {
-    setSelectedSceneId(sibling.id);
-    setActiveBatchId(null);
-    setError(null);
+    movePosition({ kind: "scene", sceneId: sibling.id });
+  }
+
+  function moveToTreeRow(id: string | null): void {
+    movePosition(id === null ? { kind: "root" } : { kind: "scene", sceneId: id });
+  }
+
+  function toggleTreeRow(id: string | null): void {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
 
   return (
@@ -252,40 +371,60 @@ export function WorldlineContinuationPanel({
         </li>
       </ol>
 
+      {tree.nodes.size > 0 ? (
+        <WorldlineTreeNav
+          onMove={(row) => moveToTreeRow(row.id)}
+          onToggle={toggleTreeRow}
+          rows={treeRows}
+        />
+      ) : null}
+
       <section className="worldline-delta" data-testid="worldline-delta">
-        <h3>当前 Delta</h3>
-        <div>
-          <strong>删除/改写的 Canon 事实</strong>
-          <ul>
-            {currentState.factsRemoved.map((key) => {
-              const eventId = key.startsWith("event:") ? key.slice(6) : key;
-              return <li key={key}>{eventTitles[eventId] ?? key}</li>;
-            })}
-          </ul>
-        </div>
-        <div>
-          <strong>新增分支事实</strong>
-          <ul>
-            {currentState.factsAdded.map((fact) => (
-              <li key={fact.key}>{fact.statement}</li>
-            ))}
-          </ul>
-        </div>
+        <h3>当前路径 Delta</h3>
+        {pathDerivation.error || !pathDerivation.pathState ? (
+          <p className="continuation-action-error" role="alert">
+            {pathDerivation.error ?? "无法沿当前路径推导状态。"}
+          </p>
+        ) : (
+          <>
+            <div>
+              <strong>删除/改写的 Canon 事实</strong>
+              <ul>
+                {pathDerivation.pathState.factsRemoved.map((key) => {
+                  const eventId = key.startsWith("event:") ? key.slice(6) : key;
+                  return <li key={key}>{eventTitles[eventId] ?? key}</li>;
+                })}
+              </ul>
+            </div>
+            <div>
+              <strong>新增分支事实</strong>
+              <ul>
+                {pathDerivation.pathState.factsAdded.map((fact) => (
+                  <li key={fact.key}>{fact.statement}</li>
+                ))}
+              </ul>
+            </div>
+          </>
+        )}
       </section>
 
-      {currentPath.length === 0 ? (
+      {!pathDerivation.error && pathDerivation.pathState ? (
+        <PathCharacterStates states={pathDerivation.characters} />
+      ) : null}
+
+      {currentPath.length === 0 && !activeBatch ? (
         <section className="continuation-empty">
           <h3>下一步：从分歧点生成 3 个方向</h3>
           <p>
             只读取当前 Worldline、已接受 ImpactPlan、相关原文 Evidence
             和当前状态。
           </p>
-          {!activeBatch && autoRootDirections.loading ? (
+          {autoRootDirections.loading ? (
             <p className="ripple-suggestions-status" role="status">
               正在构思 3 个方向…
             </p>
           ) : null}
-          {!activeBatch && autoRootDirections.error ? (
+          {autoRootDirections.error ? (
             <div className="ripple-suggestions-error" role="alert">
               <p className="continuation-action-error">
                 {autoRootDirections.error}
@@ -299,9 +438,7 @@ export function WorldlineContinuationPanel({
               </button>
             </div>
           ) : null}
-          {!activeBatch &&
-          !autoRootDirections.loading &&
-          !autoRootDirections.error ? (
+          {!autoRootDirections.loading && !autoRootDirections.error ? (
             <button
               className="primary-button full-width-button"
               disabled={pending}
@@ -314,7 +451,9 @@ export function WorldlineContinuationPanel({
             </button>
           ) : null}
         </section>
-      ) : (
+      ) : null}
+
+      {currentPath.length > 0 ? (
         <section
           className="continuation-path"
           aria-label="当前场景路径"
@@ -436,18 +575,20 @@ export function WorldlineContinuationPanel({
             );
           })}
         </section>
-      )}
+      ) : null}
 
-      {selectedScene ? (
+      {currentNode ? (
         <div className="continuation-scene-actions">
-          <button
-            className="primary-button full-width-button"
-            disabled={pending}
-            onClick={() => runDirections(selectedScene.id, false)}
-            type="button"
-          >
-            {pendingKind === "directions" ? "正在生成方向…" : "继续"}
-          </button>
+          {!activeBatch ? (
+            <button
+              className="primary-button full-width-button"
+              disabled={pending}
+              onClick={() => runDirections(currentNode.id, false)}
+              type="button"
+            >
+              {pendingKind === "directions" ? "正在生成方向…" : "继续"}
+            </button>
+          ) : null}
           <button
             className="secondary-button"
             disabled={pending}
@@ -474,42 +615,74 @@ export function WorldlineContinuationPanel({
             <button
               className="text-button"
               disabled={pending}
-              onClick={() =>
-                runDirections(activeBatch.parentSceneId, true)
-              }
+              onClick={() => runDirections(activeBatch.parentSceneId, true)}
               type="button"
             >
               {pendingKind === "newBatch" ? "正在换一批…" : "换一批"}
             </button>
           </div>
           <div className="direction-card-list">
-            {activeBatch.directions.map((direction) => (
-              <article className="direction-card" key={direction.id}>
-                <h4>{direction.title}</h4>
-                <p>{direction.premise}</p>
-                <small>
-                  影响人物：
-                  {direction.affectedCharacterIds
-                    .map((id) => characterNames[id] ?? id)
-                    .join("、")}
-                </small>
-                <p className="direction-consequence">
-                  <strong>预期后果：</strong>
-                  {direction.expectedConsequence}
-                </p>
-                <button
-                  className="secondary-button"
-                  disabled={pending}
-                  onClick={() => generateScene(activeBatch, direction.id)}
-                  type="button"
-                >
-                  {pendingKind === "scene" &&
-                  pendingDirectionId === direction.id
-                    ? "正在生成场景…"
-                    : "选择此方向"}
-                </button>
-              </article>
-            ))}
+            {activeBatchOption?.directions.map(({ direction, sceneIds }) => {
+              const generated = sceneIds.length > 0;
+              return (
+                <article className="direction-card" key={direction.id}>
+                  <h4>{direction.title}</h4>
+                  <p>{direction.premise}</p>
+                  <small>
+                    影响人物：
+                    {direction.affectedCharacterIds
+                      .map((id) => characterNames[id] ?? id)
+                      .join("、")}
+                  </small>
+                  <p className="direction-consequence">
+                    <strong>预期后果：</strong>
+                    {direction.expectedConsequence}
+                  </p>
+                  {generated ? (
+                    <div className="direction-generated-actions">
+                      <button
+                        className="secondary-button"
+                        disabled={pending}
+                        onClick={() => {
+                          const sceneId = sceneIds[0];
+                          if (sceneId) {
+                            movePosition({ kind: "scene", sceneId });
+                          }
+                        }}
+                        type="button"
+                      >
+                        查看已生成（{sceneIds.length} 版）
+                      </button>
+                      <button
+                        className="text-button"
+                        disabled={pending}
+                        onClick={() =>
+                          generateScene(activeBatch, direction.id, true)
+                        }
+                        type="button"
+                      >
+                        {pendingKind === "directionRetry" &&
+                        pendingDirectionId === direction.id
+                          ? "正在再写一版…"
+                          : "再写一版"}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      className="secondary-button"
+                      disabled={pending}
+                      onClick={() => generateScene(activeBatch, direction.id)}
+                      type="button"
+                    >
+                      {pendingKind === "scene" &&
+                      pendingDirectionId === direction.id
+                        ? "正在生成场景…"
+                        : "选择此方向"}
+                    </button>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </section>
       ) : null}
