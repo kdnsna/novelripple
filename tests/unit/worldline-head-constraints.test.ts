@@ -86,6 +86,8 @@ describe("worldline reading head constraints", () => {
       ["root", "scene_1"],
       ["scene", null],
       ["scene", ""],
+      ["scene", " "],
+      ["scene", "\t"],
       [null, "scene_1"],
       ["bogus", null],
     ] as const) {
@@ -130,6 +132,32 @@ describe("worldline reading head constraints", () => {
         "active",
         "scene",
         "",
+      ),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      insert.run(
+        "wl_space_head",
+        "project_head",
+        "artifact_head",
+        "open",
+        "[]",
+        "space-head",
+        "active",
+        "scene",
+        " ",
+      ),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      insert.run(
+        "wl_tab_head",
+        "project_head",
+        "artifact_head",
+        "open",
+        "[]",
+        "tab-head",
+        "active",
+        "scene",
+        "\t",
       ),
     ).toThrow(/CHECK constraint failed/);
     expect(() =>

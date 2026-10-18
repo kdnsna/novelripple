@@ -116,6 +116,22 @@ export const DEATH_LEADING_ADVERBS = [
 ] as const;
 
 /**
+ * 姓名（及至多两个连接词）之后、死亡动词之前允许的一个固定原因短语。
+ * 只认这些完整短语，匹配时优先最长（如 因伤势过重 先于 因伤）；其它
+ * `因+X` 形式一律不匹配，避免把「因伤口感染而死」之类自由文本当成白名单。
+ */
+export const DEATH_CAUSE_PHRASES = [
+  "因伤",
+  "因病",
+  "因伤势过重",
+  "因伤重",
+  "因重伤",
+  "因病重",
+  "因伤不治",
+  "因病不治",
+] as const;
+
+/**
  * 整句任意位置出现即判 unknown 的否定/不确定措辞。
  * 这里是子串匹配，命中只会让推断更保守。
  */
@@ -169,6 +185,48 @@ export const DEATH_NEGATION_MARKERS = [
   "不死",
   "没死",
   "未死",
+] as const;
+
+/** 问号意味着疑问/未确认，整句命中即 unknown。 */
+export const DEATH_QUESTION_MARKERS = ["？", "?"] as const;
+
+/**
+ * 整句任意位置出现即判 unknown 的假设/梦境/预感等未实现标记。
+ * 这里同样是子串匹配，命中只会让推断更保守。
+ */
+export const DEATH_HYPOTHETICAL_MARKERS = [
+  "若",
+  "若是",
+  "倘若",
+  "倘使",
+  "假如",
+  "如果",
+  "要是",
+  "万一",
+  "假使",
+  "假若",
+  "即使",
+  "即便",
+  "哪怕",
+  "设若",
+  "梦见",
+  "梦里",
+  "梦中",
+  "梦到",
+  "做梦",
+  "幻想",
+  "幻觉",
+  "幻象",
+  "想象",
+  "设想",
+  "以为",
+  "担心",
+  "害怕",
+  "生怕",
+  "恐怕",
+  "预言",
+  "预感",
+  "诅咒",
 ] as const;
 
 /** 夸张/比喻用法；命中即 unknown。 */
@@ -345,18 +403,21 @@ export function deriveSourceBaselineStatuses(input: {
 /**
  * 显式死亡句型白名单：stateChange 按中文标点与空白切成若干分句，某个
  * 分句必须以人物姓名/别名（≥2 个码点）开头；姓名前至多一个固定时间
- * 副词，姓名后至多两个固定连接词，然后直接跟 `DEATH_VERBS` 中的动词。
+ * 副词，姓名后至多两个固定连接词，然后可选一个 `DEATH_CAUSE_PHRASES`
+ * 中的固定原因短语，再直接跟 `DEATH_VERBS` 中的动词。
  * 裸「死 / 死了」只在分句末尾成立。
  *
  * 姓名左边界是分句开头、右边界是连接词/动词，因此「张三丰」不会命中
  * 「张三」，「艾伦·坡」不会命中「艾伦」，「林青的马」不会命中「林青」，
- * 地点名「韩松岭」也不会命中「韩松」。整句任意位置出现否定/不确定措辞
- * 或笑死/气死等比喻时一律不匹配。
+ * 地点名「韩松岭」也不会命中「韩松」。整句任意位置出现问号、否定/
+ * 不确定措辞、假设/梦境/预感标记或笑死/气死等比喻时一律不匹配。
  */
 export function matchesExplicitDeathShape(
   stateChange: string,
   names: readonly string[],
 ): boolean {
+  if (hasAnyMarker(stateChange, DEATH_QUESTION_MARKERS)) return false;
+  if (hasAnyMarker(stateChange, DEATH_HYPOTHETICAL_MARKERS)) return false;
   if (hasAnyMarker(stateChange, DEATH_NEGATION_MARKERS)) return false;
   if (hasAnyMarker(stateChange, DEATH_FIGURATIVE_MARKERS)) return false;
   const usableNames = names.filter((name) => Array.from(name).length >= 2);
@@ -387,13 +448,20 @@ function matchesDeathClause(clause: string, name: string): boolean {
 
   let tail = rest.slice(name.length);
   for (let count = 0; count < 2; count += 1) {
-    // 连接词与动词可能重叠（被杀 = 被 + 杀）；若剩余部分已经以死亡动词
-    // 或裸「死/死了」开头，就不要把动词的第一个字当连接词吃掉。
+    // 连接词与动词/原因短语可能重叠（被杀 = 被 + 杀；因伤 = 连接词「因」
+    // + 原因「伤」）；若剩余部分已经以死亡动词、裸「死/死了」或合法原因
+    // 短语开头，就不要把它的第一个字当连接词吃掉。
     if (tail === "死" || tail === "死了") break;
     if (DEATH_VERBS.some((verb) => tail.startsWith(verb))) break;
+    if (longestMatchingPrefix(tail, DEATH_CAUSE_PHRASES)) break;
     const connector = longestMatchingPrefix(tail, DEATH_CONNECTORS);
     if (!connector) break;
     tail = tail.slice(connector.length);
+  }
+  const causePhrase = longestMatchingPrefix(tail, DEATH_CAUSE_PHRASES);
+  if (causePhrase) {
+    // 原因短语后必须是现有死亡动词，裸「死/死了」不算。
+    return matchesDeathTail(tail.slice(causePhrase.length));
   }
   if (tail === "死" || tail === "死了") return true;
   return matchesDeathTail(tail);

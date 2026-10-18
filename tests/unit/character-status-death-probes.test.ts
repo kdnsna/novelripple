@@ -191,8 +191,6 @@ const negativeProbes: NegativeProbe[] = [
   { label: "fought to the death", baseline: () => single("林青死战不退") },
   { label: "fought on", baseline: () => single("林青死战到底") },
   { label: "bare death word in noun", baseline: () => single("林青的死讯传来") },
-  // 没有点名参与者。
-  { label: "unnamed death", baseline: () => single("病故于城外") },
   // 参与者是凶手，不是死者。
   { label: "participant kills enemy", baseline: () => single("林青杀死了敌将") },
   { label: "participant nearly dies", baseline: () => single("林青险些丧命") },
@@ -344,6 +342,216 @@ const negativeProbes: NegativeProbe[] = [
     baseline: () =>
       single("沈墨死去活来", { participants: ["character_shenmo"] }),
   },
+  // F. 问号与假设/梦境/预感等未实现语境一律 unknown。
+  {
+    label: "question after death verb",
+    baseline: () => single("林青身亡？"),
+  },
+  {
+    label: "ascii question after death verb",
+    baseline: () => single("韩松被杀?", { participants: ["character_han"] }),
+  },
+  {
+    label: "question after illness death",
+    baseline: () => single("沈墨病故？", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "ascii question after battle death",
+    baseline: () => single("林青战死?"),
+  },
+  {
+    label: "question after killed",
+    baseline: () => single("沈墨遇害？", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "question after clause-final le",
+    baseline: () => single("林青病故了？"),
+  },
+  {
+    label: "ascii question after le",
+    baseline: () =>
+      single("韩松阵亡了?", { participants: ["character_han"] }),
+  },
+  {
+    label: "exclamation and question",
+    baseline: () => single("林青被杀！？"),
+  },
+  {
+    label: "ascii question with exclamation",
+    baseline: () =>
+      single("沈墨身亡！?", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "question in another clause",
+    baseline: () => single("林青被杀，众人惊呼？"),
+  },
+  {
+    label: "question after second-clause death",
+    baseline: () => single("城破，林青战死？"),
+  },
+  {
+    label: "hypothetical ruoshi",
+    baseline: () => single("若是城破，林青被杀"),
+  },
+  {
+    label: "hypothetical tangruo",
+    baseline: () =>
+      single("倘若敌军夜袭，沈墨身亡", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "hypothetical jiaru",
+    baseline: () =>
+      single("假如粮尽，韩松阵亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "hypothetical ruguo",
+    baseline: () =>
+      single("如果退路被断，艾伦遇害", { participants: ["character_alan"] }),
+  },
+  {
+    label: "hypothetical yaoshi",
+    baseline: () => single("要是城门失守，林青战死"),
+  },
+  {
+    label: "hypothetical wanyi",
+    baseline: () =>
+      single("万一援军不到，沈墨病故", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "hypothetical jishi",
+    baseline: () => single("即使城破，林青被杀"),
+  },
+  {
+    label: "dreamed death",
+    baseline: () => single("梦见林青身亡"),
+  },
+  {
+    label: "in a dream killed",
+    baseline: () => single("梦里韩松被杀", { participants: ["character_han"] }),
+  },
+  {
+    label: "in a dream harmed",
+    baseline: () =>
+      single("梦中沈墨遇害", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "believed killed",
+    baseline: () => single("以为林青被杀"),
+  },
+  {
+    label: "worried death",
+    baseline: () =>
+      single("担心沈墨身亡", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "feared harmed",
+    baseline: () =>
+      single("生怕韩松遇害", { participants: ["character_han"] }),
+  },
+  {
+    label: "predicted illness death",
+    baseline: () =>
+      single("预言艾伦病故", { participants: ["character_alan"] }),
+  },
+  // G. 固定原因短语后必须紧接死亡动词，且整体仍受其它守卫约束。
+  {
+    label: "injury but leaves the battlefield",
+    baseline: () => single("林青因伤退出战场"),
+  },
+  {
+    label: "illness leave request",
+    baseline: () => single("韩松因病告假", { participants: ["character_han"] }),
+  },
+  {
+    label: "too injured and unconscious",
+    baseline: () =>
+      single("沈墨因伤势过重昏迷", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "father dies of illness",
+    baseline: () => single("林青之父因病去世"),
+  },
+  {
+    label: "mount injured and collapses",
+    baseline: () =>
+      single("沈墨的坐骑因伤倒毙", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "illness but narrowly survives",
+    baseline: () => single("林青因病险些丧命"),
+  },
+  {
+    label: "cause shape followed by question mark",
+    baseline: () => single("林青因伤身亡？"),
+  },
+  {
+    label: "hypothetical cause death",
+    baseline: () =>
+      single("倘若援兵未到，韩松因伤身亡", {
+        participants: ["character_han"],
+      }),
+  },
+  {
+    label: "rumored illness death",
+    baseline: () =>
+      single("传言沈墨因病去世", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "love turns to hate",
+    baseline: () => single("林青因爱生恨"),
+  },
+  {
+    label: "illness death report is false",
+    baseline: () =>
+      single("沈墨因病去世的消息不实", {
+        participants: ["character_shenmo"],
+      }),
+  },
+  {
+    label: "multi-participant cause death",
+    baseline: () =>
+      probeBaseline({
+        events: [
+          {
+            id: "event_probe",
+            sequence: 1,
+            participants: ["character_lin", "character_han"],
+            stateChanges: ["林青因伤身亡"],
+          },
+        ],
+      }),
+  },
+];
+
+/**
+ * 已知漏报：语义上确实是死亡，但显式白名单有意不支持这些写法。
+ * 它们必须保持 unknown，但不算 false positive；优先漏报而不是误报。
+ */
+const knownMisses: NegativeProbe[] = [
+  {
+    label: "location phrase before death verb",
+    baseline: () => single("林青在乱军中被杀"),
+  },
+  {
+    label: "three or more connectors",
+    baseline: () => single("林青最终也已经病故"),
+  },
+  {
+    label: "unnamed death",
+    baseline: () => single("病故于城外"),
+  },
+  {
+    label: "unsupported cause phrase",
+    baseline: () => single("林青因伤口感染而死"),
+  },
+  {
+    label: "death phrase inside a clause with another subject",
+    baseline: () => single("敌军围困，众人只见林青死于乱军之中"),
+  },
+  {
+    label: "supported cause plus unsupported not-cured phrase",
+    baseline: () => single("林青因伤重不治身亡"),
+  },
 ];
 
 const positiveProbes: PositiveProbe[] = [
@@ -469,6 +677,50 @@ const positiveProbes: PositiveProbe[] = [
     baseline: () =>
       single("沈墨死于毒酒", { participants: ["character_shenmo"] }),
   },
+  {
+    label: "died of injuries",
+    characterId: "character_lin",
+    baseline: () => single("林青因伤身亡"),
+  },
+  {
+    label: "died of illness",
+    characterId: "character_han",
+    baseline: () => single("韩松因病去世", { participants: ["character_han"] }),
+  },
+  {
+    label: "died of severe injuries",
+    characterId: "character_shenmo",
+    baseline: () =>
+      single("沈墨因伤势过重身亡", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "finally died of untreated injuries",
+    characterId: "character_lin",
+    baseline: () => single("林青终因伤不治身亡"),
+  },
+  {
+    label: "already died of illness",
+    characterId: "character_shenmo",
+    baseline: () =>
+      single("沈墨已因病病逝", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "died of illness in the capital",
+    characterId: "character_alan",
+    baseline: () =>
+      single("艾伦因病逝世于京城", { participants: ["character_alan"] }),
+  },
+  {
+    label: "alias died of illness",
+    characterId: "character_lin",
+    baseline: () => single("青儿因病亡故"),
+  },
+  {
+    label: "later died of severe injuries",
+    characterId: "character_shenmo",
+    baseline: () =>
+      single("随后沈墨因重伤阵亡", { participants: ["character_shenmo"] }),
+  },
 ];
 
 describe("character status death probes", () => {
@@ -489,11 +741,16 @@ describe("character status death probes", () => {
       .map((probe) => probe.label);
     const recall = positiveProbes.length - missedPositiveLabels.length;
 
+    const unexpectedKnownMissLabels = knownMisses
+      .filter((probe) => probe.baseline().size > 0)
+      .map((probe) => probe.label);
+
     console.log(
-      `death-probes negatives=${negativeProbes.length} falsePositives=${falsePositives} positives=${positiveProbes.length} recall=${recall}/${positiveProbes.length}`,
+      `death-probes negatives=${negativeProbes.length} falsePositives=${falsePositives} positives=${positiveProbes.length} recall=${recall}/${positiveProbes.length} knownMisses=${knownMisses.length}`,
     );
 
     expect(falsePositiveLabels).toEqual([]);
     expect(missedPositiveLabels).toEqual([]);
+    expect(unexpectedKnownMissLabels).toEqual([]);
   });
 });
