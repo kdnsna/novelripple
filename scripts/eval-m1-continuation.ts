@@ -405,7 +405,7 @@ async function evaluateStory(
       suggestionsStage = {
         ...successfulStage(
           result.generation,
-          "ripple-suggestions.v3",
+          "ripple-suggestions.v4",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
         ),
@@ -415,7 +415,7 @@ async function evaluateStory(
     } catch (error) {
       suggestionsStage = {
         ...failedStage(
-          "ripple-suggestions.v3",
+          "ripple-suggestions.v4",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
           error,
@@ -464,13 +464,13 @@ async function evaluateStory(
       impactPlanArtifact = result.artifact;
       impactPlanStage = successfulStage(
         result.generation,
-        "impact-plan.v3",
+        "impact-plan.v4",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
       );
     } catch (error) {
       impactPlanStage = failedStage(
-        "impact-plan.v3",
+        "impact-plan.v4",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
         error,
@@ -903,7 +903,7 @@ function buildPrivateSceneArchive(input: {
       endingCandidateCount: storyMap.endingCandidates.length,
     },
     divergence: {
-      source: "ripple-suggestions.v3 suggestion[0]",
+      source: "ripple-suggestions.v4 suggestion[0]",
       type: input.suggestion.divergenceType,
       instruction: input.suggestion.instruction,
     },
@@ -1048,11 +1048,11 @@ function failedStory(
       failureCode: failureCode ?? "pipeline_failed",
     },
     suggestions: {
-      ...notRunStage("ripple-suggestions.v3"),
+      ...notRunStage("ripple-suggestions.v4"),
       suggestionCount: null,
       selectedSuggestionIndex: null,
     },
-    impactPlan: notRunStage("impact-plan.v3"),
+    impactPlan: notRunStage("impact-plan.v4"),
     worldline: {
       status: "not_run",
       mode: null,
@@ -1242,7 +1242,7 @@ async function writePrivateSceneArchives(
       `- provisioning：${archive.storyMap.provisioning}（finalVersion=${archive.storyMap.version}）`,
       `- 结构：人物 ${archive.storyMap.characterCount} / 事件 ${archive.storyMap.eventCount} / 边 ${archive.storyMap.edgeCount} / Ending Candidate ${archive.storyMap.endingCandidateCount}`,
       "",
-      "## Divergence（ripple-suggestions.v3 的 suggestion[0]，open 模式，0 Anchor）",
+      "## Divergence（ripple-suggestions.v4 的 suggestion[0]，open 模式，0 Anchor）",
       "",
       `- type：${archive.divergence.type}`,
       `- instruction：${archive.divergence.instruction}`,

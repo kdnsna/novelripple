@@ -4,10 +4,43 @@ import {
   sourceReferenceKey,
   type Source,
   type SourceReference,
+  type StoryEdge,
   type StoryMapArtifact,
 } from "@/domain/schemas";
 
 export const LOW_CONFIDENCE_THRESHOLD = 0.75;
+
+/**
+ * Edge 是否低于明确置信度阈值。Impact Plan 的“不确定因果关系”分类与
+ * Review Queue / Readiness 共用这一条规则。
+ */
+export function isLowConfidenceEdge(
+  edge: Pick<StoryEdge, "confidence">,
+): boolean {
+  return edge.confidence < LOW_CONFIDENCE_THRESHOLD;
+}
+
+/** Edge 是否被读者显式标记为“不确定”。 */
+export function isEdgeMarkedUncertain(
+  artifact: Pick<StoryMapArtifact, "review">,
+  edgeId: string,
+): boolean {
+  return artifact.review.uncertainEdgeIds.includes(edgeId);
+}
+
+/** 该 Edge 的每一条 Evidence 是否都已有对应的人工确认。 */
+export function isEdgeEvidenceConfirmed(
+  artifact: StoryMapArtifact,
+  edge: StoryEdge,
+): boolean {
+  return edge.evidence.every((evidence) =>
+    artifact.review.edgeEvidenceConfirmations.some(
+      (confirmation) =>
+        confirmation.edgeId === edge.id &&
+        sameSourceReference(confirmation.evidence, evidence),
+    ),
+  );
+}
 
 export type StoryMapReviewQueueCategory =
   | "inference_event"
@@ -132,15 +165,9 @@ export function deriveStoryMapReview(
   }
 
   for (const edge of storyMap.edges) {
-    const evidenceReviewed = edge.evidence.every((evidence) =>
-      review.edgeEvidenceConfirmations.some(
-        (confirmation) =>
-          confirmation.edgeId === edge.id &&
-          sameSourceReference(confirmation.evidence, evidence),
-      ),
-    );
-    const uncertain = review.uncertainEdgeIds.includes(edge.id);
-    if (edge.confidence < LOW_CONFIDENCE_THRESHOLD) {
+    const evidenceReviewed = isEdgeEvidenceConfirmed(artifact, edge);
+    const uncertain = isEdgeMarkedUncertain(artifact, edge.id);
+    if (isLowConfidenceEdge(edge)) {
       queue.push({
         id: `low_confidence_edge:${edge.id}`,
         category: "low_confidence_edge",
@@ -474,8 +501,8 @@ function deriveImportantEvidenceRequirements(
   }
   for (const edge of artifact.storyMap.edges) {
     // 已人工标记“不确定”的 Edge 不再用 evidence confirmation 阻塞 readiness。
-    if (artifact.review.uncertainEdgeIds.includes(edge.id)) continue;
-    if (edge.confidence >= LOW_CONFIDENCE_THRESHOLD) continue;
+    if (isEdgeMarkedUncertain(artifact, edge.id)) continue;
+    if (!isLowConfidenceEdge(edge)) continue;
     for (const evidence of edge.evidence) {
       requirements.push({ targetKind: "edge", targetId: edge.id, evidence });
     }

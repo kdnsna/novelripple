@@ -55,7 +55,11 @@ import {
   acceptImpactPlan,
   listProjectWorldlines,
 } from "@/server/repositories/ripple-repository";
-import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
+import {
+  confirmStoryMapArtifact,
+  createStoryMapRevision,
+  getStoryMapArtifact,
+} from "@/server/repositories/story-map-artifact-repository";
 import { generateImpactPlan } from "@/server/ripple/generate-impact-plan";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import { M1_06_LONG_SCENE_PROSE } from "../helpers/continuation-scene-fixtures";
@@ -196,7 +200,9 @@ function toImpactModelOutput(plan: ImpactPlan) {
   };
 }
 
-async function createAcceptedWorldline() {
+async function createAcceptedWorldline(input?: {
+  markedUncertainEdgeIds?: string[];
+}) {
   const fixture = await loadRippleFixture();
   const project = createProject({ title: "Continuation pipeline" });
   const imported = importProjectSource({
@@ -208,11 +214,22 @@ async function createAcceptedWorldline() {
     projectId: project.id,
     sourceId: imported.source.id,
   });
-  const storyMapArtifact = completeReviewAndConfirm({
+  let storyMapArtifact = completeReviewAndConfirm({
     projectId: project.id,
     source: imported.source,
     artifact: generated.artifact,
   });
+  for (const edgeId of input?.markedUncertainEdgeIds ?? []) {
+    const marked = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: storyMapArtifact.id,
+      change: { type: "mark_edge_uncertain", edgeId },
+    });
+    storyMapArtifact = confirmStoryMapArtifact({
+      projectId: project.id,
+      artifactId: marked.id,
+    });
+  }
   const plan = fixture.impactPlans[0];
   const generatedImpact = await generateImpactPlan({
     projectId: project.id,
@@ -281,7 +298,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === directions.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-directions.v2");
+    ).toBe("continuation-directions.v3");
     expect(directionProvider.requests).toHaveLength(1);
     const directionsPrompt = directionProvider.requests[0]?.prompt ?? "";
     expect(directionsPrompt).toContain("<worldline_setup>");
@@ -335,7 +352,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === scene.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-scene.v3");
+    ).toBe("continuation-scene.v4");
     expect(sceneProvider.requests[0]?.prompt).toContain(selectedDirection.title);
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_events>");
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_evidence>");
@@ -401,6 +418,53 @@ describe("Continuation scene tree generation", () => {
       storyMapBefore,
     );
     expect(listProjectWorldlines(context.project.id)).toEqual(worldlinesBefore);
+  });
+
+  it("marks accepted uncertain impacts as possibilities in continuation context and prompts", async () => {
+    const context = await createAcceptedWorldline({
+      markedUncertainEdgeIds: ["edge_07_08"],
+    });
+    expect(context.acceptedArtifact.impactPlan.uncertainImpactIds).toEqual([
+      "impact_02",
+    ]);
+    const directionProvider = new MockAIProvider([
+      JSON.stringify(directionOutput),
+    ]);
+
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: directionProvider,
+      modelConfig,
+    });
+
+    const directionsPrompt = directionProvider.requests[0]?.prompt ?? "";
+    expect(directionsPrompt).toMatch(
+      /"id":"impact_02"[^}]*"uncertain":true/,
+    );
+    expect(directionsPrompt).not.toMatch(
+      /"id":"impact_01"[^}]*"uncertain":true/,
+    );
+    expect(directionsPrompt).toContain("只是可能性，不是已成立的事实");
+    expect(
+      listProjectGenerationRuns(context.project.id).find(
+        (run) => run.id === directions.generation?.runId,
+      )?.promptVersion,
+    ).toBe("continuation-directions.v3");
+
+    const selectedDirection = directions.artifact.continuation.directions[0]!;
+    const sceneProvider = new MockAIProvider([JSON.stringify(sceneOutput)]);
+    await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: directions.artifact.id,
+      selectedDirectionId: selectedDirection.id,
+      provider: sceneProvider,
+      modelConfig,
+    });
+    const scenePrompt = sceneProvider.requests[0]?.prompt ?? "";
+    expect(scenePrompt).toMatch(/"id":"impact_02"[^}]*"uncertain":true/);
+    expect(scenePrompt).toContain("只是可能性，不是已成立的事实");
   });
 
   it("continues from a scene at depth 2 with the parent path in context", async () => {

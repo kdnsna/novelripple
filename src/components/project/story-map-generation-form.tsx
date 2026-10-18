@@ -17,7 +17,8 @@ export function StoryMapGenerationForm({
   sourceId: string;
 }) {
   const [state, action, pending] = useActionState(
-    startStoryMapGenerationAction.bind(null, projectId, sourceId),
+    // 首次生成没有可复用任务，显式 fresh 与自然新 group 语义一致。
+    startStoryMapGenerationAction.bind(null, projectId, sourceId, "fresh"),
     initialState,
   );
 

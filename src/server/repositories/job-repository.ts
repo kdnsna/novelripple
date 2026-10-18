@@ -46,6 +46,7 @@ export function createJob(input: CreateJobInput): Job {
     progress: input.progress ?? QUEUED_JOB_PROGRESS,
     result: null,
     error: null,
+    modelCalls: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
     heartbeatAt: timestamp,
@@ -62,6 +63,7 @@ export function createJob(input: CreateJobInput): Job {
       progressJson: JSON.stringify(job.progress),
       resultJson: null,
       error: null,
+      modelCalls: job.modelCalls,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       heartbeatAt: job.heartbeatAt,
@@ -140,6 +142,45 @@ export function updateJobProgress(input: {
     updatedAt: timestamp,
     heartbeatAt: timestamp,
   }), input.now);
+}
+
+/**
+ * 记录本 attempt 已发起的模型调用数。每次 provider 调用前同步写入，
+ * 这样即使进程随后崩溃，下一次 attempt 仍能把已消耗的调用算进预算。
+ */
+export function updateJobModelCalls(input: {
+  id: string;
+  modelCalls: number;
+  now?: string;
+}): Job | null {
+  if (!Number.isInteger(input.modelCalls) || input.modelCalls < 0) {
+    throw new Error("modelCalls 必须是非负整数");
+  }
+  return updateJob(
+    input.id,
+    "running",
+    (timestamp) => ({
+      modelCalls: input.modelCalls,
+      updatedAt: timestamp,
+      heartbeatAt: timestamp,
+    }),
+    input.now,
+  );
+}
+
+/**
+ * 同一 run group 中此前 attempt 已消耗的模型调用总数。
+ * 旧任务没有 runGroupId 时，以任务自身 id 作为 group。
+ */
+export function sumRunGroupModelCalls(input: {
+  projectId: string;
+  runGroupId: string;
+  excludeJobId?: string;
+}): number {
+  return listProjectJobs(input.projectId, "story_map_generation")
+    .filter((job) => job.id !== input.excludeJobId)
+    .filter((job) => (job.input.runGroupId ?? job.id) === input.runGroupId)
+    .reduce((total, job) => total + job.modelCalls, 0);
 }
 
 /** 长阶段只刷新心跳，不伪造进度；运行中的任务不会被同一进程误判为 stale。 */
@@ -234,6 +275,7 @@ function parseJobRow(row: typeof jobs.$inferSelect): Job {
     progress: JSON.parse(row.progressJson),
     result: row.resultJson === null ? null : JSON.parse(row.resultJson),
     error: row.error,
+    modelCalls: row.modelCalls,
     createdAt: normalizeSqliteDate(row.createdAt),
     updatedAt: normalizeSqliteDate(row.updatedAt),
     heartbeatAt: normalizeSqliteDate(row.heartbeatAt),

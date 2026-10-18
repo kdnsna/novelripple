@@ -59,11 +59,11 @@ Readiness 至少要求：Event Evidence 合法、核心人物已核对、Ending 
 
 Divergence、Impact Plan、Ripple Suggestions 与 Worldline 仍然只能绑定 `status === "confirmed"` 的不可变 Story Map revision。快速确认不会放宽这些仓库与生成器的 confirmed 检查，也不会自动创建 Worldline。
 
-“未精修”是纯派生的 UI 状态：当前 confirmed revision 的 operation 为 `quick_confirm_story_map`，且 readiness 尚未满足。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
+“未精修”是纯派生的 UI 状态：当前 revision 为 `confirmed` 且 readiness 尚未满足。它不依赖最新 operation 类型——快速确认后继续修正、只要 readiness 仍未满足，提示就仍然成立；`quickConfirmed` 另行记录当前 confirmed revision 的 operation 是否为 `quick_confirm_story_map`。需要“待核对”的 Event / Edge / Ending Candidate 直接复用 Review Queue 的 pending 项及其优先级，不引入第二套置信度或总分。界面在这些节点、边、结局与队列项上显示“待核对”角标，并显示“未精修 · 可随时进入精修模式”；进入精修模式只改变当前视图。之后的修正仍创建新的不可变 revision，精修完成后走普通确认。
 
 ### Edge 的“不确定”标记
 
-Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。下游 Ripple、Impact Plan、Worldline 与 Continuation 忽略该标记。
+Edge 的“不确定”是 review metadata，不是新的 Edge 类型：`review.uncertainEdgeIds`（缺省 `[]`，旧 review JSON 仍可解析）只保存 Edge 稳定 ID，不复制证据或原文，`StoryMap.edges[].type` 仍只有 `causes` / `enables` / `foreshadows`。Ripple Suggestions 与 Worldline Delta 不读取该标记；Impact Plan 读取它来区分确定与不确定的因果关系，但仍只把它当作可能性，不写入 Canon 或分支状态。Continuation 不直接读取 Story Map review，只读取 accepted Impact Plan 上服务端派生的 `uncertainImpactIds` 来提示“可能”。
 
 `mark_edge_uncertain` / `clear_edge_uncertain` 走既有 `createRevisionFromLatest` 路径：实际改变状态时创建新的不可变 draft revision 并记录 operation；重复标记或重复清除幂等返回当前 Artifact，不新增 revision。删除 Edge（或通过删除 Event 级联删除 Edge）时同步清理对应标记。`uncertainEdgeIds` 必须唯一且引用当前版本存在的 Edge，否则 fail closed。
 
@@ -86,7 +86,11 @@ Story Map 由一条确定性的分块召回管线生成，取代此前“全书 
 
 Story Map 生成不再占用一次同步 Server Action。用户点击生成后，服务端先写入 `jobs` 行（`kind: "story_map_generation"`，`input_json` 只含 `sourceId` 等稳定 ID），再由进程内 Runner 在响应之后调用同一分块管线。任务状态只能是 `queued` / `running` / `succeeded` / `failed` / `interrupted`；进度只记录固定阶段与计数（`chunking` → `extract` → `glean` → `names` → `endings` → `merge` → `saving`），不包含原文、Prompt 或模型输出。
 
-同一 project + kind + source 同时最多一个 `queued`/`running` 任务；重复点击直接回到已有任务。成功时任务只保存 `artifactId`，失败时保存经统一脱敏的短错误。任务历史只追加：`failed` / `interrupted` 行不被复用，重试创建新行。Runner 每 15 秒刷新心跳；进程首次使用或心跳超过 2 分钟时，遗留的 `queued`/`running` 任务被标为 `interrupted`。project 页面读取该 Source 的最新任务，客户端在任务进行中每秒轮询 `GET /api/jobs/[jobId]`，成功后导航到 `?artifact=<id>`；刷新页面仍从服务端恢复同一任务。详见 [`ADR 0008`](decisions/0008-background-jobs.md)。
+同一 project + kind + source 同时最多一个 `queued`/`running` 任务；重复点击直接回到已有任务。成功时任务只保存 `artifactId`，失败时保存经统一脱敏的短错误。任务历史只追加：`failed` / `interrupted` 行不被复用，重试创建新行。Runner 每 15 秒刷新心跳；进程首次使用或心跳超过 2 分钟时，遗留的 `queued`/`running` 任务被标为 `interrupted`。project 页面读取该 Source 的最新任务，客户端在任务进行中轮询 `GET /api/jobs/[jobId]?projectId=<id>`：成功且仍在 `queued`/`running` 时每 1 秒继续，网络错误或 5xx 按 1、2、4、8…秒指数退避（上限 30 秒），成功后回到 1 秒；404 表示任务不存在或不属于本项目，停止轮询并允许重新开始；终态不再轮询。成功后导航到 `?artifact=<id>`；刷新页面仍从服务端恢复同一任务。详见 [`ADR 0008`](decisions/0008-background-jobs.md)。
+
+重试不是从零重跑：每个分块的抽取与补抽结果在通过 Schema 与 Unit 引用校验后，作为只追加的检查点保存（`story_map_chunk_checkpoints`，阶段为 `extract` / `glean`），不保存 Prompt、原文或 raw model output。每行同时记录产生该阶段结果的 `generationRunId`（迁移前的旧行为 `null`）；复用检查点不重新调用模型，但生成结果中的抽取/补抽 run id 列表仍按分块顺序指向真正产生该结果的 Run（复用分块保留原始 run id，旧行没有 run id 时无法伪造，略过）。检查点按 project + `runGroupId` 加载，key 覆盖 Source id / `contentHash`、分块 `coreUnitIds` / `contextUnitIds` 与序号、全部 Prompt 版本以及模型/provider 身份；key 不匹配、损坏或无法再次通过阶段校验的行被忽略。启动任务接受显式 `mode`：`resume`（默认）在最新任务 `failed` / `interrupted` 时创建新任务行、沿用其 `runGroupId` 并写入 `retryOfJobId`，只补跑缺失的抽取/补抽分块；`fresh` 无论上一任务状态如何都使用全新 `runGroupId`，不读旧检查点、预算从 0 开始。首次生成没有可重试任务，`resume` 也自然得到新 group；人名、结局、合并始终重跑，并走同一 merge/Evidence/领域校验路径。
+
+模型调用预算跨 attempt 累计：`jobs.model_calls` 记录本 attempt 每次真实 provider 调用（含 repair，调用前落库），同一 run group 的此前 attempt 之和同时参与预检与运行中计数；预计剩余调用或实际累计超过 `STORY_MAP_MAX_MODEL_CALLS` 时 fail closed，默认重试不能靠新任务行重置预算。预算写入是调用 provider 的硬前提：写入返回 `null`（任务已不再是 `running`，例如被 stale recovery 标为 `interrupted`）或抛错时，Runner 必须在真正发出下一次调用前中止，任务保持 `failed` / `interrupted` 并只保存脱敏错误，绝不继续产生未计费调用。因此失败/中断界面同时提供“重试（复用已完成分块）”（`resume`）与“从头重新生成”（`fresh`）；预算耗尽时错误文案固定脱敏并说明预算已用完，界面把 `fresh` 作为明确出路，避免某一 Source 被已耗尽的 run group 永久锁死。续跑进度显示 `已复用 N/M 个分块`（抽取与补抽都已复用的分块数）。检查点只追加、不 UPDATE；检查点行的调用数用于成本审计，预算以任务行为准，以覆盖“调用已发生但结果尚未落检查点”的崩溃窗口。
 
 ## Character
 
@@ -151,6 +155,12 @@ Anchor 评估状态：
 
 ImpactPlan 是提案，不是 Worldline 中已经成立的事实。模型只输出影响与评估；ID、Story Map 版本、Divergence、模式、Anchor 和状态由服务端绑定。严格与开放计划不得通过改标签互换；开放模式必须没有 Anchor 和 Anchor evaluation。
 
+生成 Impact Plan 时，服务端用纯函数把 confirmed Story Map 的 Edge 分成 `established` 与 `uncertain`：`uncertain` 是 `review.uncertainEdgeIds` 中的 Edge，或低于 `LOW_CONFIDENCE_THRESHOLD` 且 Evidence 尚未人工确认的 Edge（复用 `derive-story-map-review` 的常量与确认 helper），原因分别为 `marked_uncertain` / `unreviewed_low_confidence`。Prompt 只把 `established` Edge 放进 `confirmedStoryMap.edges`，把 `uncertain` 关系单独放进 `<uncertain_relations>` 并带原因；模型只能把后者写成可能性，不得作为 `direct` Impact 的唯一依据，并应将这些关系写入 `uncertainties`。`impact-plan.v4` / `impact-plan-feedback.v3` 承担该契约，旧 Prompt 版本保留。
+
+服务端不信任模型：新 Impact Plan 用可选字段 `uncertainEdgeIds` 记录本次上下文中的全部不确定 Edge，用 `uncertainImpactIds` 记录 `reasonPath` 全程只由不确定 Edge 支撑的 Impact，再用 `usedUncertainEdgeIds` 记录本次计划实际用到的（作为某项 Impact `reasonPath` 相邻两步 from/to 出现）不确定 Edge，按首次使用顺序去重。旧 Artifact 没有这些字段仍可解析。预览摘要「含 N 条未精修/不确定关系」只按 `usedUncertainEdgeIds` 计数，完整详情给这些 Impact 加「可能」标记并单列实际用到的不确定关系；旧 Artifact 缺少 `usedUncertainEdgeIds` 时回退到旧的 `uncertainEdgeIds` 计数与列表（历史行为，可能多于实际使用）。该处理只影响本次推演的呈现，不改变 Edge 存储、readiness 或 Worldline Delta。
+
+“混合路径”仍视为确定：`uncertainImpactIds` 只收录每一段相邻 Event 都由不确定 Edge 支撑的 Impact；只要 `reasonPath` 中有一段由已建立 Edge 支撑，就不降级为“可能”。理由是已建立的那一段提供了可核对的因果锚点，而模型已被要求在 `uncertainties` 中说明途经的不确定段；这样不会把混合路径整体当成已确认事实，也不会仅因途经一条不确定关系就否定整条路径。为避免“可能”的 Impact 看起来过于确定，服务端在生成计划时对 `uncertainImpactIds` 中的 Impact 执行 `confidence = min(model confidence, UNCERTAIN_IMPACT_MAX_CONFIDENCE)`（`UNCERTAIN_IMPACT_MAX_CONFIDENCE = 0.5`）；确定 Impact 的 confidence 不变。该封顶只作用于本次候选计划，不是新的 Edge 置信度，也不回写 Story Map。
+
 `reasonPath` 是当前 confirmed Story Map 中 Event ID 组成的有序因果路径，不是相关事件或替代前提的无序列表。每条路径必须满足：
 
 - 只引用当前 confirmed Story Map 中存在的 Event，且同一条路径不得重复 Event；
@@ -165,7 +175,11 @@ Ripple Preview 只保存 `candidate` Impact Plan Artifact 与对应 Generation R
 
 ## Ripple Suggestions 与反馈谱系
 
-Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。同一 confirmed Story Map revision 已有 Suggestions 时，后续请求直接复用最新一组 Artifact，不再次调用模型；同一进程内按 Story Map Artifact id 合并并发请求。失败后只有用户显式重试才会再次生成。
+Ripple Suggestions 是分叉点推荐候选，只允许基于 confirmed Story Map 生成一至三个 `RippleSuggestion`，每个建议引用一个存在 `causes` / `enables` 出边的 Event（服务端先确定性筛出 `eligibleEventIds` 再交给模型）。建议只预填 Event、`prevent | choice | outcome` 与 instruction，不自动生成 Impact Plan、Worldline 或分支；未知、重复、无后续因果空间的事件与未知/重复人物都整组 fail closed。建议作为 `ripple_suggestions` Artifact 保存，绑定对应 Generation Run。
+
+同一 confirmed Story Map revision 的建议按批次追加：自动加载只复用最新批次，不再次调用模型；只有用户显式点击「换一批」才创建新的 `batchIndex`（0 为最初自动生成的一组），旧批次永不覆盖或删除，界面可切回任意批次。换批请求携带客户端在点击时创建的幂等键；Artifact id 由 `(storyMapArtifactId, batchIndex, idempotencyKey)` 确定性派生。相同键的重试/并发请求返回同一 Artifact，不增加模型调用。并发换批的实际合并规则是：同一 revision 的进程内 in-flight 锁只执行第一个生成任务，**不同幂等键**的并发请求也会 await 同一个 Promise 并收到同一批次，因此一次突发只写入一个批次、只发生一次模型调用；锁释放后到达的新键请求才按已持久化批次串行分配下一个 `batchIndex`，不同键不会并发写入多个批次。`refreshOf` 记录上一批 Artifact。旧行没有批次字段时解析为批次 0，不迁移历史数据。
+
+每个 revision 的批次数由 `RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION` 控制（默认 5）。环境变量在 trim 后只接受 `/^[1-9][0-9]*$/` 的纯十进制数字，且不得超过 20；`"0x2"`、`"1e0"`、`"+3"`、`" 2.0"` 等写法以及超过上限的值都在任何 Prompt 读取与模型调用前 fail closed。批次上限按已持久化批次检查，达到后返回友好错误并禁用换批按钮。失败调用不会留下批次 Artifact，只数批次会让失败重试无限消耗模型调用；因此 `ripple_suggestions` Generation Run 通过 `story_map_artifact_id` 绑定当前 revision，成功、失败与 pending 尝试合计最多 `批次上限 × 2` 次（`RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH = 2`），同样在任何 Prompt 读取与模型调用前检查，超过后 fail closed 并返回友好错误。成功批次仍受批次数上限约束。换批的 Prompt 会接收之前批次的建议 Event id 与标题，优先提出不同瞬间；如果模型仍只返回已建议过的 Event，批次照常保存，不因“重复”而静默重试或再次计费。每次换批仍创建独立 Generation Run 并在成功后绑定 Artifact。
 
 Impact Plan 反馈重生成是完整的新 Generation Run 与完整 `ImpactPlanModelOutput`，不是局部 patch 或聊天。每次反馈产生新的不可变 `candidate` revision，并保存 `lineage`：父 candidate Artifact、反馈文本、新 Generation Run、同一 Story Map Artifact、同一 Divergence、同一 mode 与同一 Anchors。这些字段由服务端从父 candidate 冻结，客户端不可替换；原 candidate 与任何已接受版本保持不变。只有用户明确接受的一个候选谱系才能创建 Worldline。
 
@@ -225,7 +239,7 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 方向生成没有 `selected_direction`，其余段相同。
 
-`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试，返回第一个渲染长度不超过预算的状态；每一级都只删除或严格缩短内容，因此更大的预算不会得到更靠后的降级状态：
+`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试。阶梯是单一嵌套序列，每一级都只删除或严格缩短上一级的内容；结果固定为该预算下第一个放得下的状态。因此更大的预算只会停留在更早（或相同）的状态，绝不会丢掉更小预算已保留的证据或完整场景，也不会使用更小预算没有启用的降级。阶梯为：
 
 1. 完整内容；
 2. `canon_evidence` 按优先级从低到高、同优先级从末尾一次丢一条，因此相关事件证据最后才被裁掉；
@@ -233,12 +247,14 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 4. `path_summary` 按整行从开头裁剪，首行省略/压缩提示保留到最后一刻，绝不把一行切成半句；
 5. 若调用方提供了严格更短的紧凑 `worldline_setup`，整体替换为紧凑形式（只保留计数与 key，不包含任何 fact 正文）；
 6. 最新场景有非空且严格短于正文的 `summary` 时，用该摘要替换正文；
-7. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；若连句末前缀都放不下或正文没有句末边界，则进入第 8 步；
+7. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；截断不得落在未闭合的引号内（`「」『』“”‘’` 与 ASCII 引号），也不得拆开 `……`；句末后紧跟恰好闭合引号的闭引号时（如 `。」`、`。』」`、`……」`），在所有闭引号之后截断；若只有引号内的句末可用，则在最外层开引号之前截断；若最外层开引号就在正文开头（整段都在引号内）、连安全前缀都放不下或正文没有句末边界，则进入第 8 步；
 8. 仍超过预算则 fail closed，错误消息包含所需长度与 `maxChars`，不返回半成品。
+
+第 5—7 步释放的预算不会回填第 2 步丢弃的证据：跨层回填会把低优先级内容塞进更小预算的结果（大预算停留在第 3—4 步时证据为零，小预算却带着回填证据），破坏嵌套顺序。紧凑 `worldline_setup`、摘要替换与 v1 截断释放的预算只用于让当前状态本身放得下；摘要与 v1 截断仍只在仍超预算时使用。
 
 不会因为“完整形式的必需段放不下”提前启用紧凑形式：紧凑 `worldline_setup` 只出现在阶梯第 5 步，且只有它严格更短时才使用。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
 
-每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`canon_evidence` 的 `backfilledItemIds` 只为本分支期间可能已存的旧 manifest 保留为可选只读字段；新 manifest 不再写入（不做跨层证据回填），被丢弃的证据只出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
 
 ### 路径滚动摘要
 
@@ -255,7 +271,7 @@ v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 
 | `readonlyCanonical` | `canon_events` | 保留 `sourceId`、`storyMapArtifactId`、`storyMapId`、`characters`、相关事件完整字段、事件之间的边与 Anchor 目标 `endingCandidates`；未变 |
 | `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；裁剪时最后丢弃；未变 |
 | `styleContext.representativeExcerpts` / `styleContext.characterEvidence` | `canon_evidence` 的后半部分 | 仍由 `selectContinuationContext` 选择；排在相关事件证据之后，先被裁剪 |
-| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
+| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要（不确定项带 `uncertain: true`）/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
 | 无 | `path_summary` | 新增：当前路径较早场景的确定性滚动摘要 |
 | 无 | `recent_scenes` | 新增：当前路径最近 2 个场景正文 |
 | 无 | `anchor_reminder` | 新增：从 Prompt 模板移到上下文末尾的严格/开放 Anchor 与 statePatch 约束 |

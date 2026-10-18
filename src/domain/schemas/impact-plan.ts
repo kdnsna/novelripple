@@ -88,6 +88,22 @@ export const ImpactPlanSchema = z
     threadChanges: ThreadChangesSchema,
     anchorEvaluations: z.array(AnchorEvaluationSchema),
     uncertainties: z.array(z.string().min(1)),
+    /**
+     * 生成该计划时，确认 Story Map 中被判为“不确定”的 Edge ID。
+     * 旧 Artifact 没有该字段仍可解析；下游 Continuation/Worldline 忽略它。
+     */
+    uncertainEdgeIds: z.array(z.string().min(1)).optional(),
+    /**
+     * 服务端确定性标记：reasonPath 全程只由不确定 Edge 支撑的 Impact ID。
+     * 这些 Impact 在 UI 中只能作为“可能”展示。
+     */
+    uncertainImpactIds: z.array(z.string().min(1)).optional(),
+    /**
+     * 本次计划实际用到的（作为某项 Impact reasonPath 相邻两步出现的）
+     * 不确定 Edge ID，按首次使用顺序去重。旧 Artifact 没有该字段；
+     * 预览摘要按该字段计数，缺失时回退到 `uncertainEdgeIds`。
+     */
+    usedUncertainEdgeIds: z.array(z.string().min(1)).optional(),
     status: z.enum(["candidate", "accepted", "rejected"]),
   })
   .strict()

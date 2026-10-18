@@ -21,6 +21,7 @@ import {
   type SceneNode,
 } from "@/domain/continuation/scene-tree";
 import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
+import { isUncertainImpact } from "@/domain/ripple/derive-uncertain-impact-ids";
 import {
   deriveWorldlineDelta,
   validateContinuationDirections,
@@ -59,8 +60,8 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const directionsPromptVersion = "continuation-directions.v2";
-const scenePromptVersion = "continuation-scene.v3";
+const directionsPromptVersion = "continuation-directions.v3";
+const scenePromptVersion = "continuation-scene.v4";
 
 export const DEFAULT_CONTINUATION_CONTEXT_MAX_CHARS = 24_000;
 export const CONTINUATION_CONTEXT_MAX_CHARS_ENV =
@@ -509,6 +510,7 @@ function buildWorldlineSetup(
         fromEventId: impact.fromEventId,
         affectedEventId: impact.affectedEventId,
         summary: impact.summary,
+        ...(isUncertainImpact(plan, impact.id) ? { uncertain: true } : {}),
       })),
       characterChanges: plan.characterChanges,
       threadChanges: plan.threadChanges,

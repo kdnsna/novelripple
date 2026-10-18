@@ -26,6 +26,7 @@ const InputMetadataSchema = z
   .object({
     projectId: z.string().min(1),
     worldlineId: z.string().min(1).nullable().optional(),
+    storyMapArtifactId: z.string().min(1).nullable().optional(),
     kind: z.string().min(1),
     promptVersion: z.string().min(1),
     prompt: z.string().min(1),
@@ -90,6 +91,7 @@ export async function generateStructured<T>(
   const metadata = InputMetadataSchema.parse({
     projectId: input.projectId,
     worldlineId: input.worldlineId,
+    storyMapArtifactId: input.storyMapArtifactId,
     kind: input.kind,
     promptVersion: input.promptVersion,
     prompt: input.prompt,
@@ -115,6 +117,7 @@ export async function generateStructured<T>(
   const run = createGenerationRun({
     projectId: metadata.projectId,
     worldlineId: metadata.worldlineId ?? null,
+    storyMapArtifactId: metadata.storyMapArtifactId ?? null,
     kind: metadata.kind,
     provider: providerName,
     model: metadata.modelConfig.model,

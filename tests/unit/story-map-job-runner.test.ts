@@ -2,8 +2,12 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { deriveEvidenceUnitChunks } from "@/domain/source/evidence-unit-chunks";
+import { deriveEvidenceUnits } from "@/domain/source/evidence-units";
+import { STORY_MAP_BUDGET_EXHAUSTED_ERROR } from "@/domain/schemas";
+import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import { resetJobRecoveryForTests } from "@/server/jobs/job-recovery";
@@ -16,9 +20,17 @@ import {
   importProjectSource,
 } from "@/server/repositories/project-repository";
 import {
+  createJob,
   getJob,
+  INTERRUPTED_JOB_ERROR,
+  interruptStaleJobs,
   listProjectJobs,
+  markJobFailed,
+  markJobRunning,
+  sumRunGroupModelCalls,
+  updateJobModelCalls,
 } from "@/server/repositories/job-repository";
+import { listStoryMapChunkCheckpoints } from "@/server/repositories/story-map-checkpoint-repository";
 import {
   getStoryMapArtifact,
   listStoryMapArtifactsForSource,
@@ -93,6 +105,163 @@ describe("in-process Story Map job runner", () => {
       version: 1,
     });
     expect(listProjectJobs(project.id, "story_map_generation")).toHaveLength(1);
+    // Runner 把每次调用写入任务行，并把每个完成的 分块阶段 追加为检查点。
+    expect(job?.modelCalls).toBeGreaterThan(0);
+    expect(job?.input.runGroupId).toBeDefined();
+    expect(
+      listStoryMapChunkCheckpoints({
+        projectId: project.id,
+        runGroupId: job!.input.runGroupId!,
+      }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("aborts before the next provider call when the job is interrupted mid-run", async () => {
+    const fixture = await loadRippleFixture();
+    const project = createProject({
+      title: "Job runner interrupted billing",
+    });
+    const source = importProjectSource({
+      projectId: project.id,
+      fileName: "ripple-001.md",
+      bytes: new TextEncoder().encode(fixture.source.originalText),
+    }).source;
+    const chunkCount = deriveEvidenceUnitChunks(
+      deriveEvidenceUnits(source),
+    ).length;
+    resetJobRecoveryForTests();
+    const started = startStoryMapGenerationJob({
+      projectId: project.id,
+      sourceId: source.id,
+    });
+
+    const originalGenerate = MockAIProvider.prototype.generate;
+    const generateSpy = vi.spyOn(MockAIProvider.prototype, "generate");
+    let extractCalls = 0;
+    let gleanCalls = 0;
+    generateSpy.mockImplementation(async function (
+      this: MockAIProvider,
+      request,
+    ) {
+      const response = await originalGenerate.call(this, request);
+      if (request.prompt.includes("<story_chunk")) {
+        extractCalls += 1;
+        // 抽取全部完成后模拟 stale recovery 把仍在跑的任务标为 interrupted。
+        // 下一次 provider 调用前的计费写入会因此返回 null。
+        if (extractCalls === chunkCount) {
+          interruptStaleJobs({
+            staleBefore: new Date(Date.now() + 60_000).toISOString(),
+          });
+        }
+      }
+      if (request.prompt.includes("<previous_extraction>")) {
+        gleanCalls += 1;
+      }
+      return response;
+    });
+
+    try {
+      await runStoryMapGenerationJob(started.job.id);
+    } finally {
+      generateSpy.mockRestore();
+    }
+
+    const job = getJob(started.job.id)!;
+    // 计费写不进去时，补抽调用一次都没有真正发出。
+    expect(extractCalls).toBe(chunkCount);
+    expect(gleanCalls).toBe(0);
+    expect(job).toMatchObject({
+      status: "interrupted",
+      error: INTERRUPTED_JOB_ERROR,
+      result: null,
+    });
+    // 任务行保留最后一次成功落库的调用数，run group 总数与实际 provider 调用一致。
+    expect(job.modelCalls).toBe(chunkCount);
+    expect(
+      sumRunGroupModelCalls({
+        projectId: project.id,
+        runGroupId: job.input.runGroupId!,
+        excludeJobId: job.id,
+      }),
+    ).toBe(0);
+    expect(
+      listProjectJobs(project.id, "story_map_generation")
+        .filter(
+          (candidate) =>
+            (candidate.input.runGroupId ?? candidate.id) ===
+            job.input.runGroupId,
+        )
+        .reduce((total, candidate) => total + candidate.modelCalls, 0),
+    ).toBe(chunkCount);
+    expect(listStoryMapArtifactsForSource(project.id, source.id)).toEqual([]);
+  });
+
+  it("fails a resume at the exhausted budget before any provider call while fresh succeeds", async () => {
+    const fixture = await loadRippleFixture();
+    const project = createProject({ title: "Job runner fresh budget" });
+    const source = importProjectSource({
+      projectId: project.id,
+      fileName: "ripple-001.md",
+      bytes: new TextEncoder().encode(fixture.source.originalText),
+    }).source;
+    // 一次干净的 fixture 运行恰好消耗 2 × 分块数 + 3 次调用
+    // （抽取、补抽、人名、结局、合并）；把上限设在这个值上。
+    const baseCalls =
+      deriveEvidenceUnitChunks(deriveEvidenceUnits(source)).length * 2 + 3;
+    const previousBudget = process.env.STORY_MAP_MAX_MODEL_CALLS;
+    process.env.STORY_MAP_MAX_MODEL_CALLS = String(baseCalls);
+    const generateSpy = vi.spyOn(MockAIProvider.prototype, "generate");
+
+    try {
+      resetJobRecoveryForTests();
+      // 模拟一个已把本次 run group 预算用完的失败 attempt。
+      const exhaustedGroupId = "run_budget_exhausted";
+      const exhausted = createJob({
+        projectId: project.id,
+        kind: "story_map_generation",
+        input: { sourceId: source.id, runGroupId: exhaustedGroupId },
+      });
+      markJobRunning({ id: exhausted.id });
+      updateJobModelCalls({ id: exhausted.id, modelCalls: baseCalls });
+      markJobFailed({
+        id: exhausted.id,
+        error: "Story Map 生成失败，未保存 Artifact。",
+      });
+
+      const resumed = startStoryMapGenerationJob({
+        projectId: project.id,
+        sourceId: source.id,
+        mode: "resume",
+      });
+      expect(resumed.job.input.runGroupId).toBe(exhaustedGroupId);
+      await runStoryMapGenerationJob(resumed.job.id);
+
+      expect(getJob(resumed.job.id)).toMatchObject({
+        status: "failed",
+        error: STORY_MAP_BUDGET_EXHAUSTED_ERROR,
+      });
+      // 预检在调用 provider 前 fail closed，没有新增任何模型调用。
+      expect(generateSpy).not.toHaveBeenCalled();
+
+      const fresh = startStoryMapGenerationJob({
+        projectId: project.id,
+        sourceId: source.id,
+        mode: "fresh",
+      });
+      expect(fresh.job.input.runGroupId).not.toBe(exhaustedGroupId);
+      expect(fresh.job.input.retryOfJobId).toBeUndefined();
+      await runStoryMapGenerationJob(fresh.job.id);
+
+      expect(getJob(fresh.job.id)).toMatchObject({
+        status: "succeeded",
+        error: null,
+        result: { artifactId: expect.any(String) },
+      });
+      expect(generateSpy).toHaveBeenCalledTimes(baseCalls);
+    } finally {
+      generateSpy.mockRestore();
+      restoreEnvironment("STORY_MAP_MAX_MODEL_CALLS", previousBudget);
+    }
   });
 
   it("stores only the sanitized failure message and no artifact", async () => {

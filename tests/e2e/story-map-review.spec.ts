@@ -188,8 +188,10 @@ test("ranks evidence, previews context, and marks an Edge uncertain", async ({
   await createFixtureStoryMap(page, "Evidence Picker 排序");
 
   await page.getByRole("button", { name: "新增 Edge" }).click();
-  await page.getByLabel("Edge 起点 Event").selectOption("event_01");
-  await page.getByLabel("Edge 终点 Event").selectOption("event_06");
+  // 选一个夹具 reasonPath 实际经过、且当前 Edge 图中不存在的相邻步骤：
+  // impact_04 的 event_07 → event_09。它会被标记为不确定并在预览中被使用。
+  await page.getByLabel("Edge 起点 Event").selectOption("event_07");
+  await page.getByLabel("Edge 终点 Event").selectOption("event_09");
 
   const picker = page.getByTestId("evidence-picker");
   await expect(picker).toContainText(
@@ -204,6 +206,10 @@ test("ranks evidence, previews context, and marks an Edge uncertain", async ({
   expect(distances).toEqual([...distances].sort((left, right) => left - right));
   await expect(page.getByTestId("evidence-candidate").first()).toContainText(
     "evidence_unit:",
+  );
+  // event_07 的 Evidence Unit 是首选（距离 0）。
+  await expect(page.getByTestId("evidence-candidate").first()).toContainText(
+    "她在文件袋封口上签下时间",
   );
 
   await page
@@ -221,6 +227,9 @@ test("ranks evidence, previews context, and marks an Edge uncertain", async ({
   await expect(page.getByTestId("evidence-candidate")).toHaveCount(136);
 
   await page.getByRole("radio").first().check();
+  await expect(page.locator(".evidence-picker-selected")).toContainText(
+    "许澄把红色账簿交给周岚",
+  );
   await page.getByLabel("Edge 类型").selectOption("enables");
   await expect(
     page.getByText("他提前拿到地图，才有可能在雨停前找到出口。"),
@@ -253,6 +262,27 @@ test("ranks evidence, previews context, and marks an Edge uncertain", async ({
   // 不确定 Edge 留在待核队列，但不阻塞直接开始涟漪。
   await page.getByRole("button", { name: "直接开始涟漪" }).click();
   await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
+
+  // 带着不确定标记进入 Impact Plan：摘要显示数量，完整详情列出该关系。
+  await page.getByTestId("event-node-event_07").click();
+  await page.getByRole("button", { name: "为所选事件创建 Ripple" }).click();
+  await page.getByLabel("分歧类型").selectOption("prevent");
+  await page
+    .getByLabel("改变内容")
+    .fill("许澄没有把红色账簿交给周岚");
+  await page.getByLabel("保留原结局").check();
+  await page
+    .getByLabel("白鸥号沉船事故的系统性真相最终进入公共记录")
+    .check();
+  await page.getByRole("button", { name: "生成 Ripple Preview" }).click();
+
+  await expect(page.getByTestId("impact-uncertainty-note")).toContainText(
+    "含 1 条未精修/不确定关系",
+  );
+  await page.getByTestId("impact-details").locator(":scope > summary").click();
+  await expect(page.getByTestId("impact-uncertain-relations")).toContainText(
+    "用于验证排序与不确定标记的关系",
+  );
 });
 
 async function createFixtureStoryMap(page: Page, projectTitle: string) {

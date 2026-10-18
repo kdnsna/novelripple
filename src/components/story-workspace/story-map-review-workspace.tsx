@@ -55,13 +55,15 @@ type StoryMapReviewWorkspaceProps = {
   evidenceOptions: EvidencePickerOption[];
   initialWorldlines: Worldline[];
   initialImpactPlanArtifacts: ImpactPlanArtifact[];
-  initialRippleSuggestions: RippleSuggestionsArtifact | null;
+  /** 已持久化的建议批次，按 batchIndex 升序；空数组表示当前 revision 还没有建议。 */
+  initialRippleSuggestionBatches: RippleSuggestionsArtifact[];
   initialContinuationTrees: ContinuationTreeView[];
+  rippleSuggestionBatchLimit: number;
 };
 
 type SuggestionsState = {
   artifactId: string;
-  suggestions: RippleSuggestionsArtifact | null;
+  batches: RippleSuggestionsArtifact[];
   loading: boolean;
   error: string | null;
 };
@@ -80,8 +82,9 @@ export function StoryMapReviewWorkspace({
   evidenceOptions,
   initialWorldlines,
   initialImpactPlanArtifacts,
-  initialRippleSuggestions,
+  initialRippleSuggestionBatches,
   initialContinuationTrees,
+  rippleSuggestionBatchLimit,
 }: StoryMapReviewWorkspaceProps) {
   const router = useRouter();
   // artifact 是本地状态：revision 成功后立即快进（不等待导航），
@@ -125,7 +128,7 @@ export function StoryMapReviewWorkspace({
   const [suggestionsState, setSuggestionsState] = useState<SuggestionsState>(
     () => ({
       artifactId: initialArtifact.id,
-      suggestions: initialRippleSuggestions,
+      batches: initialRippleSuggestionBatches,
       loading: false,
       error: null,
     }),
@@ -141,7 +144,10 @@ export function StoryMapReviewWorkspace({
   const [pending, startTransition] = useTransition();
 
   const requestSuggestions = useCallback(
-    async (artifactId: string): Promise<void> => {
+    async (
+      artifactId: string,
+      idempotencyKey?: string,
+    ): Promise<RippleSuggestionsArtifact | null> => {
       setSuggestionsState((current) =>
         current.artifactId === artifactId
           ? { ...current, loading: true, error: null }
@@ -151,18 +157,30 @@ export function StoryMapReviewWorkspace({
         const response = await generateRippleSuggestionsAction({
           projectId,
           storyMapArtifactId: artifactId,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
         });
-        setSuggestionsState((current) => {
-          if (current.artifactId !== artifactId) return current;
-          return response.ok
+        if (!response.ok) {
+          setSuggestionsState((current) =>
+            current.artifactId === artifactId
+              ? { ...current, loading: false, error: response.error }
+              : current,
+          );
+          return null;
+        }
+        setSuggestionsState((current) =>
+          current.artifactId === artifactId
             ? {
                 ...current,
                 loading: false,
-                suggestions: response.artifact,
+                batches: mergeSuggestionBatch(
+                  current.batches,
+                  response.artifact,
+                ),
                 error: null,
               }
-            : { ...current, loading: false, error: response.error };
-        });
+            : current,
+        );
+        return response.artifact;
       } catch {
         setSuggestionsState((current) =>
           current.artifactId === artifactId
@@ -173,6 +191,7 @@ export function StoryMapReviewWorkspace({
               }
             : current,
         );
+        return null;
       }
     },
     [projectId],
@@ -230,7 +249,7 @@ export function StoryMapReviewWorkspace({
     if (!rippleOpen || artifact.storyMap.status !== "confirmed") return;
     if (suggestionsState.artifactId !== artifact.id) return;
     if (
-      suggestionsState.suggestions ||
+      suggestionsState.batches.length > 0 ||
       suggestionsState.loading ||
       suggestionsState.error
     ) {
@@ -292,16 +311,16 @@ export function StoryMapReviewWorkspace({
       );
       setSuggestionsState({
         artifactId: initialArtifact.id,
-        suggestions: initialRippleSuggestions,
+        batches: initialRippleSuggestionBatches,
         loading: false,
         error: null,
       });
-    } else if (initialRippleSuggestions) {
+    } else if (initialRippleSuggestionBatches.length > 0) {
       // 同一 artifact 的服务端数据刷新（例如生成建议后的 revalidate）可以
-      // 补上本地还没有的建议，但不覆盖已加载的本地结果。
+      // 补上本地还没有的批次，但不覆盖已加载的本地结果。
       setSuggestionsState((current) =>
-        current.artifactId === initialArtifact.id && !current.suggestions
-          ? { ...current, suggestions: initialRippleSuggestions }
+        current.artifactId === initialArtifact.id && current.batches.length === 0
+          ? { ...current, batches: initialRippleSuggestionBatches }
           : current,
       );
     }
@@ -422,10 +441,10 @@ export function StoryMapReviewWorkspace({
     if (nextArtifact.id !== artifact.id) {
       setSuggestionsState({
         artifactId: nextArtifact.id,
-        suggestions:
+        batches:
           nextArtifact.id === initialArtifact.id
-            ? initialRippleSuggestions
-            : null,
+            ? initialRippleSuggestionBatches
+            : [],
         loading: false,
         error: null,
       });
@@ -753,9 +772,13 @@ export function StoryMapReviewWorkspace({
               onRetrySuggestions={() => {
                 void requestSuggestions(artifact.id);
               }}
+              onRefreshSuggestions={(idempotencyKey) =>
+                requestSuggestions(artifact.id, idempotencyKey)
+              }
               projectId={projectId}
               selectedEvent={selectedEvent}
-              suggestions={activeSuggestions?.suggestions ?? null}
+              suggestionBatchLimit={rippleSuggestionBatchLimit}
+              suggestionBatches={activeSuggestions?.batches ?? []}
               suggestionsError={activeSuggestions?.error ?? null}
               suggestionsLoading={activeSuggestions?.loading ?? false}
             />
@@ -783,6 +806,21 @@ function withRootDirections(
   artifact: ContinuationDirectionsArtifact | null,
 ): ContinuationTreeView {
   return artifact ? appendContinuationArtifact(view, artifact) : view;
+}
+
+/** 建议批次只追加：同一 id 幂等替换，按 batchIndex 稳定排序。 */
+function mergeSuggestionBatch(
+  batches: RippleSuggestionsArtifact[],
+  next: RippleSuggestionsArtifact,
+): RippleSuggestionsArtifact[] {
+  const byId = new Map(batches.map((batch) => [batch.id, batch]));
+  byId.set(next.id, next);
+  return [...byId.values()].sort(
+    (left, right) =>
+      left.batchIndex - right.batchIndex ||
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 function selectDefaultReviewItem(

@@ -7,12 +7,15 @@ import {
   startStoryMapGenerationAction,
   type ProjectActionState,
 } from "@/app/projects/actions";
-import type {
-  JobProgress,
-  JobStatus,
-  StoryMapJobStage,
+import {
+  STORY_MAP_BUDGET_EXHAUSTED_ERROR,
+  type JobProgress,
+  type JobStatus,
+  type StoryMapJobStage,
 } from "@/domain/schemas";
 import type { JobView } from "@/server/jobs/job-view";
+
+import { jobPollBackoffMs } from "./job-poll-backoff";
 
 const STAGE_LABELS: Record<StoryMapJobStage, string> = {
   queued: "排队",
@@ -50,8 +53,13 @@ export function StoryMapJobProgress({
   const router = useRouter();
   const [job, setJob] = useState(initialJob);
   const [pollError, setPollError] = useState<string | null>(null);
-  const [retryState, retryAction, retryPending] = useActionState(
-    startStoryMapGenerationAction.bind(null, projectId, sourceId),
+  const [jobMissing, setJobMissing] = useState(false);
+  const [resumeState, resumeAction, resumePending] = useActionState(
+    startStoryMapGenerationAction.bind(null, projectId, sourceId, "resume"),
+    initialState,
+  );
+  const [freshState, freshAction, freshPending] = useActionState(
+    startStoryMapGenerationAction.bind(null, projectId, sourceId, "fresh"),
     initialState,
   );
 
@@ -59,39 +67,65 @@ export function StoryMapJobProgress({
   const artifactId = job.result?.artifactId ?? null;
 
   useEffect(() => {
-    if (status !== "queued" && status !== "running") return;
+    if (jobMissing || (status !== "queued" && status !== "running")) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let consecutiveFailures = 0;
+
+    const scheduleNext = (delayMs: number) => {
+      if (cancelled) return;
+      timer = setTimeout(() => {
+        void poll();
+      }, delayMs);
+    };
+
+    const retryLater = (message: string) => {
+      consecutiveFailures += 1;
+      const delayMs = jobPollBackoffMs(consecutiveFailures);
+      if (!cancelled) {
+        setPollError(`${message}，${delayMs / 1_000} 秒后重试…`);
+      }
+      scheduleNext(delayMs);
+    };
 
     const poll = async () => {
       try {
+        const query = new URLSearchParams({ projectId });
         const response = await fetch(
-          `/api/jobs/${encodeURIComponent(job.id)}`,
+          `/api/jobs/${encodeURIComponent(job.id)}?${query}`,
           { cache: "no-store" },
         );
+        if (cancelled) return;
+        // 不存在与不属于本项目使用同一个 404；停止轮询并让用户重新开始。
+        if (response.status === 404) {
+          setJobMissing(true);
+          setPollError(null);
+          return;
+        }
         if (!response.ok) {
-          if (!cancelled) setPollError("暂时无法获取进度，正在继续重试…");
+          retryLater("暂时无法获取进度");
           return;
         }
         const next = (await response.json()) as JobView;
-        if (!cancelled) {
-          setJob(next);
-          setPollError(null);
+        if (cancelled) return;
+        consecutiveFailures = 0;
+        setPollError(null);
+        setJob(next);
+        if (next.status === "queued" || next.status === "running") {
+          scheduleNext(1_000);
         }
       } catch {
-        if (!cancelled) setPollError("网络暂时不可用，正在继续重试…");
+        if (!cancelled) retryLater("网络暂时不可用");
       }
     };
 
     void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, 1_000);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer !== null) clearTimeout(timer);
     };
-  }, [job.id, status]);
+  }, [job.id, jobMissing, projectId, status]);
 
   useEffect(() => {
     if (status !== "succeeded" || !artifactId) return;
@@ -125,11 +159,45 @@ export function StoryMapJobProgress({
             ),
           );
   const retryable = status === "failed" || status === "interrupted";
+  const budgetExhausted =
+    status === "failed" && job.error === STORY_MAP_BUDGET_EXHAUSTED_ERROR;
+
+  const resumeForm = (
+    <form action={resumeAction}>
+      <button
+        className={
+          budgetExhausted
+            ? "secondary-button"
+            : "primary-button full-width-button"
+        }
+        disabled={resumePending}
+        type="submit"
+      >
+        {resumePending ? "正在重新启动…" : "重试（复用已完成分块）"}
+      </button>
+    </form>
+  );
+  const freshForm = (
+    <form action={freshAction}>
+      <button
+        className={
+          budgetExhausted
+            ? "primary-button full-width-button"
+            : "secondary-button"
+        }
+        disabled={freshPending}
+        type="submit"
+      >
+        {freshPending ? "正在从头重新生成…" : "从头重新生成"}
+      </button>
+    </form>
+  );
 
   return (
     <section
       aria-label="Story Map 生成任务"
       className="foundation-card story-map-job-card"
+      data-budget-exhausted={budgetExhausted ? "true" : undefined}
       data-job-status={status}
       data-testid="story-map-job-progress"
       role="region"
@@ -181,38 +249,79 @@ export function StoryMapJobProgress({
 
       <p className="form-help">
         {status === "queued" || status === "running"
-          ? "生成在服务器后台运行；刷新页面不会中断，进度每秒更新。"
+          ? jobMissing
+            ? "轮询已经停止；可以重新开始一个生成任务。"
+            : "生成在服务器后台运行；刷新页面不会中断，进度每秒更新。"
           : status === "succeeded"
             ? "正在打开新的候选 Story Map…"
-            : "任务历史会保留；重试总是创建一条新任务，不复用失败记录。"}
+            : "任务历史只追加：每次重试或从头生成都会创建新任务，失败记录不会被覆盖。"}
       </p>
 
-      {pollError && (status === "queued" || status === "running") ? (
+      {pollError && !jobMissing && (status === "queued" || status === "running") ? (
         <p className="form-error" role="alert">
           {pollError}
         </p>
       ) : null}
 
-      {retryable ? (
-        <form action={retryAction} className="story-map-job-retry">
+      {jobMissing ? (
+        <div className="story-map-job-retry">
+          <p className="form-error" role="alert">
+            任务不存在或不属于本项目，已停止轮询。
+          </p>
+          {freshState.error ? (
+            <p className="form-error" role="alert">
+              {freshState.error}
+            </p>
+          ) : null}
+          <form action={freshAction}>
+            <button
+              className="primary-button full-width-button"
+              disabled={freshPending}
+              type="submit"
+            >
+              {freshPending ? "正在重新启动…" : "重新开始"}
+            </button>
+          </form>
+        </div>
+      ) : null}
+
+      {retryable && !jobMissing ? (
+        <div className="story-map-job-retry">
           {job.error ? (
             <p className="form-error" role="alert">
               {job.error}
             </p>
           ) : null}
-          {retryState.error ? (
-            <p className="form-error" role="alert">
-              {retryState.error}
+          {budgetExhausted ? (
+            <p className="form-help" role="note">
+              模型调用预算已用完；继续重试会沿用同一预算并立即失败，请从头重新生成。
             </p>
           ) : null}
-          <button
-            className="primary-button full-width-button"
-            disabled={retryPending}
-            type="submit"
-          >
-            {retryPending ? "正在重新启动…" : "重试"}
-          </button>
-        </form>
+          {resumeState.error ? (
+            <p className="form-error" role="alert">
+              {resumeState.error}
+            </p>
+          ) : null}
+          {freshState.error ? (
+            <p className="form-error" role="alert">
+              {freshState.error}
+            </p>
+          ) : null}
+          {budgetExhausted ? (
+            <>
+              {freshForm}
+              {resumeForm}
+            </>
+          ) : (
+            <>
+              {resumeForm}
+              {freshForm}
+            </>
+          )}
+          <p className="form-help">
+            从头重新生成会重跑每个分块，并开启新的模型调用预算。
+          </p>
+        </div>
       ) : null}
     </section>
   );
@@ -249,8 +358,15 @@ function statusLabel(status: JobStatus): string {
 
 function progressText(progress: JobProgress): string {
   const label = STAGE_LABELS[progress.stage];
+  const reused =
+    progress.reusedChunks !== undefined &&
+    (progress.stage === "chunking" ||
+      progress.stage === "extract" ||
+      progress.stage === "glean")
+      ? ` · 已复用 ${progress.reusedChunks}/${progress.total} 个分块`
+      : "";
   if (progress.total > 0) {
-    return `${label} ${progress.completed}/${progress.total}`;
+    return `${label} ${progress.completed}/${progress.total}${reused}`;
   }
   if (progress.stage === "queued") return "任务已排队，等待开始…";
   return label;

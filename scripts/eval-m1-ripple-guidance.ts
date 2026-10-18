@@ -199,7 +199,7 @@ async function evaluateStory(
       suggestionsStage = {
         ...successfulStage(
           result.generation,
-          "ripple-suggestions.v3",
+          "ripple-suggestions.v4",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
         ),
@@ -208,7 +208,7 @@ async function evaluateStory(
     } catch (error) {
       suggestionsStage = {
         ...failedStage(
-          "ripple-suggestions.v3",
+          "ripple-suggestions.v4",
           elapsedMilliseconds(startedAt),
           provider.observations.slice(observationStart),
           error,
@@ -252,13 +252,13 @@ async function evaluateStory(
       initialArtifact = result.artifact;
       initialStage = successfulStage(
         result.generation,
-        "impact-plan.v3",
+        "impact-plan.v4",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
       );
     } catch (error) {
       initialStage = failedStage(
-        "impact-plan.v3",
+        "impact-plan.v4",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
         error,
@@ -302,13 +302,13 @@ async function evaluateStory(
       feedbackArtifact = result.artifact;
       feedbackStage = successfulStage(
         result.generation,
-        "impact-plan-feedback.v2",
+        "impact-plan-feedback.v3",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
       );
     } catch (error) {
       feedbackStage = failedStage(
-        "impact-plan-feedback.v2",
+        "impact-plan-feedback.v3",
         elapsedMilliseconds(startedAt),
         provider.observations.slice(observationStart),
         error,
@@ -427,12 +427,12 @@ function failedStory(
     status: "failed",
     confirmedStoryMapMatched: false,
     suggestions: {
-      ...notRunStage("ripple-suggestions.v3"),
+      ...notRunStage("ripple-suggestions.v4"),
       suggestionCount: null,
       failureCode: failureCode ?? "pipeline_failed",
     },
-    initialCandidate: notRunStage("impact-plan.v3"),
-    feedbackCandidate: notRunStage("impact-plan-feedback.v2"),
+    initialCandidate: notRunStage("impact-plan.v4"),
+    feedbackCandidate: notRunStage("impact-plan-feedback.v3"),
     invariants: {
       suggestionsExactlyThree: false,
       noWorldlineWrites: true,

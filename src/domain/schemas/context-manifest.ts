@@ -26,6 +26,8 @@ export const ContextManifestSectionSchema = z
     summarizedItemIds: z.array(z.string()).optional(),
     /** 因没有可用摘要而被句末截断的条目 id（v1 场景）。 */
     truncatedItemIds: z.array(z.string()).optional(),
+    /** 本分支期间旧 manifest 可能写入的回填证据 id；新 manifest 不再写入，仅为解析兼容保留。 */
+    backfilledItemIds: z.array(z.string()).optional(),
     /** worldline_setup 启用紧凑形式时实际移除的字段名，不含正文。 */
     compactedFields: z.array(z.string()).optional(),
     /** 只记录条目 id，供路径摘要说明实际覆盖了哪些场景。 */

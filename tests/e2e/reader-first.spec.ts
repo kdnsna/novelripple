@@ -101,3 +101,59 @@ test("reader starts a ripple directly, previews it, and enters the first scene",
     "潮标站的第二把锁",
   );
 });
+
+test("refreshes suggestion batches only on explicit click and can switch back", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: /创建故事项目/ }).click();
+  await page.getByLabel("项目名称").fill(`建议换批 ${Date.now()}`);
+  await page.getByRole("button", { name: "创建 Project" }).click();
+  await page.getByLabel("故事文件").setInputFiles(
+    path.join(process.cwd(), "fixtures/ripple-001/source.md"),
+  );
+  await page.getByRole("button", { name: "导入 Source" }).click();
+  await expect(page.getByRole("status")).toContainText("Source 导入成功");
+
+  await page.getByRole("button", { name: "生成 Story Map" }).click();
+  await expect(page.getByTestId("story-map-job-progress")).toBeVisible();
+  await expect(page.getByText("Story Map v1 · draft")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "直接开始涟漪" }).click();
+  await expect(page.getByText(/Story Map v\d+ · confirmed/)).toBeVisible();
+
+  // 自动加载只产生批次 0；此时没有批次导航，也没有任何“换一批”副作用。
+  await expect(page.locator(".ripple-suggestion-card")).toHaveCount(3, {
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("suggestion-batch-nav")).toHaveCount(0);
+
+  // 只有显式点击才生成新批次；旧批次保留，可从 ‹ 1/2 › 切回。
+  await page.getByRole("button", { name: "换一批" }).click();
+  await expect(page.getByTestId("suggestion-batch-nav")).toContainText("2/2", {
+    timeout: 15_000,
+  });
+  await expect(
+    page
+      .locator(".ripple-suggestion-card")
+      .filter({ hasText: "让许澄在重返祁雾港时被拦下" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "上一批建议" }).click();
+  await expect(page.getByTestId("suggestion-batch-nav")).toContainText("1/2");
+  await expect(
+    page
+      .locator(".ripple-suggestion-card")
+      .filter({ hasText: "许澄没有把红色账簿交给周岚" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "下一批建议" }).click();
+  await expect(page.getByTestId("suggestion-batch-nav")).toContainText("2/2");
+
+  // 关闭/重开面板：复用已缓存的最新批次，不自动生成第三批。
+  await page.getByRole("button", { name: "返回 Evidence" }).click();
+  await page.getByRole("button", { name: "为所选事件创建 Ripple" }).click();
+  await expect(page.getByTestId("suggestion-batch-nav")).toContainText("2/2");
+  await expect(page.getByText("正在寻找值得改变的瞬间…")).toHaveCount(0);
+  await expect(page.getByText("正在换一批…")).toHaveCount(0);
+  await expect(page.locator(".ripple-suggestion-card")).toHaveCount(3);
+});

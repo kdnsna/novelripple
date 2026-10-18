@@ -13,6 +13,9 @@ export async function generateConfiguredStoryMap(input: {
   projectId: string;
   sourceId: string;
   onProgress?: (progress: JobProgress) => void;
+  runGroupId?: string;
+  previousModelCalls?: number;
+  onModelCall?: (modelCallsThisAttempt: number) => void;
 }) {
   const source = getProjectSource(input.projectId, input.sourceId);
   if (!source) throw new Error("找不到指定的 Source");

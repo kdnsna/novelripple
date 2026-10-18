@@ -19,7 +19,7 @@ Story Map review operation 增加 `quick_confirm_story_map`。仓库函数 `quic
 - 从项目内最新 draft revision 创建**新的** confirmed revision，旧行永不 UPDATE；
 - 仍执行 Source 查找、Evidence Unit 派生、`assertValidStoryMap`、`assertValidStoryMapReview` 与 Artifact Schema 校验；
 - 不调用 `requireReadyForRipple`，因此未完成核对也可确认；
-- 不新增或删除 review confirmations，因此 revision 能派生为“未精修”；
+- 不新增或删除 review confirmations，因此未完成的核对仍按 readiness 如实派生“未精修”；快速确认本身不检查 readiness；
 - 已经 confirmed 时幂等返回同一行；base 不是最新 revision 时仍报 stale 并 fail closed；
 - 普通 `confirm_story_map` 路径和 readiness 门完全不变。
 
@@ -30,7 +30,7 @@ confirmed 之后的下游检查一行未改：Ripple Suggestions 生成器、Imp
 新增 `src/domain/review/derive-story-map-refinement.ts`。它接收当前 Artifact 和已有的 `deriveStoryMapReview` 结果：
 
 - `quickConfirmed`：当前 confirmed revision 的 `review.operation.type` 为 `quick_confirm_story_map`；
-- `needsRefinement`：`quickConfirmed` 且 readiness 尚未满足；
+- `needsRefinement`：当前 revision 的 `storyMap.status` 为 `confirmed` 且 `readiness.readyForRipple` 为 false；它不看 operation 类型。普通 `confirm_story_map` 要求 readiness，所以实际上通常只有快速确认的 revision 会满足它；任何修正都会产生新的 draft revision，draft 不满足该条件，因此不显示横幅；
 - 待核对的 Event / Edge / Ending Candidate ID 直接取 Review Queue 中 `status === "pending"` 且目标类型不是 character 的项，沿用原队列与优先级；
 - 不新增置信度阈值、总分或持久化字段。
 
@@ -82,7 +82,28 @@ confirmed 之后的下游检查一行未改：Ripple Suggestions 生成器、Imp
 ## 后果
 
 - 读者生成 candidate Story Map 后可一键确认并立即看到 3 个值得改变的瞬间，Guided Review 成为可选精修。
-- 快速确认的 revision 如实记录“未精修”：operation 为 `quick_confirm_story_map`，confirmations 保持为空；界面可派生角标与横幅，后续修正仍创建新 revision。
+- 快速确认的 revision 如实记录确认方式：operation 为 `quick_confirm_story_map`，confirmations 保持为空；只要 readiness 尚未满足，界面就派生“未精修”角标与横幅，后续修正仍创建新 revision。
 - 下游 confirmed 检查、Source/Evidence 校验、不可变 Artifact、Worldline 隔离与 fail closed 全部保持不变。
 - 自动建议生成会给每个没有 Suggestions 的 confirmed revision 增加一次模型调用；这是现有生成器的一次调用，不新增 Prompt 或并发路径。如果调用失败，用户仍可从时间线自己选事件继续。
 - 读者文案与内部枚举分离；日志、Schema、API 与世界线记录仍使用 `strict` / `open`。
+
+## Addendum（W4）：建议批次与显式「换一批」
+
+- `ripple_suggestions` Artifact 新增可选 `batchIndex` / `refreshOf` / `idempotencyKey`，旧行按批次 0 解析；Artifact 仍然只插入、不 UPDATE。
+- 自动加载继续复用最新批次；只有用户显式点击「换一批」才创建新批次。客户端在点击时生成幂等键，服务端用 `(storyMapArtifactId, batchIndex, idempotencyKey)` 派生目标 Artifact id，并按该 id 使用 in-flight 锁合并并发请求；相同键的重试返回同一行且不调用模型。
+- 不同键的并发换批必须按真实行为理解：同一 revision 的 in-flight 锁只执行第一个生成任务，其他并发请求（即使幂等键不同）await 同一个 Promise 并收到该批次；一次突发只产生一个 `batchIndex`、一次模型调用。锁释放后到达的新键请求才会重新读取已持久化批次并串行分配下一个 `batchIndex`。不会为每个不同键并发写入独立批次。
+- 每个 revision 的批次数上限由 `RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION`（默认 5）控制，按已持久化批次在模型调用前检查；达到上限时 fail closed 并禁用按钮。环境变量 trim 后只接受 `/^[1-9][0-9]*$/` 的纯十进制数字，且不超过 20；`"0x2"`、`"1e0"`、`"+3"`、`" 2.0"` 与超过上限的值都在任何 Prompt 读取与模型调用前 fail closed。
+- 失败调用也计入上限：每个 revision 的 `ripple_suggestions` Generation Run（pending / succeeded / failed）合计最多 `批次数上限 × 2` 次（`RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH = 2`），在任何 Prompt 读取与模型调用前检查，超过后 fail closed 并返回友好错误；成功批次仍受批次数上限约束，失败与成功共享这 2 倍预算。
+- `generation_runs` 新增可空 `story_map_artifact_id` 绑定（迁移 `0010_generation_run_story_map_binding`），换批的 Generation Run 写入当前 Story Map revision；计数按该绑定与 `kind = "ripple_suggestions"` 过滤。旧行或其它 kind 的 run 没有该绑定，解析为 `null`。
+- 换批 Prompt（`ripple-suggestions.v4`）携带之前批次的建议 Event id 与标题；模型重复推荐已建议事件时仍保存该批次，不静默重试。
+- 界面提供 `‹ 1/2 ›` 批次切换与「换一批」；切回旧批次只读已有 Artifact，关闭/重开面板不会自动生成新批次。
+- 本轮未新增数据库表或依赖；批次元数据保存在既有 `artifacts.data_json` 中，Generation Run 只增加可空绑定列。
+
+### Open-source preflight（W4）
+
+检索日期：2026-10-17。本轮受任务约束不执行网络访问，也不复制第三方代码；结论基于仓库现有能力：
+
+- 复用已有的 immutable Artifact 行、`crypto.createHash` 确定性 id、进程内 `runWithInFlightLock`、Zod `.default()` 兼容解析、既有 Generation Run 记录与 `story-map-limits.ts` 的 env 校验模式。
+- 未引入批次/状态管理库：批次导航是单个 React 状态，幂等键使用浏览器原生 `crypto.randomUUID()`。
+- 未新增表：`batchIndex` / `refreshOf` / `idempotencyKey` 都存放在既有 `artifacts.data_json`，旧行按批次 0 解析；`generation_runs` 只增加可空 `story_map_artifact_id` 绑定列。
+- 新依赖：**none**。本轮加固沿用上述复用结论，没有新增依赖或网络调用。

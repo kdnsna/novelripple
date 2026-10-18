@@ -11,6 +11,11 @@ export const GenerationRunSchema = z
     id: z.string().min(1),
     projectId: z.string().min(1),
     worldlineId: z.string().min(1).nullable(),
+    /**
+     * 本次生成绑定的 Story Map revision；旧行与不需要该绑定的生成解析为 null。
+     * Ripple Suggestions 用它把失败与成功尝试按 revision 合计。
+     */
+    storyMapArtifactId: z.string().min(1).nullable().default(null),
     kind: z.string().min(1),
     provider: z.string().min(1),
     model: z.string().min(1),

@@ -12,8 +12,14 @@ import type {
   AIProviderResponse,
 } from "@/server/ai/types";
 import { closeDatabase, getDatabase } from "@/server/db/client";
+import { artifacts } from "@/server/db/schema";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
-import { listProjectGenerationRuns } from "@/server/repositories/generation-run-repository";
+import {
+  countRippleSuggestionGenerationRunsForStoryMap,
+  createGenerationRun,
+  listProjectGenerationRuns,
+  succeedGenerationRun,
+} from "@/server/repositories/generation-run-repository";
 import {
   createProject,
   importProjectSource,
@@ -23,8 +29,10 @@ import {
 } from "@/server/repositories/ripple-repository";
 import {
   listRippleSuggestionsArtifactsForStoryMap,
+  listRippleSuggestionsBatchesForStoryMap,
 } from "@/server/repositories/ripple-suggestions-repository";
 import { generateRippleSuggestions } from "@/server/ripple/generate-ripple-suggestions";
+import { rippleSuggestionAttemptLimit } from "@/server/ripple/ripple-suggestion-limits";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
@@ -40,6 +48,7 @@ beforeAll(async () => {
     "AI_PROVIDER_NAME",
     "OPENAI_MODEL",
     "OPENAI_STRUCTURED_OUTPUT_MODE",
+    "RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION",
   ]) {
     previousEnvironment.set(name, process.env[name]);
   }
@@ -79,6 +88,17 @@ class SlowAIProvider implements AIProvider {
     this.requests.push(request);
     await new Promise((resolve) => setTimeout(resolve, 25));
     return { rawOutput: this.#output };
+  }
+}
+
+/** 每次调用都失败的 provider：用于验证失败尝试也被计入上限。 */
+class FailingAIProvider implements AIProvider {
+  readonly providerName = "failing-mock";
+  readonly requests: AIProviderRequest[] = [];
+
+  async generate(request: AIProviderRequest): Promise<AIProviderResponse> {
+    this.requests.push(request);
+    throw new Error("provider unavailable");
   }
 }
 
@@ -168,7 +188,7 @@ describe("Ripple Suggestions generation", () => {
       listProjectGenerationRuns(project.id).find(
         (run) => run.kind === "ripple_suggestions",
       ),
-    ).toMatchObject({ status: "succeeded", promptVersion: "ripple-suggestions.v3" });
+    ).toMatchObject({ status: "succeeded", promptVersion: "ripple-suggestions.v4" });
   });
 
   it("requires a confirmed Story Map", async () => {
@@ -286,5 +306,307 @@ describe("Ripple Suggestions generation", () => {
     expect(
       listRippleSuggestionsArtifactsForStoryMap(project.id, artifact.id),
     ).toHaveLength(1);
+  });
+
+  it("appends a refresh batch and leaves the previous batch untouched", async () => {
+    const { project, artifact } = await createContext();
+    const first = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    const firstSnapshot = JSON.stringify(first.artifact);
+
+    const refreshProvider = new MockAIProvider([
+      JSON.stringify(validSuggestions),
+    ]);
+    const second = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      idempotencyKey: "refresh-key-1",
+      provider: refreshProvider,
+      modelConfig,
+    });
+
+    expect(second.artifact).toMatchObject({
+      batchIndex: 1,
+      refreshOf: first.artifact.id,
+      idempotencyKey: "refresh-key-1",
+    });
+    expect(second.artifact.id).not.toBe(first.artifact.id);
+    expect(refreshProvider.requests).toHaveLength(1);
+    expect(refreshProvider.requests[0]?.prompt).toContain(
+      '"previousBatches":[{"batchIndex":0',
+    );
+    expect(refreshProvider.requests[0]?.prompt).toContain(
+      '"title":"红色账簿现身"',
+    );
+
+    const batches = listRippleSuggestionsBatchesForStoryMap(
+      project.id,
+      artifact.id,
+    );
+    expect(batches.map((batch) => batch.batchIndex)).toEqual([0, 1]);
+    expect(JSON.stringify(batches[0])).toBe(firstSnapshot);
+    expect(batches[0]?.suggestions).toEqual(first.artifact.suggestions);
+  });
+
+  it("returns the same refresh artifact for the same key without another call", async () => {
+    const { project, artifact } = await createContext();
+    const first = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    const second = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      idempotencyKey: "same-key",
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    const repeatedProvider = new MockAIProvider([]);
+
+    const repeated = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      idempotencyKey: "same-key",
+      provider: repeatedProvider,
+      modelConfig,
+    });
+
+    expect(repeated.artifact).toEqual(second.artifact);
+    expect(repeated.generation).toBeNull();
+    expect(repeatedProvider.requests).toHaveLength(0);
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(2);
+    expect(first.artifact.batchIndex).toBe(0);
+  });
+
+  it("coalesces concurrent refresh requests with the same key into one call", async () => {
+    const { project, artifact } = await createContext();
+    await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    const provider = new SlowAIProvider(JSON.stringify(validSuggestions));
+
+    const [first, second] = await Promise.all([
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        idempotencyKey: "concurrent-refresh",
+        provider,
+        modelConfig,
+      }),
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        idempotencyKey: "concurrent-refresh",
+        provider,
+        modelConfig,
+      }),
+    ]);
+
+    expect(provider.requests).toHaveLength(1);
+    expect(first.artifact.id).toBe(second.artifact.id);
+    expect(first.artifact.batchIndex).toBe(1);
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(2);
+  });
+
+  it("enforces the batch cap before any model call", async () => {
+    const { project, artifact } = await createContext();
+    await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      maxBatches: 2,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      idempotencyKey: "cap-batch-1",
+      maxBatches: 2,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+    const blockedProvider = new MockAIProvider([]);
+    const runsBefore = listProjectGenerationRuns(project.id).filter(
+      (run) => run.kind === "ripple_suggestions",
+    ).length;
+
+    await expect(
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        idempotencyKey: "cap-batch-2",
+        maxBatches: 2,
+        provider: blockedProvider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("换一批上限");
+
+    expect(blockedProvider.requests).toHaveLength(0);
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(2);
+    expect(
+      listProjectGenerationRuns(project.id).filter(
+        (run) => run.kind === "ripple_suggestions",
+      ),
+    ).toHaveLength(runsBefore);
+    expect(
+      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+    ).toBe(2);
+  });
+
+  it("counts failed refresh attempts toward the attempt cap before any model call", async () => {
+    const { project, artifact } = await createContext();
+    const maxBatches = 2;
+    await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      maxBatches,
+      provider: new MockAIProvider([JSON.stringify(validSuggestions)]),
+      modelConfig,
+    });
+
+    // 首批成功已占 1 次尝试；其余预算全部消耗在失败的换批上。
+    const attemptLimit = rippleSuggestionAttemptLimit(maxBatches);
+    const failingProviders: FailingAIProvider[] = [];
+    for (let attempt = 1; attempt < attemptLimit; attempt += 1) {
+      const provider = new FailingAIProvider();
+      failingProviders.push(provider);
+      await expect(
+        generateRippleSuggestions({
+          projectId: project.id,
+          storyMapArtifactId: artifact.id,
+          idempotencyKey: `failed-refresh-${attempt}`,
+          maxBatches,
+          provider,
+          modelConfig,
+        }),
+      ).rejects.toThrow("provider unavailable");
+    }
+
+    const failedCalls = failingProviders.reduce(
+      (total, provider) => total + provider.requests.length,
+      0,
+    );
+    expect(failedCalls).toBe(attemptLimit - 1);
+    expect(
+      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+    ).toBe(attemptLimit);
+    expect(
+      listProjectGenerationRuns(project.id)
+        .filter((run) => run.kind === "ripple_suggestions")
+        .map((run) => ({
+          status: run.status,
+          storyMapArtifactId: run.storyMapArtifactId,
+        })),
+    ).toEqual(
+      expect.arrayContaining([
+        { status: "succeeded", storyMapArtifactId: artifact.id },
+        ...Array.from({ length: attemptLimit - 1 }, () => ({
+          status: "failed",
+          storyMapArtifactId: artifact.id,
+        })),
+      ]),
+    );
+
+    // 达到尝试上限后，即使 provider 本可返回合法结果也不会再被调用。
+    const blockedProvider = new MockAIProvider([
+      JSON.stringify(validSuggestions),
+    ]);
+    await expect(
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        idempotencyKey: "over-attempt-cap",
+        maxBatches,
+        provider: blockedProvider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("生成尝试次数已达");
+
+    expect(blockedProvider.requests).toHaveLength(0);
+    expect(
+      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+    ).toBe(attemptLimit);
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(1);
+  });
+
+  it("fails closed on an invalid batch cap env before any model call", async () => {
+    const { project, artifact } = await createContext();
+    process.env.RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION = "0";
+    const provider = new MockAIProvider([JSON.stringify(validSuggestions)]);
+    try {
+      await expect(
+        generateRippleSuggestions({
+          projectId: project.id,
+          storyMapArtifactId: artifact.id,
+          provider,
+          modelConfig,
+        }),
+      ).rejects.toThrow("必须是正整数");
+      expect(provider.requests).toHaveLength(0);
+    } finally {
+      delete process.env.RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION;
+    }
+  });
+
+  it("parses legacy suggestion rows as batch 0", async () => {
+    const { project, artifact } = await createContext();
+    const run = createGenerationRun({
+      projectId: project.id,
+      worldlineId: null,
+      kind: "ripple_suggestions",
+      provider: "legacy",
+      model: "legacy-model",
+      promptVersion: "ripple-suggestions.v3",
+      inputHash: "0".repeat(64),
+    });
+    succeedGenerationRun({ id: run.id, rawOutput: "{}" });
+    const legacyId = `artifact_ripple_suggestions_legacy_${Date.now()}`;
+    getDatabase()
+      .insert(artifacts)
+      .values({
+        id: legacyId,
+        projectId: project.id,
+        sourceId: artifact.sourceId,
+        worldlineId: null,
+        kind: "ripple_suggestions",
+        schemaVersion: 1,
+        version: null,
+        dataJson: JSON.stringify({
+          storyMapArtifactId: artifact.id,
+          suggestions: validSuggestions.suggestions,
+        }),
+        basedOnArtifactId: artifact.id,
+        generationRunId: run.id,
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+
+    const legacy = listRippleSuggestionsArtifactsForStoryMap(
+      project.id,
+      artifact.id,
+    ).find((batch) => batch.id === legacyId);
+    expect(legacy).toMatchObject({
+      id: legacyId,
+      batchIndex: 0,
+      refreshOf: null,
+      idempotencyKey: null,
+    });
   });
 });

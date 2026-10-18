@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type FormEvent } from "react";
+import { useRef, useState, useTransition, type FormEvent } from "react";
 
 import {
   acceptImpactPlanAction,
@@ -8,6 +8,10 @@ import {
   regenerateRipplePreviewAction,
 } from "@/app/projects/actions";
 import { deriveImpactPlanComparison } from "@/domain/ripple/derive-impact-plan-comparison";
+import {
+  isUncertainImpact,
+  listUsedUncertainEdgeIds,
+} from "@/domain/ripple/derive-uncertain-impact-ids";
 import type {
   Event,
   ImpactPlan,
@@ -17,11 +21,16 @@ import type {
   Worldline,
 } from "@/domain/schemas";
 
+// 保持面板原有导出，纯函数实现只在领域层维护一份。
+export { isUncertainImpact };
+
 type RippleSimulatorPanelProps = {
   projectId: string;
   artifact: StoryMapArtifact;
   selectedEvent: Event;
-  suggestions: RippleSuggestionsArtifact | null;
+  /** 当前 revision 的全部建议批次，按 batchIndex 升序；最后一批为最新。 */
+  suggestionBatches: RippleSuggestionsArtifact[];
+  suggestionBatchLimit: number;
   suggestionsLoading: boolean;
   suggestionsError: string | null;
   needsReviewEndingIds?: string[];
@@ -32,6 +41,10 @@ type RippleSimulatorPanelProps = {
   ) => void;
   onEnterWorldline: (worldlineId: string) => void;
   onRetrySuggestions: () => void;
+  /** 显式点击「换一批」；key 由面板在点击时创建并保留到请求结束。 */
+  onRefreshSuggestions: (
+    idempotencyKey: string,
+  ) => Promise<RippleSuggestionsArtifact | null>;
 };
 
 const divergenceLabels = {
@@ -62,13 +75,24 @@ const impactScopeLabels = {
 
 type ImpactScope = keyof typeof impactScopeLabels;
 
+/**
+ * 旧 Artifact 没有 `usedUncertainEdgeIds`，回退到旧的 `uncertainEdgeIds`；
+ * 两者都没有时按 0 处理，界面不显示提示。
+ */
+export function countUncertainRelations(plan: ImpactPlan): number {
+  return listUsedUncertainEdgeIds(plan).length;
+}
+
 export function summarizeImpactScope(
   plan: ImpactPlan,
   scope: ImpactScope,
 ): string {
   const impacts = plan.impacts.filter((impact) => impact.scope === scope);
   if (impacts.length === 0) return "无";
-  const first = impacts[0]!.summary;
+  const firstImpact = impacts[0]!;
+  const first = isUncertainImpact(plan, firstImpact.id)
+    ? `可能：${firstImpact.summary}`
+    : firstImpact.summary;
   return impacts.length > 1 ? `${first}（另有 ${impacts.length - 1} 项）` : first;
 }
 
@@ -112,7 +136,8 @@ export function RippleSimulatorPanel({
   projectId,
   artifact,
   selectedEvent,
-  suggestions,
+  suggestionBatches,
+  suggestionBatchLimit,
   suggestionsLoading,
   suggestionsError,
   needsReviewEndingIds = [],
@@ -120,6 +145,7 @@ export function RippleSimulatorPanel({
   onAccepted,
   onEnterWorldline,
   onRetrySuggestions,
+  onRefreshSuggestions,
 }: RippleSimulatorPanelProps) {
   const [divergenceType, setDivergenceType] = useState<
     "prevent" | "choice" | "outcome"
@@ -132,11 +158,25 @@ export function RippleSimulatorPanel({
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // null 表示跟随最新批次；用户在 ‹ › 中切换后固定到具体批次。
+  const [activeSuggestionBatchId, setActiveSuggestionBatchId] = useState<
+    string | null
+  >(null);
+  const [refreshingSuggestions, startRefreshSuggestions] = useTransition();
+  const suggestionRefreshKey = useRef<string | null>(null);
+  const suggestionRefreshPending = useRef(false);
   const storyMap = artifact.storyMap;
   const rippleEvent =
     storyMap.events.find((event) => event.id === rippleEventId) ?? selectedEvent;
   const plan = preview?.impactPlan ?? null;
   const comparison = plan ? deriveImpactPlanComparison(storyMap, plan) : null;
+  const uncertainRelationCount = plan ? countUncertainRelations(plan) : 0;
+  const uncertainEdgeIds = new Set(
+    plan ? listUsedUncertainEdgeIds(plan) : [],
+  );
+  const uncertainRelations = storyMap.edges.filter((edge) =>
+    uncertainEdgeIds.has(edge.id),
+  );
   const characterNames = Object.fromEntries(
     storyMap.characters.map((character) => [character.id, character.name]),
   );
@@ -145,10 +185,54 @@ export function RippleSimulatorPanel({
   );
   const formatReasonPath = (reasonPath: string[]) =>
     reasonPath.map((eventId) => eventTitles[eventId] ?? eventId).join(" → ");
+  const latestSuggestionBatch =
+    suggestionBatches[suggestionBatches.length - 1] ?? null;
+  const activeSuggestionBatch =
+    (activeSuggestionBatchId === null
+      ? null
+      : suggestionBatches.find((batch) => batch.id === activeSuggestionBatchId)) ??
+    latestSuggestionBatch;
+  const activeSuggestionBatchIndex = activeSuggestionBatch
+    ? suggestionBatches.findIndex(
+        (batch) => batch.id === activeSuggestionBatch.id,
+      )
+    : -1;
+  const canRefreshSuggestions =
+    suggestionBatches.length < suggestionBatchLimit;
   const incompatible =
     plan?.anchorEvaluations.some(
       (evaluation) => evaluation.status === "incompatible",
     ) ?? false;
+
+  function selectSuggestionBatch(offset: number): void {
+    if (activeSuggestionBatchIndex < 0) return;
+    const next =
+      suggestionBatches[activeSuggestionBatchIndex + offset] ?? null;
+    if (next) setActiveSuggestionBatchId(next.id);
+  }
+
+  /**
+   * 只有显式点击才请求新批次。key 在点击时创建并保留到请求结束：
+   * 失败后再次点击复用同一 key，服务端可返回已写入的同一 Artifact，
+   * 不会因为网络重试而多生成一批。
+   */
+  function refreshSuggestions(): void {
+    if (suggestionRefreshPending.current || !canRefreshSuggestions) return;
+    suggestionRefreshPending.current = true;
+    const idempotencyKey =
+      suggestionRefreshKey.current ?? crypto.randomUUID();
+    suggestionRefreshKey.current = idempotencyKey;
+    startRefreshSuggestions(async () => {
+      try {
+        const artifact = await onRefreshSuggestions(idempotencyKey);
+        if (!artifact) return;
+        suggestionRefreshKey.current = null;
+        setActiveSuggestionBatchId(artifact.id);
+      } finally {
+        suggestionRefreshPending.current = false;
+      }
+    });
+  }
   function changeMode(nextMode: "strict" | "open"): void {
     setMode(nextMode);
     if (nextMode === "open") setEndingCandidateIds([]);
@@ -274,7 +358,17 @@ export function RippleSimulatorPanel({
                 <button
                   className="secondary-button compact-button"
                   disabled={suggestionsLoading}
-                  onClick={onRetrySuggestions}
+                  onClick={() => {
+                    // 换批失败时沿用同一幂等键重试；首次加载失败才走无键复用路径。
+                    if (
+                      suggestionBatches.length > 0 &&
+                      suggestionRefreshKey.current !== null
+                    ) {
+                      refreshSuggestions();
+                      return;
+                    }
+                    onRetrySuggestions();
+                  }}
                   type="button"
                 >
                   重试
@@ -282,44 +376,96 @@ export function RippleSimulatorPanel({
               </div>
             ) : null}
 
-            {suggestions ? (
-              <div className="ripple-suggestion-list">
-                {suggestions.suggestions.map((suggestion) => {
-                  const event = storyMap.events.find(
-                    (candidate) => candidate.id === suggestion.eventId,
-                  );
-                  return (
-                    <article
-                      className="ripple-suggestion-card"
-                      key={`${suggestions.id}:${suggestion.eventId}`}
+            {activeSuggestionBatch ? (
+              <>
+                <div className="ripple-suggestion-list">
+                  {activeSuggestionBatch.suggestions.map((suggestion) => {
+                    const event = storyMap.events.find(
+                      (candidate) => candidate.id === suggestion.eventId,
+                    );
+                    return (
+                      <article
+                        className="ripple-suggestion-card"
+                        key={`${activeSuggestionBatch.id}:${suggestion.eventId}`}
+                      >
+                        <div>
+                          <span>{divergenceLabels[suggestion.divergenceType]}</span>
+                          <small>Anchor 风险：{suggestion.anchorRisk}</small>
+                        </div>
+                        <h4>{event?.title ?? suggestion.eventId}</h4>
+                        <p>
+                          <b>为什么值得改变：</b>
+                          {suggestion.whyInteresting}
+                        </p>
+                        <strong>
+                          <b>建议改动：</b>
+                          {suggestion.instruction}
+                        </strong>
+                        <button
+                          className="secondary-button compact-button"
+                          onClick={() => applySuggestion(suggestion)}
+                          type="button"
+                        >
+                          从这里改变
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                <div className="ripple-suggestions-actions">
+                  {suggestionBatches.length > 1 ? (
+                    <div
+                      className="suggestion-batch-nav"
+                      data-testid="suggestion-batch-nav"
                     >
-                      <div>
-                        <span>{divergenceLabels[suggestion.divergenceType]}</span>
-                        <small>Anchor 风险：{suggestion.anchorRisk}</small>
-                      </div>
-                      <h4>{event?.title ?? suggestion.eventId}</h4>
-                      <p>
-                        <b>为什么值得改变：</b>
-                        {suggestion.whyInteresting}
-                      </p>
-                      <strong>
-                        <b>建议改动：</b>
-                        {suggestion.instruction}
-                      </strong>
                       <button
-                        className="secondary-button compact-button"
-                        onClick={() => applySuggestion(suggestion)}
+                        aria-label="上一批建议"
+                        disabled={activeSuggestionBatchIndex <= 0}
+                        onClick={() => selectSuggestionBatch(-1)}
                         type="button"
                       >
-                        从这里改变
+                        ‹
                       </button>
-                    </article>
-                  );
-                })}
-              </div>
+                      <span>
+                        {activeSuggestionBatchIndex + 1}/{suggestionBatches.length}
+                      </span>
+                      <button
+                        aria-label="下一批建议"
+                        disabled={
+                          activeSuggestionBatchIndex < 0 ||
+                          activeSuggestionBatchIndex >=
+                            suggestionBatches.length - 1
+                        }
+                        onClick={() => selectSuggestionBatch(1)}
+                        type="button"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  ) : (
+                    <span />
+                  )}
+                  <div className="ripple-suggestions-refresh">
+                    <button
+                      className="text-button"
+                      disabled={!canRefreshSuggestions || refreshingSuggestions}
+                      onClick={refreshSuggestions}
+                      type="button"
+                    >
+                      {refreshingSuggestions ? "正在换一批…" : "换一批"}
+                    </button>
+                    {!canRefreshSuggestions ? (
+                      <small>
+                        已达到本 revision 的换一批上限（{suggestionBatchLimit} 批）
+                      </small>
+                    ) : null}
+                  </div>
+                </div>
+              </>
             ) : null}
 
-            {!suggestions && !suggestionsLoading && !suggestionsError ? (
+            {!activeSuggestionBatch && !suggestionsLoading && !suggestionsError ? (
               <p>推荐只是候选；生成后不会自动推演或创建 Worldline。</p>
             ) : null}
 
@@ -457,6 +603,15 @@ export function RippleSimulatorPanel({
               </div>
             ))}
 
+            {uncertainRelationCount > 0 ? (
+              <p
+                className="impact-uncertainty-note"
+                data-testid="impact-uncertainty-note"
+              >
+                含 {uncertainRelationCount} 条未精修/不确定关系
+              </p>
+            ) : null}
+
             <div className="impact-summary-row impact-summary-anchor">
               <span>{plan.mode === "strict" ? "原结局" : "故事走向"}</span>
               <strong>
@@ -548,28 +703,62 @@ export function RippleSimulatorPanel({
                   <h4>{impactScopeLabels[scope]}</h4>
                   {plan.impacts
                     .filter((impact) => impact.scope === scope)
-                    .map((impact) => (
-                      <article className="impact-item" key={impact.id}>
-                        <span className={`change change-${impact.changeType}`}>
-                          {impact.changeType === "removed"
-                            ? "−"
-                            : impact.changeType === "added"
-                              ? "+"
-                              : "~"}
-                        </span>
-                        <div>
-                          <strong>{impact.summary}</strong>
-                          <p><b>为什么：</b>{impact.explanation}</p>
-                          <small>
-                            因果路径：{formatReasonPath(impact.reasonPath)}
-                            {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
-                            {" · "}置信度：{Math.round(impact.confidence * 100)}%
-                          </small>
-                        </div>
-                      </article>
-                    ))}
+                    .map((impact) => {
+                      const uncertain = isUncertainImpact(plan, impact.id);
+                      return (
+                        <article
+                          className={`impact-item${uncertain ? " impact-uncertain" : ""}`}
+                          key={impact.id}
+                        >
+                          <span className={`change change-${impact.changeType}`}>
+                            {impact.changeType === "removed"
+                              ? "−"
+                              : impact.changeType === "added"
+                                ? "+"
+                                : "~"}
+                          </span>
+                          <div>
+                            <strong>
+                              {impact.summary}
+                              {uncertain ? (
+                                <em className="review-badge">可能</em>
+                              ) : null}
+                            </strong>
+                            <p><b>为什么：</b>{impact.explanation}</p>
+                            <small>
+                              因果路径：{formatReasonPath(impact.reasonPath)}
+                              {" · "}路径起点：{eventTitles[impact.fromEventId] ?? impact.fromEventId}
+                              {" · "}置信度：{Math.round(impact.confidence * 100)}%
+                            </small>
+                            {uncertain ? (
+                              <small className="impact-uncertain-path-note">
+                                该路径只由未精修/不确定关系支撑，只能作为可能。
+                              </small>
+                            ) : null}
+                          </div>
+                        </article>
+                      );
+                    })}
                 </section>
               ))}
+
+              {uncertainRelations.length > 0 ? (
+                <section
+                  className="impact-group impact-uncertain-relations"
+                  data-testid="impact-uncertain-relations"
+                >
+                  <h4>不确定关系（{uncertainRelations.length}）</h4>
+                  <ul>
+                    {uncertainRelations.map((edge) => (
+                      <li key={edge.id}>
+                        <strong>可能：</strong>
+                        {edge.explanation}
+                        <small>（未精修/不确定关系，不作为已确认因果）</small>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               {mapAnchorEvaluationRows(plan).map((evaluation) => (
                 <section

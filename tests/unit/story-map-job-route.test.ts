@@ -35,8 +35,12 @@ afterAll(async () => {
   await rm(temporaryDirectory, { recursive: true });
 });
 
-function get(jobId: string) {
-  return GET(new Request(`http://localhost/api/jobs/${jobId}`), {
+function get(jobId: string, projectId: string | null) {
+  const query =
+    projectId === null
+      ? ""
+      : `?projectId=${encodeURIComponent(projectId)}`;
+  return GET(new Request(`http://localhost/api/jobs/${jobId}${query}`), {
     params: Promise.resolve({ jobId }),
   });
 }
@@ -50,7 +54,7 @@ describe("GET /api/jobs/[jobId]", () => {
       input: { sourceId: "source_route_1" },
     });
 
-    const response = await get(job.id);
+    const response = await get(job.id, project.id);
     const body = (await response.json()) as Record<string, unknown>;
 
     expect(response.status).toBe(200);
@@ -68,11 +72,40 @@ describe("GET /api/jobs/[jobId]", () => {
     expect(JSON.stringify(body)).not.toContain("source_route_1");
   });
 
-  it("rejects invalid or unknown job ids", async () => {
-    const invalid = await get("not-a-job");
-    expect(invalid.status).toBe(400);
+  it("requires a valid project id", async () => {
+    const project = createProject({ title: "Job route project id" });
+    const job = createJob({
+      projectId: project.id,
+      kind: "story_map_generation",
+      input: { sourceId: "source_route_2" },
+    });
 
-    const missing = await get("job_00000000-0000-4000-8000-000000000000");
+    expect((await get(job.id, null)).status).toBe(400);
+    expect((await get(job.id, "")).status).toBe(400);
+  });
+
+  it("rejects invalid job ids", async () => {
+    const project = createProject({ title: "Job route invalid id" });
+    expect((await get("not-a-job", project.id)).status).toBe(400);
+  });
+
+  it("returns the same 404 for a missing job and another project's job", async () => {
+    const owner = createProject({ title: "Job route owner" });
+    const other = createProject({ title: "Job route other" });
+    const job = createJob({
+      projectId: owner.id,
+      kind: "story_map_generation",
+      input: { sourceId: "source_route_3" },
+    });
+
+    const missing = await get(
+      "job_00000000-0000-4000-8000-000000000000",
+      owner.id,
+    );
+    const foreign = await get(job.id, other.id);
+
     expect(missing.status).toBe(404);
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toEqual(await missing.json());
   });
 });

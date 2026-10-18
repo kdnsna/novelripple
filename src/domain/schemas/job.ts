@@ -6,6 +6,21 @@ import { z } from "zod";
  */
 export const JobKindSchema = z.enum(["story_map_generation"]);
 
+/**
+ * 启动 Story Map 生成的显式模式：
+ * - resume（默认）：最新任务 failed / interrupted 时沿用它的 run group，复用检查点与预算；
+ * - fresh：总是新建 run group，不读旧检查点，预算从 0 开始。
+ */
+export const StoryMapGenerationStartModeSchema = z.enum(["resume", "fresh"]);
+
+/**
+ * 模型调用预算耗尽的固定脱敏文案。
+ * 与 `STORY_MAP_MAX_MODEL_CALLS` 的原始错误分开：UI 依据该常量把
+ * “从头重新生成”作为明确出路，且不泄露 Prompt、原文或底层异常。
+ */
+export const STORY_MAP_BUDGET_EXHAUSTED_ERROR =
+  "本次生成已用完模型调用预算（STORY_MAP_MAX_MODEL_CALLS）；请选择“从头重新生成”开始新的预算。";
+
 export const JobStatusSchema = z.enum([
   "queued",
   "running",
@@ -33,17 +48,39 @@ export const JobProgressSchema = z
     stage: StoryMapJobStageSchema,
     completed: z.number().int().nonnegative(),
     total: z.number().int().nonnegative(),
+    /** 续跑时已完整复用的分块数；只在 chunking / extract / glean 阶段出现。 */
+    reusedChunks: z.number().int().nonnegative().optional(),
   })
   .strict()
   .refine((progress) => progress.completed <= progress.total, {
     message: "Job progress completed 不能超过 total",
     path: ["completed"],
-  });
+  })
+  .refine(
+    (progress) =>
+      progress.reusedChunks === undefined ||
+      progress.reusedChunks <= progress.total,
+    {
+      message: "Job progress reusedChunks 不能超过 total",
+      path: ["reusedChunks"],
+    },
+  );
+
+export const JobIdSchema = z
+  .string()
+  .regex(
+    /^job_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "无效的 Job ID",
+  );
 
 /** 任务输入只保存 ID，绝不保存原文。 */
 export const StoryMapGenerationJobInputSchema = z
   .object({
     sourceId: z.string().min(1).max(200),
+    /** 同一逻辑生成的多次 attempt 共享；新生成使用全新 group，重试沿用上一 attempt。 */
+    runGroupId: z.string().min(1).max(200).optional(),
+    /** 重试只追加新行，并显式指向被重试的上一 attempt。 */
+    retryOfJobId: JobIdSchema.optional(),
   })
   .strict();
 
@@ -57,13 +94,6 @@ export const StoryMapGenerationJobResultSchema = z
 
 export const JobResultSchema = StoryMapGenerationJobResultSchema;
 
-export const JobIdSchema = z
-  .string()
-  .regex(
-    /^job_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    "无效的 Job ID",
-  );
-
 export const JobSchema = z
   .object({
     id: JobIdSchema,
@@ -74,6 +104,8 @@ export const JobSchema = z
     progress: JobProgressSchema,
     result: JobResultSchema.nullable(),
     error: z.string().min(1).max(500).nullable(),
+    /** 本 attempt 的模型调用数；跨 attempt 预算按同一 run group 求和。 */
+    modelCalls: z.number().int().nonnegative(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
     heartbeatAt: z.iso.datetime(),
@@ -133,6 +165,9 @@ export const JobSchema = z
   });
 
 export type JobKind = z.infer<typeof JobKindSchema>;
+export type StoryMapGenerationStartMode = z.infer<
+  typeof StoryMapGenerationStartModeSchema
+>;
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 export type StoryMapJobStage = z.infer<typeof StoryMapJobStageSchema>;
 export type JobProgress = z.infer<typeof JobProgressSchema>;

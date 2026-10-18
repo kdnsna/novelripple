@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import {
   GenerationRunSchema,
@@ -18,7 +18,10 @@ type CreateGenerationRunInput = Pick<
   | "model"
   | "promptVersion"
   | "inputHash"
->;
+> & {
+  /** 可选：把本次生成绑定到具体 Story Map revision；旧调用方无需传。 */
+  storyMapArtifactId?: string | null;
+};
 
 export function createGenerationRun(
   input: CreateGenerationRunInput,
@@ -106,4 +109,29 @@ export function listProjectGenerationRuns(projectId: string): GenerationRun[] {
     .orderBy(desc(generationRuns.createdAt), desc(generationRuns.id))
     .all()
     .map((row) => GenerationRunSchema.parse(row));
+}
+
+/**
+ * 统计某个 Story Map revision 上已发起的 Ripple Suggestions 生成尝试。
+ *
+ * 每行 Generation Run 在第一次 provider 调用前创建，失败时保留为 failed，
+ * 因此 pending / succeeded / failed 都算一次尝试。批次 Artifact 只在成功时
+ * 写入；只数批次会让失败重试绕过成本上限，所以上限必须按这里的尝试数检查。
+ */
+export function countRippleSuggestionGenerationRunsForStoryMap(
+  projectId: string,
+  storyMapArtifactId: string,
+): number {
+  const row = getDatabase()
+    .select({ count: sql<number>`count(*)` })
+    .from(generationRuns)
+    .where(
+      and(
+        eq(generationRuns.projectId, projectId),
+        eq(generationRuns.kind, "ripple_suggestions"),
+        eq(generationRuns.storyMapArtifactId, storyMapArtifactId),
+      ),
+    )
+    .get();
+  return row?.count ?? 0;
 }

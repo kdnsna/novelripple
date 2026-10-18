@@ -51,6 +51,8 @@ export type StructuredValidationIssue = {
 export type StructuredGenerationInput<T> = {
   projectId: string;
   worldlineId?: string | null;
+  /** 可选：绑定本次生成到具体 Story Map revision，供按 revision 统计尝试。 */
+  storyMapArtifactId?: string | null;
   kind: string;
   promptVersion: string;
   prompt: string;
