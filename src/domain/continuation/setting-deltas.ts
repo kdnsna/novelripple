@@ -10,6 +10,7 @@ import type {
   SettingDeltaV1,
 } from "@/domain/schemas";
 
+import { SettingDeltaError } from "./setting-delta-error";
 import {
   SETTING_DELTA_CONTEXT_MAX_CHARS,
   SETTING_DELTA_MAX_ACTIVE,
@@ -137,7 +138,7 @@ export function buildSettingDeltaContextItems(input: {
  *
  * 组装器渲染 Prompt 与写入时的 2k 上限检查都调用这一个函数，因此
  * “写时测量”与“真正进入 Prompt 的文本”逐字节一致，不会再出现
- * 去控制字符/NFKC 后的测量值与原始渲染值脱节。
+ * 去不可见字符/NFC 后的测量值与原始渲染值脱节。
  */
 export function renderSettingDeltaContextText(
   items: readonly Pick<SettingDeltaContextItem, "text">[],
@@ -220,7 +221,8 @@ export function assertSettingDeltaPathsFit(input: {
     }).filter((entry) => entry.status === "active");
 
     if (active.length > SETTING_DELTA_MAX_ACTIVE) {
-      throw new Error(
+      throw new SettingDeltaError(
+        "path_active_limit",
         `会使「${affected.label}」所在路径的生效设定增量超过 ${SETTING_DELTA_MAX_ACTIVE} 条：请先停用或删除该路径上的已有规则，或为已有主体改写说明`,
       );
     }
@@ -231,7 +233,8 @@ export function assertSettingDeltaPathsFit(input: {
     });
     const length = renderSettingDeltaContextText(items).length;
     if (length > SETTING_DELTA_CONTEXT_MAX_CHARS) {
-      throw new Error(
+      throw new SettingDeltaError(
+        "path_text_limit",
         `会使「${affected.label}」所在路径的设定增量超过 ${SETTING_DELTA_CONTEXT_MAX_CHARS} 字（当前 ${length} 字）：请缩短规则说明，或停用/删除该路径上的其他规则`,
       );
     }

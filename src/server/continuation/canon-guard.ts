@@ -1,4 +1,7 @@
-import type { ContinuationCanonGuardPolicy } from "@/domain/invariants/validate-continuation";
+import {
+  CONTINUATION_CANON_HARD_REJECT_ISSUE_CODE,
+  type ContinuationCanonGuardPolicy,
+} from "@/domain/invariants/validate-continuation";
 import { StructuredGenerationError } from "@/server/ai/generate-structured";
 
 export const CONTINUATION_CANON_GUARD_ENV = "CONTINUATION_CANON_GUARD";
@@ -62,8 +65,11 @@ export function isCanonGuardRejectionError(
 }
 
 /**
- * 执行结构化生成；若最终失败且本次校验记录了高置信 Canon 否定，则抛出
- * 带事件标题的专用错误（Generation Run 已被既有路径标为 failed）。
+ * 执行结构化生成；只有最终（repair 后）失败的问题仍包含 Canon 硬拒绝时，
+ * 才抛出带事件标题的专用错误（Generation Run 已被既有路径标为 failed）。
+ *
+ * 首轮因 Canon 被拒、但 repair 因 JSON 等其它原因失败时，不能把读者文案
+ * 说成 Canon 拒绝。
  */
 export async function runWithCanonGuard<T>(
   run: () => Promise<T>,
@@ -73,7 +79,12 @@ export async function runWithCanonGuard<T>(
     return await run();
   } catch (error) {
     const titles = getHardRejectionTitles();
-    if (error instanceof StructuredGenerationError && titles.length > 0) {
+    const finalCanonReject =
+      error instanceof StructuredGenerationError &&
+      error.finalIssues.some(
+        (issue) => issue.code === CONTINUATION_CANON_HARD_REJECT_ISSUE_CODE,
+      );
+    if (error instanceof StructuredGenerationError && finalCanonReject && titles.length > 0) {
       throw new CanonGuardRejectionError(titles);
     }
     throw error;

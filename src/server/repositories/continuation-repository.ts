@@ -17,10 +17,10 @@ import {
   SettingDeltaLifecycleV1Schema,
   SettingDeltaSubjectSchema,
   SettingDeltaV1Schema,
-  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
+  findForbiddenSettingDeltaChar,
   normalizeSettingDeltaText,
-  settingDeltaTextHasControlChars,
   type ContinuationArtifact,
   type ContinuationCanonWarning,
   type ContinuationDirectionsArtifact,
@@ -37,7 +37,11 @@ import {
   type SettingDeltaV1,
   type Worldline,
 } from "@/domain/schemas";
-import { SETTING_DELTA_MAX_ROWS_PER_WORLDLINE } from "@/domain/continuation/setting-delta-limits";
+import { SettingDeltaError } from "@/domain/continuation/setting-delta-error";
+import {
+  SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE,
+  SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
+} from "@/domain/continuation/setting-delta-limits";
 import { buildSceneTree, type SceneTree } from "@/domain/continuation/scene-tree";
 import {
   assertSettingDeltaPathsFit,
@@ -414,13 +418,19 @@ export function createSettingDeltaArtifact(input: {
 }): SettingDeltaArtifact {
   if (
     input.subject.kind === "term" &&
-    settingDeltaTextHasControlChars(input.subject.name)
+    findForbiddenSettingDeltaChar(input.subject.name) !== null
   ) {
-    throw new Error(SETTING_DELTA_CONTROL_CHAR_MESSAGE);
+    throw new SettingDeltaError(
+      "forbidden_char",
+      SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
+    );
   }
   const subject = SettingDeltaSubjectSchema.parse(input.subject);
-  if (settingDeltaTextHasControlChars(input.statement)) {
-    throw new Error(SETTING_DELTA_CONTROL_CHAR_MESSAGE);
+  if (findForbiddenSettingDeltaChar(input.statement) !== null) {
+    throw new SettingDeltaError(
+      "forbidden_char",
+      SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
+    );
   }
   const statement = normalizeSettingDeltaText(input.statement);
   const idempotencyKey = input.idempotencyKey.trim();
@@ -428,17 +438,24 @@ export function createSettingDeltaArtifact(input: {
     statement.length === 0 ||
     statement.length > SETTING_DELTA_STATEMENT_MAX_CHARS
   ) {
-    throw new Error(
+    throw new SettingDeltaError(
+      "invalid_statement_length",
       `设定增量说明必须为 1–${SETTING_DELTA_STATEMENT_MAX_CHARS} 个字符`,
     );
   }
   if (idempotencyKey.length === 0 || idempotencyKey.length > 200) {
-    throw new Error("设定增量幂等键必须为 1–200 个字符");
+    throw new SettingDeltaError(
+      "invalid_idempotency_key",
+      "设定增量幂等键必须为 1–200 个字符",
+    );
   }
 
   const worldline = getWorldline(input.worldlineId);
   if (!worldline || worldline.projectId !== input.projectId) {
-    throw new Error("Worldline 不存在或不属于当前项目");
+    throw new SettingDeltaError(
+      "worldline_not_found",
+      "Worldline 不存在或不属于当前项目",
+    );
   }
   const storyMapArtifact = getStoryMapArtifact(
     worldline.baseStoryMapArtifactId,
@@ -448,7 +465,10 @@ export function createSettingDeltaArtifact(input: {
     storyMapArtifact.projectId !== input.projectId ||
     storyMapArtifact.storyMap.status !== "confirmed"
   ) {
-    throw new Error("设定增量必须绑定当前项目的 confirmed Story Map 基线");
+    throw new SettingDeltaError(
+      "story_map_not_confirmed",
+      "设定增量必须绑定当前项目的 confirmed Story Map 基线",
+    );
   }
   if (input.anchorSceneId !== null) {
     const anchor = getContinuationArtifact(input.anchorSceneId);
@@ -458,7 +478,10 @@ export function createSettingDeltaArtifact(input: {
       anchor.projectId !== input.projectId ||
       anchor.worldlineId !== worldline.id
     ) {
-      throw new Error("锚点场景不属于当前 Worldline");
+      throw new SettingDeltaError(
+        "invalid_anchor",
+        "锚点场景不属于当前 Worldline",
+      );
     }
   }
   if (subject.kind === "character") {
@@ -467,7 +490,10 @@ export function createSettingDeltaArtifact(input: {
         (character) => character.id === subject.characterId,
       )
     ) {
-      throw new Error("设定增量的人物不在当前 Worldline 的 Story Map 中");
+      throw new SettingDeltaError(
+        "unknown_character",
+        "设定增量的人物不在当前 Worldline 的 Story Map 中",
+      );
     }
   }
 
@@ -483,16 +509,30 @@ export function createSettingDeltaArtifact(input: {
       existing.worldlineId !== worldline.id ||
       existing.settingDelta.anchorSceneId !== input.anchorSceneId
     ) {
-      throw new Error("设定增量幂等键已被其他内容占用");
+      throw new SettingDeltaError(
+        "idempotency_conflict",
+        "设定增量幂等键已被其他内容占用",
+      );
     }
     return existing;
   }
 
   const state = loadSettingDeltaState(worldline.id);
-  // 行数上限包含软删除行：软删除只释放 active 名额，不释放存储行，否则
-  // “新增 → 删除”循环会让世界线的行数无上界。
+  const statuses = settingDeltaLifecycleStatuses(state.lifecycles);
+  const nonDeletedRowCount = state.deltas.filter(
+    (delta) => statuses.get(delta.id) !== "deleted",
+  ).length;
+  // 未删除行上限防止规则无限增长；总行数上限（含软删除）防止
+  // “新增 → 删除”循环。两道上限在创建时都必须独立通过。
+  if (nonDeletedRowCount >= SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE) {
+    throw new SettingDeltaError(
+      "worldline_active_rows_limit",
+      `设定增量已达到每条世界线未删除规则的上限（${SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE} 条）：请先删除不再需要的规则`,
+    );
+  }
   if (state.deltas.length >= SETTING_DELTA_MAX_ROWS_PER_WORLDLINE) {
-    throw new Error(
+    throw new SettingDeltaError(
+      "worldline_total_rows_limit",
       `设定增量已达到每条世界线的上限（${SETTING_DELTA_MAX_ROWS_PER_WORLDLINE} 条，含已删除规则）`,
     );
   }
@@ -541,7 +581,10 @@ export function createSettingDeltaArtifact(input: {
     stored.settingDelta.anchorSceneId !== input.anchorSceneId ||
     stored.settingDelta.statement !== statement
   ) {
-    throw new Error("设定增量 Artifact 写入失败");
+    throw new SettingDeltaError(
+      "artifact_write_failed",
+      "设定增量 Artifact 写入失败",
+    );
   }
   return stored;
 }
@@ -564,12 +607,18 @@ export function createSettingDeltaLifecycleArtifact(input: {
   const status = SettingDeltaLifecycleStatusSchema.parse(input.status);
   const idempotencyKey = input.idempotencyKey.trim();
   if (idempotencyKey.length === 0 || idempotencyKey.length > 200) {
-    throw new Error("设定增量生命周期幂等键必须为 1–200 个字符");
+    throw new SettingDeltaError(
+      "invalid_lifecycle_idempotency_key",
+      "设定增量生命周期幂等键必须为 1–200 个字符",
+    );
   }
 
   const worldline = getWorldline(input.worldlineId);
   if (!worldline || worldline.projectId !== input.projectId) {
-    throw new Error("Worldline 不存在或不属于当前项目");
+    throw new SettingDeltaError(
+      "worldline_not_found",
+      "Worldline 不存在或不属于当前项目",
+    );
   }
   const target = getContinuationArtifact(input.targetDeltaId);
   if (
@@ -578,7 +627,10 @@ export function createSettingDeltaLifecycleArtifact(input: {
     target.projectId !== input.projectId ||
     target.worldlineId !== worldline.id
   ) {
-    throw new Error("设定增量不存在或不属于当前 Worldline");
+    throw new SettingDeltaError(
+      "delta_not_found",
+      "设定增量不存在或不属于当前 Worldline",
+    );
   }
   const storyMapArtifact = getStoryMapArtifact(
     worldline.baseStoryMapArtifactId,
@@ -588,7 +640,10 @@ export function createSettingDeltaLifecycleArtifact(input: {
     storyMapArtifact.projectId !== input.projectId ||
     storyMapArtifact.storyMap.status !== "confirmed"
   ) {
-    throw new Error("设定增量必须绑定当前项目的 confirmed Story Map 基线");
+    throw new SettingDeltaError(
+      "story_map_not_confirmed",
+      "设定增量必须绑定当前项目的 confirmed Story Map 基线",
+    );
   }
 
   const id = stableSettingDeltaLifecycleArtifactId(
@@ -603,7 +658,10 @@ export function createSettingDeltaLifecycleArtifact(input: {
       existing.lifecycle.targetDeltaId !== target.id ||
       existing.lifecycle.status !== status
     ) {
-      throw new Error("设定增量生命周期幂等键已被其他内容占用");
+      throw new SettingDeltaError(
+        "lifecycle_idempotency_conflict",
+        "设定增量生命周期幂等键已被其他内容占用",
+      );
     }
     return existing;
   }
@@ -621,18 +679,23 @@ export function createSettingDeltaLifecycleArtifact(input: {
   const state = loadSettingDeltaState(worldline.id);
   const targetDelta = state.deltas.find((delta) => delta.id === target.id);
   if (!targetDelta) {
-    throw new Error("设定增量不存在或不属于当前 Worldline");
+    throw new SettingDeltaError(
+      "delta_not_found",
+      "设定增量不存在或不属于当前 Worldline",
+    );
   }
   const latestStatus = settingDeltaLifecycleStatuses(state.lifecycles).get(
     target.id,
   );
-  // 软删除是终态：不能再恢复，也不能在“已删除”上追加停用。只允许继续追加
-  // deleted（仍只追加、不 UPDATE），保证旧行可追溯。
-  if (
-    latestStatus === "deleted" &&
-    (status === "reactivated" || status === "deactivated")
-  ) {
-    throw new Error("已删除的设定增量不能恢复");
+  // 软删除是终态：不能再恢复、停用，也不能重复删除。相同幂等键的重复请求
+  // 已在上面的 existing 分支返回同一行，因此这里只拦截真正的新生命周期事件。
+  if (latestStatus === "deleted") {
+    throw new SettingDeltaError(
+      "deleted_terminal",
+      status === "deleted"
+        ? "设定增量已删除，不能重复删除"
+        : "已删除的设定增量不能恢复",
+    );
   }
 
   if (status === "reactivated") {
@@ -669,7 +732,10 @@ export function createSettingDeltaLifecycleArtifact(input: {
     stored.lifecycle.targetDeltaId !== target.id ||
     stored.lifecycle.status !== status
   ) {
-    throw new Error("设定增量生命周期 Artifact 写入失败");
+    throw new SettingDeltaError(
+      "lifecycle_write_failed",
+      "设定增量生命周期 Artifact 写入失败",
+    );
   }
   return stored;
 }

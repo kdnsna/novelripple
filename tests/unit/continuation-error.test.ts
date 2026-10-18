@@ -4,11 +4,14 @@ import {
   CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE,
   ContinuationContextBudgetError,
 } from "@/domain/continuation/context-assembler";
+import { CONTINUATION_CANON_HARD_REJECT_ISSUE_CODE } from "@/domain/invariants/validate-continuation";
 import {
   CanonGuardRejectionError,
   readContinuationCanonGuardPolicy,
+  runWithCanonGuard,
 } from "@/server/continuation/canon-guard";
 import { continuationErrorMessage } from "@/server/continuation/continuation-error";
+import { StructuredGenerationError } from "@/server/ai/generate-structured";
 
 function budgetError(neededChars = 24_432, maxChars = 24_000) {
   return new ContinuationContextBudgetError({
@@ -95,6 +98,45 @@ describe("continuationErrorMessage", () => {
       "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」，已拒绝且未保存；请重试或换一批。",
     );
     expect(message).not.toContain("Structured generation failed");
+  });
+
+  it("only claims a canon rejection when the final failing issues are canon issues", async () => {
+    // 首轮 Canon 硬拒绝、repair 因 JSON 无效失败：最终问题不是 Canon，不能
+    // 把读者文案说成「明确否定」。
+    let nonCanonFailure: unknown;
+    try {
+      await runWithCanonGuard(
+        async () => {
+          throw new StructuredGenerationError("run_1", [
+            { path: "", message: "Response is not valid JSON" },
+          ]);
+        },
+        () => ["铜门被打开"],
+      );
+    } catch (error) {
+      nonCanonFailure = error;
+    }
+    expect(nonCanonFailure).toBeInstanceOf(StructuredGenerationError);
+    expect(continuationErrorMessage(nonCanonFailure, "scene")).toBe(
+      "Continuation 生成失败；结构化输出未通过校验，未保存 Artifact。",
+    );
+    expect(continuationErrorMessage(nonCanonFailure, "scene")).not.toContain(
+      "明确否定",
+    );
+
+    const canonFailure = runWithCanonGuard(
+      async () => {
+        throw new StructuredGenerationError("run_2", [
+          {
+            path: "prose",
+            message: "生成内容明确否定了分歧前已确认的事件：铜门被打开",
+            code: CONTINUATION_CANON_HARD_REJECT_ISSUE_CODE,
+          },
+        ]);
+      },
+      () => ["铜门被打开"],
+    );
+    await expect(canonFailure).rejects.toBeInstanceOf(CanonGuardRejectionError);
   });
 
   it("surfaces an invalid canon guard policy instead of silently disabling it", () => {

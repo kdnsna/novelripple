@@ -510,7 +510,9 @@ describe("post-generation pre-divergence canon validation", () => {
   }
 
   it("flags prose that says a locked event did not happen", () => {
-    expect(validate(["许澄发现证据并未发生，公众始终不知道真相。"])).toEqual(
+    expect(
+      validate(["许澄发现证据根本没有发生过，公众始终不知道真相。"]),
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           message: expect.stringContaining("发现证据"),
@@ -547,21 +549,47 @@ describe("post-generation pre-divergence canon validation", () => {
     );
   });
 
-  it("flags a locked event title immediately preceded by a negation", () => {
-    expect(validate(["没有发现证据，也没有留下任何记录。"])).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: "textFields.0",
-        }),
-      ]),
-    );
+  it("does not hard-reject a bare negation immediately before a locked title", () => {
+    const result = evaluate(["没有发现证据，也没有留下任何记录。"]);
+    expect(result.issues).toEqual([]);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("does not hard-reject counterfactual or loss-framed sentences", () => {
+    for (const text of [
+      "如果没有发现证据，两人也不会结仇。",
+      "再也没有了发现证据那晚的热闹。",
+      "没有发现证据那天的任何记录留下来。",
+    ]) {
+      const result = evaluate([text]);
+      expect(result.issues).toEqual([]);
+      expect(result.warnings.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("still hard-rejects an explicit occurrence negation", () => {
+    for (const text of [
+      "发现证据从未发生。",
+      "发现证据根本没有发生过。",
+      "从来没有发生过发现证据。",
+      "发现证据是捏造的。",
+    ]) {
+      expect(validate([text])).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "textFields.0",
+            message: expect.stringContaining("发现证据"),
+          }),
+        ]),
+      );
+    }
   });
 
   it("flags a direction premise that rewrites a locked event", () => {
     expect(
       validate([
         "让周岚只做见证",
-        "发现证据其实并未发生，周岚只记录未公开的判断。",
+        "发现证据根本没有发生过，周岚只记录未公开的判断。",
         "独立见证链得到补强。",
       ]),
     ).toEqual(

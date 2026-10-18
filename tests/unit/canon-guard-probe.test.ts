@@ -20,8 +20,8 @@ const stats = computeCanonGuardProbeStats();
 
 describe("canon guard labeled probe", () => {
   it(
-    `catch ${stats.caught}/11, hard false-reject ${stats.hardFalseRejects}/14, ` +
-      `warnings ${stats.warningsOnLegitimate}/14, neutral ${
+    `catch ${stats.caught}/11, hard false-reject ${stats.hardFalseRejects}/17, ` +
+      `warnings ${stats.warningsOnLegitimate}/17, neutral ${
         stats.neutralHardRejects
       }`,
     () => {
@@ -34,11 +34,11 @@ describe("canon guard labeled probe", () => {
       expect(computeCanonGuardProbeStats()).toEqual(stats);
       expect(stats).toMatchInlineSnapshot(`
         {
-          "caught": 7,
+          "caught": 5,
           "hardFalseRejects": 0,
           "neutralHardRejects": 0,
-          "warningsOnLegitimate": 5,
-          "warningsOnShouldReject": 2,
+          "warningsOnLegitimate": 8,
+          "warningsOnShouldReject": 4,
         }
       `);
     },
@@ -69,7 +69,7 @@ describe("canon guard labeled probe", () => {
 
   it("records the expected probe sizes", () => {
     expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(11);
-    expect(CANON_GUARD_LEGITIMATE).toHaveLength(14);
+    expect(CANON_GUARD_LEGITIMATE).toHaveLength(17);
     expect(CANON_GUARD_NEUTRAL_PROSE.length).toBeGreaterThan(200);
   });
 });

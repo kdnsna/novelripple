@@ -125,7 +125,10 @@ export const CANON_GUARD_SHOULD_REJECT = [
   "故事里灯塔熄灭这一设定不再成立。",
 ] as const;
 
-/** 14 条合法续写：回忆、因果、附近出现其他否定词、分歧后事件与路径删除。 */
+/**
+ * 17 条合法续写：回忆、因果、附近出现其他否定词、反事实/失去义、分歧后事件
+ * 与路径删除。裸 `没有<title>` 不再是硬拒绝。
+ */
 export const CANON_GUARD_LEGITIMATE = [
   "她想起灯塔熄灭那晚，从此不再靠近海岸。",
   "他始终没有忘记灯塔熄灭时的那声钟响。",
@@ -141,6 +144,9 @@ export const CANON_GUARD_LEGITIMATE = [
   "她不曾忘记渡船停航前的约定。",
   "灯塔熄灭的事，他后来常常提起。",
   "封锁码头那场雨里，没有人再说话。",
+  "如果没有灯塔熄灭，两人也不会结仇。",
+  "再也没有了灯塔熄灭那晚的热闹。",
+  "没有灯塔熄灭那天的任何记录留下来。",
 ] as const;
 
 /** 数百字中性叙述，逐字提到锁定事件标题但不含否定/改写语义。 */
@@ -159,9 +165,9 @@ export const CANON_GUARD_NEUTRAL_PROSE = [
 export type CanonGuardProbeStats = {
   /** 11 条应拒绝中，被硬拒绝的数量。 */
   caught: number;
-  /** 14 条合法续写中被硬拒绝的数量（必须为 0）。 */
+  /** 17 条合法续写中被硬拒绝的数量（必须为 0）。 */
   hardFalseRejects: number;
-  /** 14 条合法续写中出现 warning 的数量。 */
+  /** 17 条合法续写中出现 warning 的数量。 */
   warningsOnLegitimate: number;
   /** 中性长文中被硬拒绝的数量（必须为 0）。 */
   neutralHardRejects: number;

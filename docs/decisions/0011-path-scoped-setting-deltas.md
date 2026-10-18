@@ -22,7 +22,7 @@
 - `statement`：读者规则，1–200 字；
 - `contentKind: "user"`、`createdAt`。
 
-`statement` 与术语 `name` 在写入时做 NFKC + trim，长度按规范化后的文本检查（200 / 40）；存储与 Prompt 渲染使用同一份规范化文本。C0（含换行、制表符）、DEL、C1 与 U+2028/U+2029 一律拒绝，错误为「设定说明/词条名不能包含控制字符或换行」。Zod Schema、服务端与界面共用同一组控制字符/规范化 helper，因此不存在“测量去控制字符、渲染保留控制字符”的双口径。
+`statement` 与术语 `name` 在写入时做 NFC + trim，长度按存储的 NFC 文本检查（200 / 40）；存储与 Prompt 渲染使用同一份文本。NFC 保留读者输入的 `，！？：（）；…①` 等字符；NFKC 只用于术语主体匹配（`subjectKey`）。按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`，并单独拒绝变体选择符 U+FE00–FE0F / U+E0100–E01EF；这覆盖零宽 U+200B/U+200D/FEFF/00AD、bidi U+200E/202E/2066、孤立代理、标签字符与私用区。错误为「设定说明/词条名不能包含控制字符、不可见字符或换行」。Zod Schema、服务端与界面共用同一个 `findForbiddenSettingDeltaChar` 与 NFC helper，因此不存在“测量去不可见字符、渲染保留不可见字符”的双口径。
 
 它不调用模型，因此没有 Generation Run，也没有 `basedOnArtifactId`。写入只追加，永不 UPDATE；修订规则等于追加一条更新的设定增量。
 
@@ -67,14 +67,18 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 
 ### 5. 写时上限与序列化上限
 
-- 每条 Worldline 最多保存 `SETTING_DELTA_MAX_ROWS_PER_WORLDLINE = 200` 条 `setting_delta` 行，**包含软删除行**；软删除只释放 active 名额，不释放存储行，因此“新增 → 删除”循环不会让行数无上界。
+- 每条 Worldline 同时受两道行数上限：
+  - `SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE = 50` 条未软删除的 `setting_delta` 行（停用仍算行）；
+  - `SETTING_DELTA_MAX_ROWS_PER_WORLDLINE = 200` 条全部行，**包含软删除行**。
+  软删除只释放 active 与未删除行名额，不释放全部存储行，因此“新增 → 删除”循环不会让总行数无上界。
 - 新增与重新启用时，不只检查锚点自己的路径，而是检查锚点子树里的**每一条**根→节点路径：锚点为 `null` 时是空根路径加树中每个节点，锚点为场景 X 时是 X 及其全部后代。对每条路径派生 post-write active 集合（含生命周期），分别检查：
   - active 主体数 ≤ `SETTING_DELTA_MAX_ACTIVE = 20`；
   - 实际渲染进 Prompt 的 `setting_deltas` 文本长度 ≤ `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000`。
-- 渲染函数只有一个：`renderSettingDeltaContextText(items)` 返回 `<setting_deltas>` 标签内部逐条文本（`\n` 连接）的精确字符串。组装器与写时检查都调用它，写时 `.length` 就是 Prompt 实际长度；不再使用 `normalizedContextChars` 之类的第二套测量。NFKC 组合字符（例如谚文 jamo）在存储、测量、渲染三处一致。
-- 任一路径超限即 fail closed，中文错误指出具体路径（如「会使「第 3 幕 · 标题」所在路径的生效设定增量超过 20 条」/「…的设定增量超过 2000 字」）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
-- 检查与插入之间没有 `await`，并发写入只能有一个越过上限；重新启用同样对整棵锚点子树检查。
-- 界面在当前路径 active ≥ 20 时提示并禁用添加；世界线总行数（含已删除）≥ 200 时同样禁用。服务端仍独立校验，不依赖界面。
+- 渲染函数只有一个：`renderSettingDeltaContextText(items)` 返回 `<setting_deltas>` 标签内部逐条文本（`\n` 连接）的精确字符串。组装器与写时检查都调用它，写时 `.length` 就是 Prompt 实际长度；不再使用 `normalizedContextChars` 之类的第二套测量。NFC 组合字符（例如谚文 jamo）在存储、测量、渲染三处一致。
+- 任一路径或世界线上限超限即 fail closed，中文错误指出具体路径（如「会使「第 3 幕 · 标题」所在路径的生效设定增量超过 20 条」/「…的设定增量超过 2000 字」）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
+- 仓储与领域检查统一抛 `SettingDeltaError`，带稳定 `code`（`forbidden_char`、`path_active_limit`、`path_text_limit`、`worldline_active_rows_limit`、`worldline_total_rows_limit`、`deleted_terminal`、`invalid_anchor` 等）与已面向读者的中文 `message`。Server Action 对该类型直接返回 `error.message`，不再维护易漂移的字符串白名单。
+- 检查与插入之间没有 `await`，并发写入只能有一个越过上限；重新启用同样对整棵锚点子树检查，不增加行数但必须尊重 50 条未删除行与 20 个 active 主体。
+- 界面在当前路径 active ≥ 20、世界线未删除行 ≥ 50 或全部行（含已删除）≥ 200 时提示并禁用添加。服务端仍独立校验，不依赖界面。
 
 ### 6. 独立的 `setting_deltas` 上下文段
 
@@ -99,8 +103,8 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 锚点固定为当前节点：根/空路径为 `null`，否则为当前场景 id；
 - 提交使用打开表单时生成的幂等键，并有与其它 pending 操作相同的同步双击保护；
 - 成功后把返回 Artifact 追加到视图并关闭表单，失败显示 `role="alert"` 错误；
-- 表单无效、当前路径 active ≥ 20 或达到每条世界线 200 行总上限（含已删除）时禁用提交/添加；
-- 停用、重新启用、软删除各调用独立 Server Action，全部 `revalidatePath` 且不调用模型；服务端错误已是中文可执行提示。已删除规则不在列表中，因此界面不会提供重新启用；服务端也拒绝对 deleted 规则执行 reactivated / deactivated。
+- 表单无效、当前路径 active ≥ 20、世界线未删除行 ≥ 50 或达到每条世界线 200 行总上限（含已删除）时禁用提交/添加；
+- 停用、重新启用、软删除各调用独立 Server Action，全部 `revalidatePath` 且不调用模型；服务端错误已是中文可执行提示且经类型化错误原样到达读者。已删除规则不在列表中，因此界面不会提供重新启用；服务端也拒绝对 deleted 规则执行 reactivated / deactivated，新的重复删除同样 fail closed（相同幂等键的重放仍返回原行）。
 
 ### 9. 陈旧方向批次与生成后分歧前 Canon 校验
 
@@ -112,14 +116,14 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 生成后、保存 Artifact 前增加确定性校验 `validateAgainstPreDivergenceCanon`：
 
 - **锁定集合**与 `validateContinuationStatePatch` 的“分歧前”定义一致：Story Map 中 `sequence < 分歧事件.sequence` 且不在**当前路径状态** `factsRemoved`（`derivePathState(baseDelta, path)`）中的事件。分歧后事件永不锁定；路径上合法删除的事件也不锁定。
-- **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、`没有忘记<title>`、附近出现 `取消了`、提及其它否定词，都只产生 warning，不阻断保存。
+- **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，且否定词后必须确实跟“发生/存在”类谓词（例如 `从来没有发生过<title>`、`<title>根本没有发生过`、`<title>是捏造的`），中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。裸 `没有<title>`、`没有忘记<title>`、反事实（如果/要不是/若是/假如/倘若）、失去义（没有了/再也没有）、回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、附近出现 `取消了`、提及其它否定词，都只产生 warning，不阻断保存。
 - **召回边界**：换一种说法的否定、隐含矛盾、与已确认设定的矛盾不会被这个字面护栏抓到。它是低召回护栏，不是语义判定。
 - **策略开关**：环境变量 `CONTINUATION_CANON_GUARD` 由服务端配置 helper 解析，缺省 `strict`；`warn` 把所有信号降级为 warning，`off` 关闭生成后检查（Prompt 护栏仍保留）。非法值在任何模型调用前 fail closed。
 - **硬拒绝**仍走既有 validation-issue → repair → fail-closed 路径：Generation Run 记为 failed、保留原始输出、不落 Artifact。服务端边界把可识别的 Canon 硬拒绝映射为「生成内容明确否定了分歧前已确认的原著事件「<title>」，已拒绝且未保存；请重试或换一批。」，不回显模型正文。
 - **warning** 不阻断保存：作为可选 `canonWarnings: Array<{ eventId, field, reason }>` 附加在 v2 方向/场景 payload 上（旧行没有该字段仍可解析），界面显示一条非阻断的「原著一致性提示」。永不静默修补或删句。
 - 方向校验覆盖标题、前提与预期后果，场景校验覆盖标题、正文与摘要。
 
-标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**catch 7/11，hard false-reject 0/14，legit warnings 5/14，中性长文 hard reject 0**。11 条应拒绝样本包含可被字面规则抓住的直接否定、前缀否定与“是捏造的/根本不存在”，也包含明确抓不到的改写；14 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、分歧后事件、路径删除事件与中性提及。测试同时断言硬假阳性必须为 0。
+标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**catch 5/11，hard false-reject 0/17，legit warnings 8/17，中性长文 hard reject 0**。11 条应拒绝样本包含可被字面规则抓住的直接否定、前缀否定与“是捏造的/根本不存在”，也包含明确抓不到的改写；17 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、反事实/失去义、分歧后事件、路径删除事件与中性提及。测试同时断言硬假阳性必须为 0。
 
 ### 10. 上下文阶梯与单调性
 
@@ -146,16 +150,16 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 读者可以在任意场景节点写下短规则；规则只沿该节点及其后代可见，兄弟分支与分歧点不会看到，刷新后仍从不可变 Artifact 恢复。
 - 同一主体的新规则会覆盖旧规则，旧版本保留在“此前：…”中；停用/重新启用/软删除只追加生命周期事件，原规则永不 UPDATE。
 - 生效规则进入独立的 `setting_deltas` 段，写时已保证锚点子树里每条路径 ≤20 个生效主体且实际渲染 ≤2k；上下文预算不足时规则会从最浅/最旧开始整条裁剪，不影响必需段。
-- 任一受影响路径已有 20 个生效主体时，新主体写入会 fail closed；替换已有主体仍可写入，但必须所有受影响路径都不超限。界面提前提示并禁用添加。
+- 任一受影响路径已有 20 个生效主体、世界线已有 50 条未删除行或 200 条总行数时，新规则写入会 fail closed；替换已有主体仍可写入，但必须所有受影响路径都不超限。界面提前提示并禁用添加。
 - 设定变化后，受影响的未确认方向批次显示 stale 提示并禁止继续选择/重试；系统不会自动换批，已确认场景保持可读。
 - Prompt 同时要求规则优先于更早路径状态/分歧后推演，并明确禁止改写分歧点之前的原著事实。生成后还会对“被改写的分歧前事件”做确定性校验，命中即拒绝整个候选；但校验基于标题/摘要与固定线索字符串，不能理解所有同义改写，也不会逐条验证每条读者规则是否被遵守。
-- 失败是整体失败：派生错误不返回部分列表；写入错误不留下半条规则；达到 active / 真实渲染 2k / 世界线总行数（含删除）上限时服务端 fail closed、界面禁用添加；stale 批次或 `strict` 下明确否定分歧前事件的候选不写 Artifact。
+- 失败是整体失败：派生错误不返回部分列表；写入错误不留下半条规则；达到 active / 真实渲染 2k / 未删除 50 行 / 世界线总行数（含删除）200 行上限时服务端 fail closed、界面禁用添加；stale 批次或 `strict` 下明确否定分歧前事件的候选不写 Artifact。
 
 ### 已知限制
 
-- 软删除与停用是只追加的生命周期事件，不做物理删除。`deleted` 是终态：不能重新启用或在已删除规则上停用，界面也不提供“撤销删除”；未软删除的停用规则仍可重新启用。世界线总行数包含已删除行，上限 200。
+- 软删除与停用是只追加的生命周期事件，不做物理删除。`deleted` 是终态：不能重新启用、停用或再次删除，界面也不提供“撤销删除”；未软删除的停用规则仍可重新启用。世界线未删除行上限 50，全部行（含已删除）上限 200。
 - 主体只有人物与术语两类，没有地点/组织/物品等独立类型；这些暂时用术语表达。
-- 没有关键词触发或 `name ∪ aliases` 匹配；所有当前路径生效规则都会注入，依赖每条路径 20 个主体、真实渲染 2k 与每条世界线 200 行（含删除）保持有界。
+- 没有关键词触发或 `name ∪ aliases` 匹配；所有当前路径生效规则都会注入，依赖每条路径 20 个主体、真实渲染 2k、每条世界线 50 条未删除行与 200 行总上限（含删除）保持有界。
 - 裁剪只按锚点深度/创建时间决定，不按规则对当前场景的重要性排序；更深/更新的规则保留更久，但同层规则可能被整条丢弃。
 - 没有把场景 `statePatch.characterChanges` 自动转成以场景为锚的 progression；人物变化仍只属于路径状态，设定增量由读者显式添加。
 - 生成后校验只覆盖高置信字面否定，召回率低：同义改写、隐含矛盾、与已确认设定的矛盾不会被硬拒绝；也不校验每条读者设定规则是否被遵守。warning 只是提示，不阻断保存。需要更强保证时应扩展同一拒绝路径，而不是静默修补或把规则伪装成 Canon。

@@ -1419,7 +1419,7 @@ describe("Continuation scene tree generation", () => {
     const violatingDirections: ContinuationDirectionsModelOutput = {
       directions: directionOutput.directions.map((direction, index) =>
         index === 0
-          ? { ...direction, premise: "铜门被打开并未发生，许澄仍被挡在门外。" }
+          ? { ...direction, premise: "铜门被打开根本没有发生过，许澄仍被挡在门外。" }
           : direction,
       ),
     };
@@ -1454,7 +1454,7 @@ describe("Continuation scene tree generation", () => {
         index === 0
           ? {
               ...direction,
-              premise: "铜门被打开其实并未发生，许澄仍被挡在门外。",
+              premise: "铜门被打开从来没有发生过，许澄仍被挡在门外。",
             }
           : direction,
       ),
@@ -1499,7 +1499,7 @@ describe("Continuation scene tree generation", () => {
     });
     const violatingScene: ContinuationSceneModelOutputV3 = {
       ...sceneOutput,
-      prose: `${M1_06_LONG_SCENE_PROSE}\n\n铜门被打开并未发生，许澄仍在门外等待。`,
+      prose: `${M1_06_LONG_SCENE_PROSE}\n\n铜门被打开根本没有发生过，许澄仍在门外等待。`,
     };
     const provider = new MockAIProvider([
       JSON.stringify(violatingScene),
@@ -1543,7 +1543,7 @@ describe("Continuation scene tree generation", () => {
       anchorSceneId: null,
       subject: { kind: "term", name: jamo.repeat(10) },
       statement: jamo.repeat(60),
-      idempotencyKey: "prompt-measured-nfkc",
+      idempotencyKey: "prompt-measured-nfc",
     });
     const provider = new MockAIProvider([JSON.stringify(directionOutput)]);
     await generateContinuationDirections({
@@ -1566,7 +1566,7 @@ describe("Continuation scene tree generation", () => {
         characters: context.storyMapArtifact.storyMap.characters,
       }),
     );
-    // 写时测量 == 实际渲染；NFKC 组合字符在两侧一致。
+    // 写时测量 == 实际渲染；NFC 组合字符在两侧一致。
     expect(section).toBe(rendered);
     expect(section.length).toBe(rendered.length);
     expect(section).toContain("\uAC01");

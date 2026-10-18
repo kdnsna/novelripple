@@ -8,7 +8,7 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import {
-  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SettingDeltaSubjectSchema,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
@@ -23,6 +23,7 @@ import {
   type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
+import { isSettingDeltaError } from "@/domain/continuation/setting-delta-error";
 import {
   generateConfiguredContinuationDirections,
   generateConfiguredContinuationScene,
@@ -434,7 +435,7 @@ const AddSettingDeltaInputSchema = z
     worldlineId: z.string().min(1),
     anchorSceneId: z.string().min(1).nullable(),
     subject: SettingDeltaSubjectSchema,
-    // 长度/控制字符/NFKC 由仓储层在规范化后统一校验，避免 Action 的原始
+    // 长度/不可见字符/NFC 由仓储层在规范化后统一校验，避免 Action 的原始
     // 长度上限抢先拒绝本应被规范化接受的文本。
     statement: z.string(),
     idempotencyKey: z.string().trim().min(1).max(200),
@@ -513,43 +514,20 @@ export async function deleteSettingDeltaAction(
 }
 
 function settingDeltaErrorMessage(error: unknown): string {
+  // Zod 只可能来自主体/说明的 Schema 解析；错误文案本身就是面向读者的规则说明。
   if (error instanceof z.ZodError) {
     if (
       error.issues.some(
-        (issue) => issue.message === SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+        (issue) => issue.message === SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
       )
     ) {
-      return SETTING_DELTA_CONTROL_CHAR_MESSAGE;
+      return SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE;
     }
     return "设定增量参数无效：请检查主体、说明与锚点。";
   }
-  if (!(error instanceof Error)) {
-    return "设定增量保存失败，未写入任何规则。";
-  }
-  const safeMessages = [
-    SETTING_DELTA_CONTROL_CHAR_MESSAGE,
-    "设定增量说明必须为 1–200 个字符",
-    "设定增量幂等键必须为 1–200 个字符",
-    "设定增量生命周期幂等键必须为 1–200 个字符",
-    "Worldline 不存在或不属于当前项目",
-    "设定增量必须绑定当前项目的 confirmed Story Map 基线",
-    "锚点场景不属于当前 Worldline",
-    "设定增量的人物不在当前 Worldline 的 Story Map 中",
-    "设定增量幂等键已被其他内容占用",
-    "设定增量生命周期幂等键已被其他内容占用",
-    "设定增量不存在或不属于当前 Worldline",
-    "已删除的设定增量不能恢复",
-    "设定增量 Artifact 写入失败",
-    "设定增量生命周期 Artifact 写入失败",
-  ];
-  if (safeMessages.includes(error.message)) return error.message;
-  if (
-    error.message.startsWith("设定增量已达到每条世界线的上限") ||
-    error.message.startsWith("当前路径最多保留") ||
-    error.message.startsWith("设定增量上下文最多")
-  ) {
-    return error.message;
-  }
+  // 仓储/领域检查统一抛 SettingDeltaError：message 已包含路径等规则相关
+  // 上下文，直接透传，不再维护一份易漂移的字符串白名单。
+  if (isSettingDeltaError(error)) return error.message;
   return "设定增量保存失败，未写入任何规则。";
 }
 

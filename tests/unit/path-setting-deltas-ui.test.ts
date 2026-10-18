@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { buildSceneTree } from "@/domain/continuation/scene-tree";
 import {
-  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
+  SettingDeltaLifecycleV1Schema,
   SettingDeltaV1Schema,
 } from "@/domain/schemas";
 
@@ -14,6 +15,7 @@ import {
   settingDeltaAddBlockReason,
   settingDeltaAnchorHint,
   settingDeltaHistoryLabel,
+  settingDeltaNonDeletedRowCount,
   settingDeltaScopeLabel,
   settingDeltaStatementRemaining,
   settingDeltaSubjectLabel,
@@ -22,6 +24,7 @@ import {
 } from "@/components/story-workspace/path-setting-deltas-ui";
 import {
   SETTING_DELTA_MAX_ACTIVE,
+  SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE,
   SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
 } from "@/domain/continuation/setting-delta-limits";
 import { v2SceneFixture } from "../helpers/continuation-scene-fixtures";
@@ -189,30 +192,49 @@ describe("path setting delta presentation helpers", () => {
     });
   });
 
-  it("rejects control characters and line breaks in both fields", () => {
-    for (const value of ["旧灯塔\n已被封锁", "旧灯塔\u0001已被封锁", "旧灯塔\u2028已被封锁"]) {
+  it("rejects control, invisible, malformed and private-use characters in both fields", () => {
+    const forbidden = [
+      "\n",
+      "\u0001",
+      "\u2028",
+      "\u200B",
+      "\u200D",
+      "\uFEFF",
+      "\u00AD",
+      "\u200E",
+      "\u202E",
+      "\u2066",
+      "\uD800",
+      "\uDC00",
+      "\u{E0001}",
+      "\u{E0041}",
+      "\uFE0F",
+      "\u{E0100}",
+      "\uE000",
+    ];
+    for (const value of forbidden) {
       expect(
         validateSettingDeltaDraft({
           subjectKind: "term",
           characterId: "",
           termName: "旧灯塔",
-          statement: value,
+          statement: `旧灯塔${value}已被封锁`,
         }),
-      ).toEqual({ valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE });
+      ).toEqual({ valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE });
+      expect(
+        validateSettingDeltaDraft({
+          subjectKind: "term",
+          characterId: "",
+          termName: `旧灯${value}塔`,
+          statement: "旧灯塔已被封锁。",
+        }),
+      ).toEqual({ valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE });
     }
-    expect(
-      validateSettingDeltaDraft({
-        subjectKind: "term",
-        characterId: "",
-        termName: "旧灯\u0001塔",
-        statement: "旧灯塔已被封锁。",
-      }),
-    ).toEqual({ valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE });
   });
 
-  it("stores NFKC-composed text and measures the normalized length", () => {
-    // U+1100 U+1161 U+11A8 经 NFKC 组合成 U+AC01（각）。
-    const composed = "\u1100\u1161\u11a8";
+  it("stores NFC-composed text, preserves full-width punctuation, and measures the stored length", () => {
+    // U+1100 U+1161 U+11A8 经 NFC 也组合成 U+AC01（각）。
+    const composed = "\u1100\u1161\u11A8";
     expect(
       validateSettingDeltaDraft({
         subjectKind: "term",
@@ -225,6 +247,22 @@ describe("path setting delta presentation helpers", () => {
       subject: { kind: "term", name: "\uAC01" },
       statement: "\uAC01",
     });
+
+    // NFC 保留中文全角标点与 ①，不把它们改写成 ASCII。
+    const punctuation = "，！？：（）；…①";
+    expect(punctuation.normalize("NFC")).toBe(punctuation);
+    expect(
+      validateSettingDeltaDraft({
+        subjectKind: "term",
+        characterId: "",
+        termName: punctuation,
+        statement: `旧灯塔${punctuation}`,
+      }),
+    ).toEqual({
+      valid: true,
+      subject: { kind: "term", name: punctuation },
+      statement: `旧灯塔${punctuation}`,
+    });
   });
 
   it("warns and blocks adding when active rules on the current path reach the cap", () => {
@@ -236,19 +274,56 @@ describe("path setting delta presentation helpers", () => {
       ]),
     ).toBe(2);
     expect(
-      settingDeltaAddBlockReason({ activeCount: 19, totalCount: 19 }),
+      settingDeltaAddBlockReason({
+        activeCount: 19,
+        activeRowCount: 19,
+        totalCount: 19,
+      }),
     ).toBeNull();
     expect(
       settingDeltaAddBlockReason({
         activeCount: SETTING_DELTA_MAX_ACTIVE,
+        activeRowCount: SETTING_DELTA_MAX_ACTIVE,
         totalCount: SETTING_DELTA_MAX_ACTIVE,
       }),
     ).toContain("停用或软删除已有规则");
     expect(
       settingDeltaAddBlockReason({
         activeCount: 1,
+        activeRowCount: SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE,
+        totalCount: SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE,
+      }),
+    ).toContain("未删除");
+    expect(
+      settingDeltaAddBlockReason({
+        activeCount: 1,
+        activeRowCount: 1,
         totalCount: SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
       }),
     ).toContain("每条 Worldline 最多保存");
+  });
+
+  it("counts non-deleted rows separately from all rows", () => {
+    const deltas = ["delta_1", "delta_2", "delta_3"].map((id) =>
+      delta({ id, statement: "旧灯塔还能通行。", anchorSceneId: null }),
+    );
+    const lifecycle = (id: string, status: "deleted" | "deactivated") =>
+      SettingDeltaLifecycleV1Schema.parse({
+        id: `lifecycle_${id}`,
+        worldlineId: "wl_1",
+        targetDeltaId: id,
+        status,
+        contentKind: "user",
+        createdAt: "2026-10-18T00:00:00.000Z",
+      });
+    expect(settingDeltaNonDeletedRowCount(deltas, [])).toBe(3);
+    expect(settingDeltaNonDeletedRowCount(deltas, [lifecycle("delta_1", "deleted")])).toBe(2);
+    // 停用仍占未删除行名额。
+    expect(
+      settingDeltaNonDeletedRowCount(deltas, [
+        lifecycle("delta_1", "deleted"),
+        lifecycle("delta_2", "deactivated"),
+      ]),
+    ).toBe(2);
   });
 });

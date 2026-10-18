@@ -240,6 +240,10 @@ export type ContinuationCanonHardRejection = {
   field: string;
 };
 
+/** 最终校验问题中的 Canon 硬拒绝标记；只用于服务端选择错误文案。 */
+export const CONTINUATION_CANON_HARD_REJECT_ISSUE_CODE =
+  "continuation_canon_hard_reject" as const;
+
 export type PreDivergenceCanonEvaluation = {
   issues: DomainValidationIssue[];
   warnings: ContinuationCanonWarning[];
@@ -254,9 +258,10 @@ export type PreDivergenceCanonEvaluation = {
  * “分歧前”定义一致：分歧后事件永远不锁定，路径上合法删除的事件也不锁定。
  *
  * 精度只做高置信的字面否定：锁定事件标题与一个明确的“未发生/不存在/是假的”
- * 谓词直接绑定（中间只允许少量助词），且落在同一句内。回忆、因果、普通提到
- * 某个否定词只会产生 warning，不阻断保存。改写同义句、隐含矛盾与设定矛盾
- * 不在本护栏的召回范围内。
+ * 谓词直接绑定（否定词后必须跟“发生/存在”类谓词，或标题后跟“是假的”类
+ * 谓词；中间只允许少量助词），且落在同一句内。裸 `没有<title>`、回忆、因果、
+ * 反事实（如果/要不是/若是/假如/倘若）与失去义（没有了/再也没有）只会产生
+ * warning，不阻断保存。改写同义句、隐含矛盾与设定矛盾不在本护栏的召回范围内。
  *
  * 命中硬拒绝时返回 issue，由调用方走既有 fail-closed 路径；绝不静默裁剪、
  * 修补或改写模型输出。
@@ -317,6 +322,7 @@ export function validateAgainstPreDivergenceCanon(input: {
         issues.push({
           path: field.field,
           message: `生成内容明确否定了分歧前已确认的事件：${event.title}`,
+          code: CONTINUATION_CANON_HARD_REJECT_ISSUE_CODE,
         });
         hardRejections.push({
           eventId: event.id,
@@ -380,31 +386,24 @@ const CANON_WEAK_CUES = [
  */
 const CANON_PARTICLE_GAP = "[过 了的这那场件事次段个幕一起回，,、]{0,4}";
 
+/** 明确否定“发生/存在”的否定词；裸 `没有<title>` 不再硬拒。 */
 const CANON_OCCURRENCE_NEGATION = [
   "从未",
-  "从没",
   "从来没有",
   "根本没有",
-  "其实并没有",
-  "其实没有",
-  "其实从未",
-  "其实并未",
   "并没有",
-  "并未",
-  "不曾",
+  "其实没有",
   "没有",
 ]
   .map(escapeRegExp)
   .join("|");
 
-const CANON_OCCURRENCE_VERB = [
-  "发生过",
-  "发生",
-  "存在过",
-  "存在",
-  "出现过",
-  "出现",
-]
+/** 否定词后必须跟“发生/存在”类谓词，才能说明事件未发生/不存在。 */
+const CANON_PREFIX_NEGATION_VERB = ["发生过", "发生", "存在过", "存在"]
+  .map(escapeRegExp)
+  .join("|");
+
+const CANON_OCCURRENCE_VERB = ["发生过", "发生", "存在过", "存在"]
   .map(escapeRegExp)
   .join("|");
 
@@ -419,8 +418,21 @@ const CANON_FAKE_PREDICATE = [
   .map(escapeRegExp)
   .join("|");
 
-/** 直接前缀否定：`从未(发生过)?<title>`；不含裸 `没有`，避免窗口误伤。 */
-const CANON_PREFIX_NEGATION = CANON_OCCURRENCE_NEGATION;
+/**
+ * 反事实/失去义句子不构成“事件未发生”的断言。
+ *
+ * `如果没有<title>…`、`再也没有了<title>…`、`没有<title>那天的记录…`
+ * 都只是在假设或感叹，不能硬拒；它们仍可能产生 warning。
+ */
+const CANON_NON_ASSERTION_CUES = [
+  "如果",
+  "要不是",
+  "若是",
+  "假如",
+  "倘若",
+  "没有了",
+  "再也没有",
+] as const;
 
 function detectEventRewriteSignals(
   text: string,
@@ -443,32 +455,34 @@ function detectEventRewriteSignals(
 }
 
 /**
- * 高置信：标题与“未发生/不存在/是假的”直接绑定，或裸 `没有<title>` 紧邻。
+ * 高置信：标题与“未发生/不存在/是假的”谓词直接绑定。
  *
  * 只接受同一句内的直接谓词，不做 ±40 字窗口扫描；因此“想起<title>……
- * 不再……”“因为<title>，她不再……”这类回忆/因果句只会命中弱线索。
+ * 不再……”“因为<title>，她不再……”这类回忆/因果句只会命中弱线索。裸
+ * `没有<title>`、`没有忘记<title>` 都不再硬拒；反事实/失去义句子先被排除。
  */
 function hasExplicitOccurrenceNegation(
   sentence: string,
   title: string,
 ): boolean {
+  if (CANON_NON_ASSERTION_CUES.some((cue) => sentence.includes(cue))) {
+    return false;
+  }
   const escaped = escapeRegExp(title);
   const gap = `(?:${CANON_PARTICLE_GAP})?`;
   const patterns = [
-    // <title>(从未|并没有|...)(发生|存在|出现)
+    // <title>(从未|根本没有|并没有|其实没有|没有)(发生过?|存在过?)
     new RegExp(
       `${escaped}${gap}(?:${CANON_OCCURRENCE_NEGATION})(?:${CANON_OCCURRENCE_VERB})`,
       "u",
     ),
     // <title>(是假的|是谎言|是捏造的|根本不存在)
     new RegExp(`${escaped}${gap}(?:${CANON_FAKE_PREDICATE})`, "u"),
-    // (从未|根本没有|并没有|...)(发生过)?(助词)<title>
+    // (从未|从来没有|根本没有|并没有|其实没有|没有)(发生过?|存在过?)<title>
     new RegExp(
-      `(?:${CANON_PREFIX_NEGATION})(?:发生过|发生|有过|有过这件事)?${gap}${escaped}`,
+      `(?:${CANON_OCCURRENCE_NEGATION})(?:${CANON_PREFIX_NEGATION_VERB})${gap}${escaped}`,
       "u",
     ),
-    // 裸“没有<title>”只接受紧邻，`没有忘记<title>` 不会命中。
-    new RegExp(`没有${escaped}`, "u"),
   ];
   return patterns.some((pattern) => pattern.test(sentence));
 }

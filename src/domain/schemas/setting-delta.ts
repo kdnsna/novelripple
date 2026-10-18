@@ -4,36 +4,82 @@ import { z } from "zod";
 export const SETTING_DELTA_TERM_NAME_MAX_CHARS = 40;
 export const SETTING_DELTA_STATEMENT_MAX_CHARS = 200;
 
-/** 输入里出现控制字符/换行时统一使用这条中文说明。 */
-export const SETTING_DELTA_CONTROL_CHAR_MESSAGE =
-  "设定说明/词条名不能包含控制字符或换行";
+/** 输入里出现不可见或畸形字符时统一使用这条中文说明。 */
+export const SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE =
+  "设定说明/词条名不能包含控制字符、不可见字符或换行";
 
 /**
- * C0（含 \n \r \t）、DEL、C1 与 U+2028/U+2029 都视为控制字符。
+ * 不可见/畸形字符按 Unicode 大类拒收：
+ * - Cc：C0/C1 控制字符（含 \n \r \t、DEL）；
+ * - Cf：格式字符（零宽 U+200B/U+200D/FEFF/00AD、方向控制符、标签字符等）；
+ * - Cs：孤立代理码位；
+ * - Co：私用区字符；
+ * - Zl/Zp：行/段分隔符。
  *
- * 这些字符不会原样出现在读者可见的规则文本里；允许它们会让“写时测量”和
- * Prompt 实际渲染长度脱节，也会把换行注入单行上下文。
+ * 变体选择符（U+FE00–FE0F、U+E0100–E01EF）不在上述大类里，单独拒收。
+ * 这些字符既不能稳定显示，也会让“写时测量”和 Prompt 实际渲染长度脱节。
  */
-const SETTING_DELTA_CONTROL_CHARS =
-  /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
+const SETTING_DELTA_FORBIDDEN_CATEGORY =
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]/u;
+const SETTING_DELTA_VARIATION_SELECTOR =
+  /[\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
 
-export function settingDeltaTextHasControlChars(text: string): boolean {
-  return SETTING_DELTA_CONTROL_CHARS.test(text);
+/**
+ * 返回第一个不可见/畸形字符；没有则返回 null。
+ *
+ * Zod Schema、服务端与界面共用这一份 helper，避免三处规则漂移。孤立代理
+ * 依赖 JS 字符串的 UTF-16 码元配对判断：有 `isWellFormed()` 时先用它快速
+ * 排除合法字符串，否则（或为 false 时）逐码元检查代理对。
+ */
+export function findForbiddenSettingDeltaChar(text: string): string | null {
+  const loneSurrogate = findLoneSurrogate(text);
+  if (loneSurrogate !== null) return loneSurrogate;
+  return (
+    SETTING_DELTA_FORBIDDEN_CATEGORY.exec(text)?.[0] ??
+    SETTING_DELTA_VARIATION_SELECTOR.exec(text)?.[0] ??
+    null
+  );
 }
 
-/** 写入前统一 NFKC + trim；存储与渲染使用同一份文本。 */
+function findLoneSurrogate(text: string): string | null {
+  const wellFormed = (
+    text as string & { isWellFormed?: () => boolean }
+  ).isWellFormed;
+  if (typeof wellFormed === "function" && wellFormed.call(text)) return null;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return text[index]!;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) return text[index]!;
+  }
+  return null;
+}
+
+/**
+ * 写入前统一 NFC + trim；存储与渲染使用同一份文本。
+ *
+ * 这里刻意不用 NFKC：读者输入的 ，！？：（）；…① 等字符必须原样保留。
+ * NFKC 只用于术语主体匹配（`normalizeTermName`）。
+ */
 export function normalizeSettingDeltaText(text: string): string {
-  return text.normalize("NFKC").trim();
+  return text.normalize("NFC").trim();
 }
 
 function settingDeltaTextSchema(maxChars: number, label: string) {
   return z
     .string()
     .superRefine((value, context) => {
-      if (settingDeltaTextHasControlChars(value)) {
+      if (findForbiddenSettingDeltaChar(value) !== null) {
         context.addIssue({
           code: "custom",
-          message: SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+          message: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
         });
       }
     })

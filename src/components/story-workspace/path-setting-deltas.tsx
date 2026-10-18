@@ -33,6 +33,7 @@ import {
   emptySettingDeltaDraft,
   settingDeltaActiveCount,
   settingDeltaAddBlockReason,
+  settingDeltaNonDeletedRowCount,
   settingDeltaAnchorHint,
   settingDeltaHistoryLabel,
   settingDeltaScopeLabel,
@@ -123,11 +124,15 @@ export function PathSettingDeltas({
   }, [currentPath, settingDeltaLifecycles, settingDeltas, tree]);
 
   const activeCount = settingDeltaActiveCount(derivation.items);
-  // 世界线行数上限包含软删除行；这里展示全部已保存规则数。
+  // 世界线同时有未删除行（50）与全部行（200，含软删除）两道上限。
+  const activeRowCount = settingDeltaNonDeletedRowCount(
+    settingDeltas,
+    settingDeltaLifecycles,
+  );
   const totalCount = settingDeltas.length;
   const addBlockReason = derivation.error
     ? "无法沿当前路径推导设定增量，请刷新后重试。"
-    : settingDeltaAddBlockReason({ activeCount, totalCount });
+    : settingDeltaAddBlockReason({ activeCount, activeRowCount, totalCount });
 
   const validation = validateSettingDeltaDraft(draft);
 

@@ -1,15 +1,20 @@
 import type { SceneNode, SceneTree } from "@/domain/continuation/scene-tree";
 import {
   SETTING_DELTA_MAX_ACTIVE,
+  SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE,
   SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
 } from "@/domain/continuation/setting-delta-limits";
-import type { PathSettingDelta } from "@/domain/continuation/setting-deltas";
 import {
-  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+  settingDeltaLifecycleStatuses,
+  type PathSettingDelta,
+} from "@/domain/continuation/setting-deltas";
+import {
+  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
+  findForbiddenSettingDeltaChar,
   normalizeSettingDeltaText,
-  settingDeltaTextHasControlChars,
+  type SettingDeltaLifecycleV1,
   type SettingDeltaSubject,
   type SettingDeltaV1,
 } from "@/domain/schemas";
@@ -85,6 +90,15 @@ export function settingDeltaActiveCount(
   return items.filter((item) => item.status === "active").length;
 }
 
+/** 世界线未软删除的规则行数（停用仍算行）。 */
+export function settingDeltaNonDeletedRowCount(
+  deltas: readonly Pick<SettingDeltaV1, "id">[],
+  lifecycles: readonly SettingDeltaLifecycleV1[],
+): number {
+  const statuses = settingDeltaLifecycleStatuses(lifecycles);
+  return deltas.filter((delta) => statuses.get(delta.id) !== "deleted").length;
+}
+
 /**
  * 添加按钮的禁用原因。
  *
@@ -94,10 +108,14 @@ export function settingDeltaActiveCount(
  */
 export function settingDeltaAddBlockReason(input: {
   activeCount: number;
+  activeRowCount: number;
   totalCount: number;
 }): string | null {
   if (input.activeCount >= SETTING_DELTA_MAX_ACTIVE) {
     return `本路径已有 ${SETTING_DELTA_MAX_ACTIVE} 条生效规则；请先停用或软删除已有规则，或改写已有主体的说明。`;
+  }
+  if (input.activeRowCount >= SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE) {
+    return `每条 Worldline 最多保存 ${SETTING_DELTA_MAX_ACTIVE_ROWS_PER_WORLDLINE} 条未删除的设定增量；请先删除不再需要的规则。`;
   }
   if (input.totalCount >= SETTING_DELTA_MAX_ROWS_PER_WORLDLINE) {
     return `每条 Worldline 最多保存 ${SETTING_DELTA_MAX_ROWS_PER_WORLDLINE} 条设定增量（含已删除规则），当前已达到上限。`;
@@ -120,8 +138,8 @@ export function settingDeltaAnchorHint(currentNode: SceneNode | null): string {
 export function validateSettingDeltaDraft(
   draft: SettingDeltaDraft,
 ): SettingDeltaDraftValidation {
-  if (settingDeltaTextHasControlChars(draft.statement)) {
-    return { valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE };
+  if (findForbiddenSettingDeltaChar(draft.statement) !== null) {
+    return { valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE };
   }
   const statement = normalizeSettingDeltaText(draft.statement);
   if (statement.length === 0) {
@@ -145,8 +163,8 @@ export function validateSettingDeltaDraft(
     };
   }
 
-  if (settingDeltaTextHasControlChars(draft.termName)) {
-    return { valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE };
+  if (findForbiddenSettingDeltaChar(draft.termName) !== null) {
+    return { valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE };
   }
   const termName = normalizeSettingDeltaText(draft.termName);
   if (termName.length === 0) {

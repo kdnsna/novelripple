@@ -46,6 +46,8 @@ export interface AIProvider {
 export type StructuredValidationIssue = {
   path: string;
   message: string;
+  /** 可选稳定 code，供调用方在 repair 后按类型识别最终失败原因。 */
+  code?: string;
 };
 
 export type StructuredGenerationInput<T> = {

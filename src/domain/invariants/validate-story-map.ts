@@ -12,6 +12,8 @@ import { sha256 } from "@/domain/source/normalize-source";
 export type DomainValidationIssue = {
   path: string;
   message: string;
+  /** 可选稳定 code，仅用于调用方分支判断，不展示给读者。 */
+  code?: string;
 };
 
 function duplicateValues(values: string[]): string[] {
