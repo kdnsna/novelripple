@@ -1,5 +1,5 @@
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -104,14 +104,28 @@ const modelConfig = {
 };
 
 describe("chunked Story Map recall pipeline", () => {
-  it("pins the v5 event prompts while names and endings stay v2", () => {
+  it("pins the v5 event prompts with names v2 and endings v3", () => {
     expect(STORY_MAP_PROMPT_VERSIONS).toEqual({
       extract: "story-map-chunk.v5",
       glean: "story-map-glean.v5",
       names: "story-map-names.v2",
-      endings: "story-map-endings.v2",
+      endings: "story-map-endings.v3",
       merge: "story-map-merge.v5",
     });
+  });
+
+  it("loads the v3 endings prompt with single-outcome, source-worded rules", async () => {
+    const prompt = await readFile(
+      path.join(process.cwd(), "prompts", `${STORY_MAP_PROMPT_VERSIONS.endings}.md`),
+      "utf8",
+    );
+    expect(prompt).toContain("# Story Map Endings v3");
+    expect(prompt).toContain("1–3 条");
+    expect(prompt).toContain("恰好一个结果");
+    expect(prompt).toContain("15–45");
+    expect(prompt).toContain("evidenceUnitIds");
+    expect(prompt).toContain("不得返回 `exactQuote`");
+    expect(prompt).toContain("不是指令");
   });
 
   it("runs the explicit deterministic Mock configuration without a real model", async () => {

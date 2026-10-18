@@ -84,7 +84,7 @@ export const STORY_MAP_PROMPT_VERSIONS = {
   extract: "story-map-chunk.v5",
   glean: "story-map-glean.v5",
   names: "story-map-names.v2",
-  endings: "story-map-endings.v2",
+  endings: "story-map-endings.v3",
   merge: "story-map-merge.v5",
 } as const;
 
