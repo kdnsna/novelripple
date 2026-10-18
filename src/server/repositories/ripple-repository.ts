@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import { and, desc, eq } from "drizzle-orm";
 
-import { assertValidImpactPlan } from "@/domain/invariants/validate-story-map";
+import {
+  assertValidImpactPlan,
+  validateImpactPlanUncertainEdgeIds,
+} from "@/domain/invariants/validate-story-map";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import {
   ImpactPlanArtifactSchema,
@@ -337,7 +340,7 @@ function parseImpactPlanArtifact(
     lineage?: unknown;
   };
 
-  return ImpactPlanArtifactSchema.parse({
+  const artifact = ImpactPlanArtifactSchema.parse({
     id: row.id,
     projectId: row.projectId,
     sourceId: row.sourceId,
@@ -350,6 +353,31 @@ function parseImpactPlanArtifact(
     lineage: packet.lineage ?? null,
     createdAt: normalizeSqliteDate(row.createdAt),
   });
+
+  // 读取旧行也 fail closed：uncertainEdgeIds / usedUncertainEdgeIds 若
+  // 指向绑定 Story Map 中不存在的 Edge，说明该计划已无法安全用于续写或
+  // 预览，不能静默返回悬空引用。
+  const storyMapArtifact = getStoryMapArtifact(artifact.storyMapArtifactId);
+  if (
+    !storyMapArtifact ||
+    storyMapArtifact.projectId !== artifact.projectId
+  ) {
+    throw new Error(
+      `Impact Plan Artifact 绑定了未知 Story Map Artifact：${artifact.storyMapArtifactId}`,
+    );
+  }
+  const edgeIssues = validateImpactPlanUncertainEdgeIds(
+    artifact.impactPlan,
+    storyMapArtifact.storyMap,
+  );
+  if (edgeIssues.length > 0) {
+    throw new Error(
+      `Impact Plan Artifact 数据无效：${edgeIssues
+        .map((issue) => issue.message)
+        .join("；")}`,
+    );
+  }
+  return artifact;
 }
 
 function parseWorldline(row: typeof worldlines.$inferSelect): Worldline {

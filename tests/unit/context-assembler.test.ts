@@ -789,6 +789,71 @@ describe("assembleContext", () => {
     expect(() => assemble(320)).toThrow("必需上下文段与最新场景超过预算");
   });
 
+  it("reports neededChars as the smallest newest-scene form the ladder accepts", () => {
+    const input: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [
+        { id: "legacy_scene", text: "第一句。第二句。第三句。" },
+      ],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    let thrown: unknown;
+    try {
+      assembleContext({ maxChars: 1, sections: input });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ContinuationContextBudgetError);
+    const neededChars = (thrown as ContinuationContextBudgetError).neededChars;
+    expect(() =>
+      assembleContext({ maxChars: neededChars, sections: input }),
+    ).not.toThrow();
+    expect(
+      assembleContext({ maxChars: neededChars, sections: input }).prompt,
+    ).toContain(TRUNCATION_MARKER);
+    expect(() =>
+      assembleContext({ maxChars: neededChars - 1, sections: input }),
+    ).toThrow(ContinuationContextBudgetError);
+  });
+
+  it("reports neededChars for the summary form when a usable summary exists", () => {
+    const input: ContextAssemblerInput["sections"] = {
+      ...sections,
+      worldlineSetup: "设定。",
+      canonEvents: "",
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [
+        {
+          id: "scene_with_summary",
+          text: "第一句。第二句。第三句。",
+          summary: "摘要。",
+        },
+      ],
+      selectedDirection: "",
+      anchorReminder: "",
+    };
+    let thrown: unknown;
+    try {
+      assembleContext({ maxChars: 1, sections: input });
+    } catch (error) {
+      thrown = error;
+    }
+    const neededChars = (thrown as ContinuationContextBudgetError).neededChars;
+    const accepted = assembleContext({ maxChars: neededChars, sections: input });
+    expect(sectionOf(accepted, "recent_scenes").summarizedItemIds).toEqual([
+      "scene_with_summary",
+    ]);
+    expect(() =>
+      assembleContext({ maxChars: neededChars - 1, sections: input }),
+    ).toThrow(ContinuationContextBudgetError);
+  });
+
   it("keeps pinned evidence at every budget at or above the floor", () => {
     const pinnedText = "分歧事件自身的原著证据。".repeat(10);
     const dependencyText = "分歧前直接依赖的原著证据。".repeat(8);
@@ -844,6 +909,36 @@ describe("assembleContext", () => {
       expect(result.prompt).toContain(pinnedText);
     }
     expect(sawEvidenceDrop).toBe(true);
+  });
+
+  it("records demoted pinned evidence in the manifest without dropping it", () => {
+    const demotedSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      canonEvidence: [
+        {
+          id: "related:event_07:0",
+          text: "分歧事件自身的证据。",
+          priority: 2,
+          pinned: true,
+        },
+        {
+          id: "related:event_06:0",
+          text: "因上限被降级的依赖证据。",
+          priority: 2,
+          pinned: false,
+          demotedFromPinned: true,
+        },
+      ],
+    };
+    const result = assembleContext({
+      maxChars: 100_000,
+      sections: demotedSections,
+    });
+    const evidence = sectionOf(result, "canon_evidence");
+    expect(evidence.pinnedItemIds).toEqual(["related:event_07:0"]);
+    expect(evidence.demotedItemIds).toEqual(["related:event_06:0"]);
+    expect(evidence.droppedItemIds).toEqual([]);
+    expect(result.prompt).toContain("因上限被降级的依赖证据。");
   });
 
   it("fails closed with the typed budget error below the pinned-evidence floor", () => {

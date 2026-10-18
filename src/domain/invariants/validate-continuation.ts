@@ -386,14 +386,27 @@ const CANON_WEAK_CUES = [
  */
 const CANON_PARTICLE_GAP = "[过 了的这那场件事次段个幕一起回，,、]{0,4}";
 
-/** 明确否定“发生/存在”的否定词；裸 `没有<title>` 不再硬拒。 */
+/**
+ * 明确否定“发生/存在”的否定词；裸 `没有<title>` 不再硬拒。
+ *
+ * 长词排在前面，保证“压根没有/未曾/从没”等整体优先于它包含的单字
+ * 否定词；所有词仍必须后接发生/存在类谓词才算硬拒绝。
+ */
 const CANON_OCCURRENCE_NEGATION = [
-  "从未",
   "从来没有",
   "根本没有",
-  "并没有",
+  "压根没有",
   "其实没有",
+  "压根没",
+  "并没有",
+  "未曾",
+  "从没",
+  "并未",
+  "不曾",
+  "从未",
   "没有",
+  "未",
+  "没",
 ]
   .map(escapeRegExp)
   .join("|");
@@ -419,20 +432,66 @@ const CANON_FAKE_PREDICATE = [
   .join("|");
 
 /**
- * 反事实/失去义句子不构成“事件未发生”的断言。
+ * 反事实/失去义线索不构成“事件未发生”的断言。
  *
- * `如果没有<title>…`、`再也没有了<title>…`、`没有<title>那天的记录…`
- * 都只是在假设或感叹，不能硬拒；它们仍可能产生 warning。
+ * 反事实线索只有与否定谓词处于同一分句且位于其前面时才豁免；失去义
+ * （没有了/再也没有）只在该线索本身就是紧邻标题的否定时才豁免。这样
+ * 「灯塔熄灭从未发生过，如果有人问起就这么说。」不会被后半句的“如果”放过。
  */
-const CANON_NON_ASSERTION_CUES = [
+const CANON_COUNTERFACTUAL_CUES = [
   "如果",
   "要不是",
   "若是",
   "假如",
   "倘若",
-  "没有了",
-  "再也没有",
+  "要是",
 ] as const;
+const CANON_LOSS_CUES = ["没有了", "再也没有"] as const;
+
+/**
+ * 引述/对白/传闻/怀疑/撒谎等框架只产生 warning，不硬拒绝。
+ *
+ * 这些线索必须出现在匹配之前（同一句）；硬检查前还会先剥离成对引号内的
+ * 内容，因此角色对白里的否定不会被当成叙述者的直接断言。
+ */
+const CANON_DIALOGUE_CUES = [
+  "有人说",
+  "撒谎",
+  "谎称",
+  "听说",
+  "据说",
+  "据传",
+  "传言",
+  "传闻",
+  "说道",
+  "声称",
+  "坚称",
+  "告诉",
+  "假装",
+  "装作",
+  "怀疑",
+  "以为",
+  "难道",
+  "也许",
+  "或许",
+  "可能",
+  "大概",
+  "骗",
+  "说",
+] as const;
+
+/** 分句边界：只在同一分句内判断反事实线索与否定谓词的关系。 */
+const CANON_CLAUSE_DELIMITER = /[，,；;：:、]/u;
+
+const CANON_QUOTE_PAIRS: Readonly<Record<string, string>> = {
+  "「": "」",
+  "『": "』",
+  "“": "”",
+  "‘": "’",
+  '"': '"',
+};
+
+type CanonQuotedSpan = { start: number; end: number };
 
 function detectEventRewriteSignals(
   text: string,
@@ -443,13 +502,27 @@ function detectEventRewriteSignals(
   let weak = false;
   for (const sentence of text.split(sentencePattern)) {
     if (!sentence.includes(title)) continue;
-    if (hasExplicitOccurrenceNegation(sentence, title)) {
-      return { hard: true, weak: false };
-    }
     const withoutTitle = sentence.split(title).join("");
     if (CANON_WEAK_CUES.some((cue) => withoutTitle.includes(cue))) {
       weak = true;
     }
+    const { masked, quotedSpans } = maskQuotedSpans(sentence);
+    // 引号内的否定只警告，不参与硬拒绝；但引号内容若单独看足以命中，
+    // 仍要产生 warning，不能静默丢掉信号。
+    if (
+      quotedSpans.some(
+        (span) =>
+          hasExplicitOccurrenceNegation(
+            sentence.slice(span.start + 1, span.end),
+            title,
+          ) !== null,
+      )
+    ) {
+      weak = true;
+    }
+    const signal = hasExplicitOccurrenceNegation(masked, title);
+    if (signal === "hard") return { hard: true, weak: false };
+    if (signal === "nonAssertive") weak = true;
   }
   return { hard: false, weak };
 }
@@ -459,32 +532,133 @@ function detectEventRewriteSignals(
  *
  * 只接受同一句内的直接谓词，不做 ±40 字窗口扫描；因此“想起<title>……
  * 不再……”“因为<title>，她不再……”这类回忆/因果句只会命中弱线索。裸
- * `没有<title>`、`没有忘记<title>` 都不再硬拒；反事实/失去义句子先被排除。
+ * `没有<title>`、`没有忘记<title>` 都不再硬拒；反事实/失去义/引述框架
+ * 只在对应范围内豁免，返回 `nonAssertive` 让调用方产生 warning。
  */
 function hasExplicitOccurrenceNegation(
   sentence: string,
   title: string,
-): boolean {
-  if (CANON_NON_ASSERTION_CUES.some((cue) => sentence.includes(cue))) {
-    return false;
-  }
+): "hard" | "nonAssertive" | null {
   const escaped = escapeRegExp(title);
   const gap = `(?:${CANON_PARTICLE_GAP})?`;
   const patterns = [
     // <title>(从未|根本没有|并没有|其实没有|没有)(发生过?|存在过?)
     new RegExp(
       `${escaped}${gap}(?:${CANON_OCCURRENCE_NEGATION})(?:${CANON_OCCURRENCE_VERB})`,
-      "u",
+      "gu",
     ),
     // <title>(是假的|是谎言|是捏造的|根本不存在)
-    new RegExp(`${escaped}${gap}(?:${CANON_FAKE_PREDICATE})`, "u"),
+    new RegExp(`${escaped}${gap}(?:${CANON_FAKE_PREDICATE})`, "gu"),
     // (从未|从来没有|根本没有|并没有|其实没有|没有)(发生过?|存在过?)<title>
     new RegExp(
       `(?:${CANON_OCCURRENCE_NEGATION})(?:${CANON_PREFIX_NEGATION_VERB})${gap}${escaped}`,
-      "u",
+      "gu",
     ),
   ];
-  return patterns.some((pattern) => pattern.test(sentence));
+
+  let matched = false;
+  for (const pattern of patterns) {
+    for (const match of sentence.matchAll(pattern)) {
+      matched = true;
+      if (!isNonAssertionMatch(sentence, match, title)) {
+        return "hard";
+      }
+    }
+  }
+  return matched ? "nonAssertive" : null;
+}
+
+/** 该硬匹配是否被同一分句的反事实、失去义或之前的引述框架豁免。 */
+function isNonAssertionMatch(
+  sentence: string,
+  match: RegExpMatchArray,
+  title: string,
+): boolean {
+  const start = match.index ?? 0;
+  const end = start + match[0].length;
+  const clauseStart = clauseStartBefore(sentence, start);
+  const clauseEnd = clauseEndAfter(sentence, end);
+  const clause = sentence.slice(clauseStart, clauseEnd);
+  const prefix = sentence.slice(clauseStart, start);
+  if (CANON_COUNTERFACTUAL_CUES.some((cue) => prefix.includes(cue))) {
+    return true;
+  }
+
+  // 失去义只在“没有了/再也没有”本身紧邻标题、且位于匹配之前时豁免；
+  // 「再也没有发生过<title>」仍按前缀否定处理。
+  const escapedTitle = escapeRegExp(title);
+  if (
+    CANON_LOSS_CUES.some((cue) => {
+      const cueIndex = clause.indexOf(cue);
+      return (
+        cueIndex >= 0 &&
+        clauseStart + cueIndex < start &&
+        new RegExp(
+          `${escapeRegExp(cue)}(?:${CANON_PARTICLE_GAP})?${escapedTitle}`,
+          "u",
+        ).test(clause)
+      );
+    })
+  ) {
+    return true;
+  }
+
+  return CANON_DIALOGUE_CUES.some((cue) =>
+    sentence.slice(0, start).includes(cue),
+  );
+}
+
+function clauseStartBefore(sentence: string, index: number): number {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (CANON_CLAUSE_DELIMITER.test(sentence[cursor]!)) return cursor + 1;
+  }
+  return 0;
+}
+
+function clauseEndAfter(sentence: string, index: number): number {
+  for (let cursor = index; cursor < sentence.length; cursor += 1) {
+    if (CANON_CLAUSE_DELIMITER.test(sentence[cursor]!)) return cursor;
+  }
+  return sentence.length;
+}
+
+/**
+ * 把成对引号（含嵌套）内的内容替换为空格，保留长度与下标。
+ *
+ * 未闭合的开引号一直遮蔽到句末：宁可少抓一条对白，也不把角色台词当成
+ * 叙述者的直接断言。引号本身也一并遮蔽，避免跨引号拼出假匹配。
+ */
+function maskQuotedSpans(sentence: string): {
+  masked: string;
+  quotedSpans: CanonQuotedSpan[];
+} {
+  const stack: Array<{ close: string; start: number }> = [];
+  const spans: CanonQuotedSpan[] = [];
+  // 引号都是 BMP 字符，按 UTF-16 下标扫描即可与正则 match.index 对齐。
+  for (let index = 0; index < sentence.length; index += 1) {
+    const char = sentence[index]!;
+    const top = stack.at(-1);
+    if (top && top.close === char) {
+      stack.pop();
+      spans.push({ start: top.start, end: index });
+      continue;
+    }
+    if (Object.hasOwn(CANON_QUOTE_PAIRS, char)) {
+      stack.push({ close: CANON_QUOTE_PAIRS[char]!, start: index });
+    }
+  }
+  while (stack.length > 0) {
+    const open = stack.pop()!;
+    spans.push({ start: open.start, end: sentence.length - 1 });
+  }
+  let masked = "";
+  for (let index = 0; index < sentence.length; index += 1) {
+    const inside = spans.some(
+      (span) => index >= span.start && index <= span.end,
+    );
+    masked += inside ? " " : sentence[index]!;
+  }
+  return { masked, quotedSpans: spans };
 }
 
 function escapeRegExp(text: string): string {

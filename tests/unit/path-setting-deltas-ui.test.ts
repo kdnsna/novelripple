@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { buildSceneTree } from "@/domain/continuation/scene-tree";
 import {
-  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
   SettingDeltaLifecycleV1Schema,
   SettingDeltaV1Schema,
+  findForbiddenSettingDeltaChar,
+  settingDeltaForbiddenCharMessage,
 } from "@/domain/schemas";
 
 import {
@@ -192,7 +193,7 @@ describe("path setting delta presentation helpers", () => {
     });
   });
 
-  it("rejects control, invisible, malformed and private-use characters in both fields", () => {
+  it("rejects control, invisible, malformed, visually blank and private-use characters in both fields", () => {
     const forbidden = [
       "\n",
       "\u0001",
@@ -211,8 +212,22 @@ describe("path setting delta presentation helpers", () => {
       "\uFE0F",
       "\u{E0100}",
       "\uE000",
+      "\u3164",
+      "\u115F",
+      "\u1160",
+      "\uFFA0",
+      "\u2800",
+      "\u034F",
+      "\u180E",
+      "\u17B4",
+      "\u17B5",
+      "\u{1D159}",
+      "\u{1D173}",
+      "\u{1D17A}",
     ];
     for (const value of forbidden) {
+      const statementCodePoint = findForbiddenSettingDeltaChar(value);
+      expect(statementCodePoint).not.toBeNull();
       expect(
         validateSettingDeltaDraft({
           subjectKind: "term",
@@ -220,7 +235,13 @@ describe("path setting delta presentation helpers", () => {
           termName: "旧灯塔",
           statement: `旧灯塔${value}已被封锁`,
         }),
-      ).toEqual({ valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE });
+      ).toEqual({
+        valid: false,
+        error: settingDeltaForbiddenCharMessage(
+          statementCodePoint!,
+          "设定说明",
+        ),
+      });
       expect(
         validateSettingDeltaDraft({
           subjectKind: "term",
@@ -228,7 +249,98 @@ describe("path setting delta presentation helpers", () => {
           termName: `旧灯${value}塔`,
           statement: "旧灯塔已被封锁。",
         }),
-      ).toEqual({ valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE });
+      ).toEqual({
+        valid: false,
+        error: settingDeltaForbiddenCharMessage(statementCodePoint!, "词条名"),
+      });
+    }
+  });
+
+  it("names the offending character instead of returning a generic message", () => {
+    const statement = validateSettingDeltaDraft({
+      subjectKind: "term",
+      characterId: "",
+      termName: "旧灯塔",
+      statement: "旧灯塔\u200B已被封锁",
+    });
+    expect(statement).toEqual({
+      valid: false,
+      error: "设定说明包含不允许的字符 U+200B（零宽空格）",
+    });
+    const term = validateSettingDeltaDraft({
+      subjectKind: "term",
+      characterId: "",
+      termName: "旧灯\u3164塔",
+      statement: "旧灯塔已被封锁。",
+    });
+    expect(term).toEqual({
+      valid: false,
+      error: "词条名包含不允许的字符 U+3164（韩文填充符）",
+    });
+    // Schema 使用同一份 helper 与文案。
+    expect(() =>
+      SettingDeltaV1Schema.parse({
+        id: "delta_forbidden",
+        worldlineId: "wl_1",
+        anchorSceneId: null,
+        subject: { kind: "term", name: "旧灯塔" },
+        statement: "旧灯塔\u200B已被封锁。",
+        contentKind: "user",
+        createdAt: "2026-10-18T00:00:00.000Z",
+      }),
+    ).toThrow("U+200B");
+  });
+
+  it("allows legitimate emoji sequences but still rejects broken emoji syntax", () => {
+    const allowed = [
+      "👨‍👩‍👧",
+      "❤️",
+      "👍🏽",
+      "1️⃣",
+      "🇨🇳",
+      "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+    ];
+    for (const emoji of allowed) {
+      expect(findForbiddenSettingDeltaChar(emoji)).toBeNull();
+      expect(
+        validateSettingDeltaDraft({
+          subjectKind: "term",
+          characterId: "",
+          termName: `旧灯塔${emoji}`,
+          statement: `旧灯塔${emoji}已被封锁。`,
+        }),
+      ).toMatchObject({ valid: true });
+      expect(
+        SettingDeltaV1Schema.parse({
+          id: `delta_${emoji}`,
+          worldlineId: "wl_1",
+          anchorSceneId: null,
+          subject: { kind: "term", name: `旧灯塔${emoji}` },
+          statement: `旧灯塔${emoji}已被封锁。`,
+          contentKind: "user",
+          createdAt: "2026-10-18T00:00:00.000Z",
+        }).statement,
+      ).toBe(`旧灯塔${emoji}已被封锁。`);
+    }
+
+    const rejected = [
+      "a\u200Db",
+      "\u200D👍",
+      "字\uFE0F",
+      "\u202E",
+      "\u{E0041}",
+      "\u3164",
+    ];
+    for (const value of rejected) {
+      expect(findForbiddenSettingDeltaChar(value)).not.toBeNull();
+      expect(
+        validateSettingDeltaDraft({
+          subjectKind: "term",
+          characterId: "",
+          termName: "旧灯塔",
+          statement: `旧灯塔${value}已被封锁。`,
+        }).valid,
+      ).toBe(false);
     }
   });
 

@@ -123,6 +123,15 @@ export const CANON_GUARD_SHOULD_REJECT = [
   "灯塔熄灭的传闻是假的。",
   "灯塔从未熄灭过。",
   "故事里灯塔熄灭这一设定不再成立。",
+  // 反事实/失去义线索只有与否定谓词同分句且在其前面时才豁免。
+  "灯塔熄灭从未发生过，如果有人问起就这么说。",
+  "假如你还记得，灯塔熄灭根本没有发生过。",
+  // 发生/存在类否定的更多口语变体。
+  "灯塔熄灭没发生过。",
+  "灯塔熄灭这件事压根没发生。",
+  "灯塔熄灭未发生过。",
+  "灯塔熄灭未曾发生。",
+  "灯塔熄灭没有发生过。",
 ] as const;
 
 /**
@@ -147,6 +156,26 @@ export const CANON_GUARD_LEGITIMATE = [
   "如果没有灯塔熄灭，两人也不会结仇。",
   "再也没有了灯塔熄灭那晚的热闹。",
   "没有灯塔熄灭那天的任何记录留下来。",
+  // 同一分句内的反事实：只产生 warning，不能硬拒绝。
+  "要是灯塔熄灭从未发生，她会留在岛上。",
+  "若是灯塔熄灭从未发生，港口仍会亮着灯。",
+] as const;
+
+/**
+ * 8 条对白/谎言/传闻/怀疑/被转述的句子。
+ *
+ * 这些句子里的“未发生/不存在/是假的”属于角色话语或叙述者的不确定转述，
+ * 不是叙述者的直接断言；只允许 warning，必须 0 条硬拒绝。
+ */
+export const CANON_GUARD_DIALOGUE_LIE = [
+  "他说灯塔熄灭从未发生过。",
+  "听说灯塔熄灭根本没有发生过。",
+  "据传交出钥匙是捏造的。",
+  "难道灯塔熄灭从未发生？",
+  "也许交出钥匙根本不存在。",
+  "“灯塔熄灭从来没有发生过。”她撒谎道。",
+  "他骗众人说交出钥匙是假的。",
+  "她坚称灯塔熄灭从未发生，没人信。",
 ] as const;
 
 /** 数百字中性叙述，逐字提到锁定事件标题但不含否定/改写语义。 */
@@ -163,16 +192,20 @@ export const CANON_GUARD_NEUTRAL_PROSE = [
 ].join("");
 
 export type CanonGuardProbeStats = {
-  /** 11 条应拒绝中，被硬拒绝的数量。 */
+  /** 应拒绝样本中被硬拒绝的数量。 */
   caught: number;
-  /** 17 条合法续写中被硬拒绝的数量（必须为 0）。 */
+  /** 合法续写中被硬拒绝的数量（必须为 0）。 */
   hardFalseRejects: number;
-  /** 17 条合法续写中出现 warning 的数量。 */
+  /** 合法续写中出现 warning 的数量。 */
   warningsOnLegitimate: number;
   /** 中性长文中被硬拒绝的数量（必须为 0）。 */
   neutralHardRejects: number;
-  /** 11 条应拒绝中出现 warning 的数量。 */
+  /** 应拒绝样本中出现 warning 的数量。 */
   warningsOnShouldReject: number;
+  /** 对白/谎言/传闻样本中被硬拒绝的数量（必须为 0）。 */
+  dialogueHardRejects: number;
+  /** 对白/谎言/传闻样本中出现 warning 的数量。 */
+  dialogueWarnings: number;
 };
 
 function evaluate(text: string) {
@@ -188,6 +221,7 @@ function evaluate(text: string) {
 export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
   const shouldReject = CANON_GUARD_SHOULD_REJECT.map(evaluate);
   const legitimate = CANON_GUARD_LEGITIMATE.map(evaluate);
+  const dialogue = CANON_GUARD_DIALOGUE_LIE.map(evaluate);
   const neutral = evaluate(CANON_GUARD_NEUTRAL_PROSE);
   return {
     caught: shouldReject.filter((result) => result.issues.length > 0).length,
@@ -200,5 +234,9 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
     warningsOnShouldReject: shouldReject.filter(
       (result) => result.warnings.length > 0,
     ).length,
+    dialogueHardRejects: dialogue.filter((result) => result.issues.length > 0)
+      .length,
+    dialogueWarnings: dialogue.filter((result) => result.warnings.length > 0)
+      .length,
   };
 }

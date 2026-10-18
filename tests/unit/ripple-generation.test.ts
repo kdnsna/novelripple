@@ -1,4 +1,5 @@
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { eq } from "drizzle-orm";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ImpactPlan } from "@/domain/schemas";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
+import { artifacts } from "@/server/db/schema";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import {
   generateImpactPlan,
@@ -622,5 +624,42 @@ describe("Ripple Simulator generation", () => {
         feedback: "只修正一个判断",
       }),
     ).toThrow("反馈重生成不得改变 Story Map、Divergence、模式或 Anchor");
+  });
+
+  it("fails closed when a stored impact plan references an unknown uncertain edge", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const plan = fixture.impactPlans[0];
+    const generated = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      divergence: fixture.divergences[0],
+      mode: "strict",
+      endingCandidateIds: ["ending_truth_public"],
+      provider: new MockAIProvider([JSON.stringify(toModelOutput(plan))]),
+      modelConfig,
+    });
+    const corruptedPlan = {
+      ...generated.artifact.impactPlan,
+      uncertainEdgeIds: ["edge_missing_from_story_map"],
+      usedUncertainEdgeIds: ["edge_missing_from_story_map"],
+    };
+    getDatabase()
+      .update(artifacts)
+      .set({
+        dataJson: JSON.stringify({
+          storyMapArtifactId: generated.artifact.storyMapArtifactId,
+          impactPlan: corruptedPlan,
+          lineage: generated.artifact.lineage,
+        }),
+      })
+      .where(eq(artifacts.id, generated.artifact.id))
+      .run();
+
+    expect(() => getImpactPlanArtifact(generated.artifact.id)).toThrow(
+      "edge_missing_from_story_map",
+    );
+    expect(() => getImpactPlanArtifact(generated.artifact.id)).toThrow(
+      "Impact Plan Artifact 数据无效",
+    );
   });
 });

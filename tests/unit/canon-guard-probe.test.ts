@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CANON_GUARD_DIALOGUE_LIE,
   CANON_GUARD_LEGITIMATE,
   CANON_GUARD_NEUTRAL_PROSE,
   CANON_GUARD_PROBE_PATH_STATE,
@@ -17,27 +18,37 @@ import { validateAgainstPreDivergenceCanon } from "@/domain/invariants/validate-
  * 这些句子全部是自建短句，不含任何作品原文。
  */
 const stats = computeCanonGuardProbeStats();
+const shouldRejectCount = CANON_GUARD_SHOULD_REJECT.length;
+const legitimateCount = CANON_GUARD_LEGITIMATE.length;
+const dialogueCount = CANON_GUARD_DIALOGUE_LIE.length;
 
 describe("canon guard labeled probe", () => {
   it(
-    `catch ${stats.caught}/11, hard false-reject ${stats.hardFalseRejects}/17, ` +
-      `warnings ${stats.warningsOnLegitimate}/17, neutral ${
-        stats.neutralHardRejects
-      }`,
+    `catch ${stats.caught}/${shouldRejectCount}, hard false-reject ${
+      stats.hardFalseRejects
+    }/${legitimateCount}, warnings ${stats.warningsOnLegitimate}/${
+      legitimateCount
+    }, neutral ${stats.neutralHardRejects}, dialogue hard-reject ${
+      stats.dialogueHardRejects
+    }/${dialogueCount}, dialogue warnings ${stats.dialogueWarnings}/${dialogueCount}`,
     () => {
-      // 合法续写是硬约束：一条都不能被硬拒绝。
+      // 合法续写与对白/传闻都是硬约束：一条都不能被硬拒绝。
       expect(stats.hardFalseRejects).toBe(0);
       expect(stats.neutralHardRejects).toBe(0);
+      expect(stats.dialogueHardRejects).toBe(0);
       // 每一类都应至少产生低置信 warning，而不是静默丢失信号。
       expect(stats.warningsOnLegitimate).toBeGreaterThan(0);
+      expect(stats.dialogueWarnings).toBeGreaterThan(0);
       // 探针输入没有变化时结果必须确定。
       expect(computeCanonGuardProbeStats()).toEqual(stats);
       expect(stats).toMatchInlineSnapshot(`
         {
-          "caught": 5,
+          "caught": 12,
+          "dialogueHardRejects": 0,
+          "dialogueWarnings": 8,
           "hardFalseRejects": 0,
           "neutralHardRejects": 0,
-          "warningsOnLegitimate": 8,
+          "warningsOnLegitimate": 10,
           "warningsOnShouldReject": 4,
         }
       `);
@@ -68,8 +79,9 @@ describe("canon guard labeled probe", () => {
   });
 
   it("records the expected probe sizes", () => {
-    expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(11);
-    expect(CANON_GUARD_LEGITIMATE).toHaveLength(17);
+    expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(18);
+    expect(CANON_GUARD_LEGITIMATE).toHaveLength(19);
+    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(8);
     expect(CANON_GUARD_NEUTRAL_PROSE.length).toBeGreaterThan(200);
   });
 });

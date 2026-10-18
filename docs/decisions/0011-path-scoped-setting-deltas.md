@@ -22,7 +22,11 @@
 - `statement`：读者规则，1–200 字；
 - `contentKind: "user"`、`createdAt`。
 
-`statement` 与术语 `name` 在写入时做 NFC + trim，长度按存储的 NFC 文本检查（200 / 40）；存储与 Prompt 渲染使用同一份文本。NFC 保留读者输入的 `，！？：（）；…①` 等字符；NFKC 只用于术语主体匹配（`subjectKey`）。按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`，并单独拒绝变体选择符 U+FE00–FE0F / U+E0100–E01EF；这覆盖零宽 U+200B/U+200D/FEFF/00AD、bidi U+200E/202E/2066、孤立代理、标签字符与私用区。错误为「设定说明/词条名不能包含控制字符、不可见字符或换行」。Zod Schema、服务端与界面共用同一个 `findForbiddenSettingDeltaChar` 与 NFC helper，因此不存在“测量去不可见字符、渲染保留不可见字符”的双口径。
+`statement` 与术语 `name` 在写入时做 NFC + trim，长度按存储的 NFC 文本检查（200 / 40）；存储与 Prompt 渲染使用同一份文本。NFC 保留读者输入的 `，！？：（）；…①` 等字符；NFKC 只用于术语主体匹配（`subjectKey`）。
+
+不可见/畸形字符先放行合法 emoji 序列，再按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`。允许的 emoji 形式为：U+FE0E/U+FE0F 仅紧跟在 emoji 基字后；U+200D 仅连接两个 `Extended_Pictographic`（各自可带变体选择符和/或肤色 U+1F3FB–1F3FF）；肤色修饰符只跟在 emoji 基字后；`[0-9#*] FE0F? U+20E3` 键帽；成对区域指示符国旗；以及 U+1F3F4 + U+E0020–E007E + U+E007F 的完整细分旗帜标签序列。其余一律拒绝：孤立/首尾/邻近非 emoji 的 ZWJ、非 emoji 基字后的 FE0E/FE0F、其它零宽/bidi/变体选择符、完整细分旗帜序列之外的标签字符，以及视觉空白码位 U+034F、U+115F、U+1160、U+17B4、U+17B5、U+180E、U+2800、U+3164、U+1D159、U+FFA0、U+1D173–U+1D17A、U+E0000–U+E007F（标签字符只在上述完整序列中放行）。普通空格与全角空格仍允许。
+
+错误文案直接指出具体码位，例如「词条名包含不允许的字符 U+200B（零宽空格）」；Schema、服务端、Server Action 与界面共用同一个 `findForbiddenSettingDeltaChar`（返回码位）和同一条文案 helper，不存在“测量去不可见字符、渲染保留不可见字符”的双口径。
 
 它不调用模型，因此没有 Generation Run，也没有 `basedOnArtifactId`。写入只追加，永不 UPDATE；修订规则等于追加一条更新的设定增量。
 
@@ -43,7 +47,7 @@ Artifact id 由 `(worldlineId, anchorSceneId ?? "root", idempotencyKey)` 的 SHA
 artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>") 前 24 位>
 ```
 
-同一世界线、同一锚点、同一幂等键的重复或并发写入返回同一行；不同键总是新行。生命周期事件的 id 由 `(worldlineId, targetDeltaId, idempotencyKey)` 的 SHA-256 派生为 `artifact_setting_delta_lifecycle_<24 位>`，同样幂等；它还必须校验目标存在、属于同一 Worldline 且确实是 `setting_delta`。客户端在每次打开表单或点击停用/删除/重新启用时生成新的 `crypto.randomUUID()`。服务端仍会校验项目、Worldline、confirmed Story Map 基线、锚点场景和人物引用，任一不成立都 fail closed。
+同一世界线、同一锚点、同一幂等键的重复或并发写入只有在 payload 完全一致时才返回同一行：服务端会比较归一化后的主体（人物 kind + characterId，或术语 kind + NFC/trim 后的名称）和 NFC 后的 `statement`；主体或说明不同则抛 `SettingDeltaError("idempotency_conflict", "设定增量幂等键已被其他内容占用")`，绝不把旧行当成新内容返回。不同键总是新行。生命周期事件的 id 由 `(worldlineId, targetDeltaId, idempotencyKey)` 的 SHA-256 派生为 `artifact_setting_delta_lifecycle_<24 位>`，同样幂等；它还必须校验目标存在、属于同一 Worldline 且确实是 `setting_delta`，重复事件按 `targetDeltaId` + `status` 比较，不同状态视为冲突。客户端在每次打开表单或点击停用/删除/重新启用时生成新的 `crypto.randomUUID()`。服务端仍会校验项目、Worldline、confirmed Story Map 基线、锚点场景和人物引用，任一不成立都 fail closed。
 
 ### 3. 可见性只沿当前路径
 
@@ -75,7 +79,7 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
   - active 主体数 ≤ `SETTING_DELTA_MAX_ACTIVE = 20`；
   - 实际渲染进 Prompt 的 `setting_deltas` 文本长度 ≤ `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000`。
 - 渲染函数只有一个：`renderSettingDeltaContextText(items)` 返回 `<setting_deltas>` 标签内部逐条文本（`\n` 连接）的精确字符串。组装器与写时检查都调用它，写时 `.length` 就是 Prompt 实际长度；不再使用 `normalizedContextChars` 之类的第二套测量。NFC 组合字符（例如谚文 jamo）在存储、测量、渲染三处一致。
-- 任一路径或世界线上限超限即 fail closed，中文错误指出具体路径（如「会使「第 3 幕 · 标题」所在路径的生效设定增量超过 20 条」/「…的设定增量超过 2000 字」）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
+- 任一路径或世界线上限超限即 fail closed。`path_active_limit` 文案仍指出具体路径与 20 条上限；`path_text_limit` 的读者文案改为「会使「第 3 幕 · 标题」所在路径的设定增量过长：请缩短规则说明，或停用/删除该路径上的其他规则」，不显示 2000 / 当前长度等原始数字（数字只留在内部 `message` / 日志与稳定 `code` 中）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
 - 仓储与领域检查统一抛 `SettingDeltaError`，带稳定 `code`（`forbidden_char`、`path_active_limit`、`path_text_limit`、`worldline_active_rows_limit`、`worldline_total_rows_limit`、`deleted_terminal`、`invalid_anchor` 等）与已面向读者的中文 `message`。Server Action 对该类型直接返回 `error.message`，不再维护易漂移的字符串白名单。
 - 检查与插入之间没有 `await`，并发写入只能有一个越过上限；重新启用同样对整棵锚点子树检查，不增加行数但必须尊重 50 条未删除行与 20 个 active 主体。
 - 界面在当前路径 active ≥ 20、世界线未删除行 ≥ 50 或全部行（含已删除）≥ 200 时提示并禁用添加。服务端仍独立校验，不依赖界面。
@@ -116,14 +120,16 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 生成后、保存 Artifact 前增加确定性校验 `validateAgainstPreDivergenceCanon`：
 
 - **锁定集合**与 `validateContinuationStatePatch` 的“分歧前”定义一致：Story Map 中 `sequence < 分歧事件.sequence` 且不在**当前路径状态** `factsRemoved`（`derivePathState(baseDelta, path)`）中的事件。分歧后事件永不锁定；路径上合法删除的事件也不锁定。
-- **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，且否定词后必须确实跟“发生/存在”类谓词（例如 `从来没有发生过<title>`、`<title>根本没有发生过`、`<title>是捏造的`），中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。裸 `没有<title>`、`没有忘记<title>`、反事实（如果/要不是/若是/假如/倘若）、失去义（没有了/再也没有）、回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、附近出现 `取消了`、提及其它否定词，都只产生 warning，不阻断保存。
+- **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，且否定词后必须确实跟“发生/存在”类谓词（例如 `从来没有发生过<title>`、`<title>根本没有发生过`、`<title>没发生过`、`<title>未曾发生`、`<title>是捏造的`），中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。发生/存在类否定词包括 从未/从来没有/根本没有/压根没有/其实没有/压根没/并没有/未曾/从没/并未/不曾/没有/未/没，但都只有后接发生/存在谓词时才硬拒绝。反事实线索（如果/要不是/若是/假如/倘若/要是）必须与否定谓词处于同一分句且位于其前面才豁免；失去义（没有了/再也没有）只在该线索本身紧邻标题时豁免，因此「灯塔熄灭从未发生过，如果有人问起就这么说。」与「假如你还记得，灯塔熄灭根本没有发生过。」仍硬拒绝。裸 `没有<title>`、`没有忘记<title>`、回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、附近出现 `取消了`、提及其它否定词，都只产生 warning。
+- **对白/谎言/传闻只警告**：硬检查前先剥离成对引号（「」『』“”‘’与 ASCII 双引号，含嵌套；未闭合引号遮蔽到句末）内的内容；引号内若单独看足以命中，仍产生 warning。引号外的匹配若前面同一句出现引述/传闻/怀疑/撒谎线索（说/说道/声称/坚称/告诉/骗/撒谎/谎称/听说/据说/据传/传言/传闻/有人说/难道/也许/或许/可能/大概/怀疑/以为/假装/装作），也只警告，不硬拒绝——只有叙述者直接断言事件没有发生才硬拒绝。
 - **召回边界**：换一种说法的否定、隐含矛盾、与已确认设定的矛盾不会被这个字面护栏抓到。它是低召回护栏，不是语义判定。
 - **策略开关**：环境变量 `CONTINUATION_CANON_GUARD` 由服务端配置 helper 解析，缺省 `strict`；`warn` 把所有信号降级为 warning，`off` 关闭生成后检查（Prompt 护栏仍保留）。非法值在任何模型调用前 fail closed。
 - **硬拒绝**仍走既有 validation-issue → repair → fail-closed 路径：Generation Run 记为 failed、保留原始输出、不落 Artifact。服务端边界把可识别的 Canon 硬拒绝映射为「生成内容明确否定了分歧前已确认的原著事件「<title>」，已拒绝且未保存；请重试或换一批。」，不回显模型正文。
 - **warning** 不阻断保存：作为可选 `canonWarnings: Array<{ eventId, field, reason }>` 附加在 v2 方向/场景 payload 上（旧行没有该字段仍可解析），界面显示一条非阻断的「原著一致性提示」。永不静默修补或删句。
 - 方向校验覆盖标题、前提与预期后果，场景校验覆盖标题、正文与摘要。
+- **旧 Impact Plan 读取**：`getImpactPlanArtifact` 在 Zod 解析后重新加载绑定 Story Map，并复用 `validateImpactPlanUncertainEdgeIds` 校验 `uncertainEdgeIds` / `usedUncertainEdgeIds`；悬空 Edge id 直接抛错，不把无效计划交给预览、接受或续写。
 
-标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**catch 5/11，hard false-reject 0/17，legit warnings 8/17，中性长文 hard reject 0**。11 条应拒绝样本包含可被字面规则抓住的直接否定、前缀否定与“是捏造的/根本不存在”，也包含明确抓不到的改写；17 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、反事实/失去义、分歧后事件、路径删除事件与中性提及。测试同时断言硬假阳性必须为 0。
+标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**catch 12/18，hard false-reject 0/19，legit warnings 10/19，中性长文 hard reject 0，对白/谎言/传闻 hard reject 0/8、warnings 8/8**。18 条应拒绝样本包含直接否定、前缀否定、“没发生过/未发生过/未曾发生”等变体、跨分句反事实与明确抓不到的改写；19 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、同分句反事实/失去义、分歧后事件、路径删除事件与中性提及；8 条对白/谎言/传闻样本覆盖引号、据说、难道、也许、撒谎、骗、坚称等只警告情形。测试同时断言合法与对白样本的硬假阳性必须为 0。**这些数字来自我们自建的探针集，不是通用召回率承诺；评审方独立的 11 条样本集上 catch 为 3/11。**
 
 ### 10. 上下文阶梯与单调性
 
@@ -131,7 +137,13 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 
 完整内容 → 丢 `canon_evidence` 中的非 pinned 条目 → 丢 `setting_deltas` → 丢旧 `recent_scenes` → 裁 `path_summary` → compact `worldline_setup` → 最新场景摘要 → v1 句末截断 → fail closed。
 
-`canon_evidence` 中分歧事件自身及其直接依赖的分歧前事件证据是 pinned，与 `worldline_setup`、`canon_events`、`selected_direction`、`anchor_reminder` 同属必需下限，任何阶梯步骤都不裁剪；放不下时抛类型化预算错误。`setting_deltas` 每次整条丢弃最浅（`anchorDepth` 最小）再最旧（`createdAt`）再按 id 的规则，因此更深/更新的路径规则保留更久；被丢弃 id 写入 manifest 的 `droppedItemIds`。规则裁剪排在证据之后、最近场景之前，且释放的预算不回填证据；更大预算只会停留在更早（或相同）的阶梯状态。`tests/unit/context-assembler.test.ts` 的阶梯单调性、全预算扫描与“必需段单独放得下时 20 条规则必不导致失败”测试保持通过。
+`canon_evidence` 中分歧事件自身及其直接依赖的分歧前事件证据是 pinned，与 `worldline_setup`、`canon_events`、`selected_direction`、`anchor_reminder` 同属必需下限，任何阶梯步骤都不裁剪；放不下时抛类型化预算错误。
+
+pinned 集合本身也有确定性上限：`CONTEXT_PINNED_EVIDENCE_MAX_ITEMS = 24`、`CONTEXT_PINNED_EVIDENCE_MAX_CHARS = 6000`（按条目 trim 后文本长度求和）。选择规则与 `maxChars` 无关，因此阶梯仍单调：先按原顺序保留分歧事件自身的证据；再按直接依赖事件离分歧事件的 sequence 距离（越近越先，再按事件 id）轮转，每轮每个事件最多取一条。超出上限的条目不会被丢弃，而是把 `pinned` 降级为 false、作为普通可裁剪证据留在 `canon_evidence` 中；它们记入 manifest 的 `demotedItemIds`，`pinnedItemIds` 只含真正保留的条目，`droppedItemIds` 仍只记录被裁掉的普通证据。
+
+`setting_deltas` 每次整条丢弃最浅（`anchorDepth` 最小）再最旧（`createdAt`）再按 id 的规则，因此更深/更新的路径规则保留更久；被丢弃 id 写入 manifest 的 `droppedItemIds`。规则裁剪排在证据之后、最近场景之前，且释放的预算不回填证据；更大预算只会停留在更早（或相同）的阶梯状态。`tests/unit/context-assembler.test.ts` 的阶梯单调性、全预算扫描与“必需段单独放得下时 20 条规则必不导致失败”测试保持通过。
+
+预算 fail closed 时，`neededChars` 按阶梯真正能接受的最小 Prompt 计算：必需段（含 pinned）加最新场景的最小形式（可用摘要，或最短安全句末前缀 + `（后文已截断）`），而不是排除最新场景的 `renderMandatoryPrompt`，也不只是当前超预算 Prompt 的长度；用 `neededChars` 作为 `maxChars` 重试必须成功，`neededChars - 1` 必须失败。读者文案不显示 `neededChars` / `maxChars` 等原始数字，改为「续写所需的基础上下文过多……超出了单次生成能容纳的范围，无法生成方向/场景。请减少设定或换一个分歧点后重试。」并给出可执行出路；数字只留在类型化错误的 `message` / 日志与 `code` 中。
 
 ## 备选方案
 

@@ -323,6 +323,33 @@ export function validateStoryMap(
   return issues;
 }
 
+/**
+ * Impact Plan 的 uncertain-edge 列表必须引用其绑定 Story Map 的真实 Edge。
+ *
+ * 旧计划缺少这些字段时返回空；生成、接受与仓储读取共用这一份校验。
+ */
+export function validateImpactPlanUncertainEdgeIds(
+  impactPlan: Pick<ImpactPlan, "uncertainEdgeIds" | "usedUncertainEdgeIds">,
+  storyMap: Pick<StoryMap, "edges">,
+): DomainValidationIssue[] {
+  const issues: DomainValidationIssue[] = [];
+  const edgeIds = new Set(storyMap.edges.map((edge) => edge.id));
+  for (const [field, values] of [
+    ["uncertainEdgeIds", impactPlan.uncertainEdgeIds],
+    ["usedUncertainEdgeIds", impactPlan.usedUncertainEdgeIds],
+  ] as const) {
+    values?.forEach((edgeId, index) => {
+      if (!edgeIds.has(edgeId)) {
+        issues.push({
+          path: `${field}.${index}`,
+          message: `${field} 引用了未知 Edge：${edgeId}`,
+        });
+      }
+    });
+  }
+  return issues;
+}
+
 export function validateImpactPlan(
   impactPlan: ImpactPlan,
   storyMap: StoryMap,
@@ -332,7 +359,6 @@ export function validateImpactPlan(
   const characterIds = new Set(
     storyMap.characters.map((character) => character.id),
   );
-  const edgeIds = new Set(storyMap.edges.map((edge) => edge.id));
   const evaluatedAnchorIds = new Set(
     impactPlan.anchorEvaluations.map((evaluation) => evaluation.anchorId),
   );
@@ -347,19 +373,7 @@ export function validateImpactPlan(
 
   // 不确定 Edge 索引必须落在绑定的 confirmed Story Map 里；旧计划没有
   // 这些字段时跳过。生成、接受与读取续写上下文都走同一校验。
-  for (const [field, values] of [
-    ["uncertainEdgeIds", impactPlan.uncertainEdgeIds],
-    ["usedUncertainEdgeIds", impactPlan.usedUncertainEdgeIds],
-  ] as const) {
-    values?.forEach((edgeId, index) => {
-      if (!edgeIds.has(edgeId)) {
-        issues.push({
-          path: `${field}.${index}`,
-          message: `${field} 引用了未知 Edge：${edgeId}`,
-        });
-      }
-    });
-  }
+  issues.push(...validateImpactPlanUncertainEdgeIds(impactPlan, storyMap));
 
   for (const scope of ["direct", "downstream", "ending"] as const) {
     if (!impactPlan.impacts.some((impact) => impact.scope === scope)) {

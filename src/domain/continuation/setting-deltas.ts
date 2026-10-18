@@ -233,9 +233,11 @@ export function assertSettingDeltaPathsFit(input: {
     });
     const length = renderSettingDeltaContextText(items).length;
     if (length > SETTING_DELTA_CONTEXT_MAX_CHARS) {
+      // 读者文案不显示 2000 / 当前长度等内部数字；具体数字只留在日志与
+      // 稳定 code 中，文案给出可执行出路。
       throw new SettingDeltaError(
         "path_text_limit",
-        `会使「${affected.label}」所在路径的设定增量超过 ${SETTING_DELTA_CONTEXT_MAX_CHARS} 字（当前 ${length} 字）：请缩短规则说明，或停用/删除该路径上的其他规则`,
+        `会使「${affected.label}」所在路径的设定增量过长：请缩短规则说明，或停用/删除该路径上的其他规则`,
       );
     }
   }

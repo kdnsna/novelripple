@@ -8,11 +8,11 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import {
-  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SettingDeltaSubjectSchema,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
   StoryMapGenerationStartModeSchema,
+  isSettingDeltaForbiddenCharMessage,
   type ContinuationDirectionsArtifact,
   type ContinuationSceneArtifact,
   type ImpactPlanArtifact,
@@ -516,13 +516,10 @@ export async function deleteSettingDeltaAction(
 function settingDeltaErrorMessage(error: unknown): string {
   // Zod 只可能来自主体/说明的 Schema 解析；错误文案本身就是面向读者的规则说明。
   if (error instanceof z.ZodError) {
-    if (
-      error.issues.some(
-        (issue) => issue.message === SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
-      )
-    ) {
-      return SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE;
-    }
+    const forbidden = error.issues.find((issue) =>
+      isSettingDeltaForbiddenCharMessage(issue.message),
+    );
+    if (forbidden) return forbidden.message;
     return "设定增量参数无效：请检查主体、说明与锚点。";
   }
   // 仓储/领域检查统一抛 SettingDeltaError：message 已包含路径等规则相关

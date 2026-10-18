@@ -9,11 +9,11 @@ import {
   type PathSettingDelta,
 } from "@/domain/continuation/setting-deltas";
 import {
-  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
   findForbiddenSettingDeltaChar,
   normalizeSettingDeltaText,
+  settingDeltaForbiddenCharMessage,
   type SettingDeltaLifecycleV1,
   type SettingDeltaSubject,
   type SettingDeltaV1,
@@ -138,8 +138,12 @@ export function settingDeltaAnchorHint(currentNode: SceneNode | null): string {
 export function validateSettingDeltaDraft(
   draft: SettingDeltaDraft,
 ): SettingDeltaDraftValidation {
-  if (findForbiddenSettingDeltaChar(draft.statement) !== null) {
-    return { valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE };
+  const forbiddenStatement = findForbiddenSettingDeltaChar(draft.statement);
+  if (forbiddenStatement !== null) {
+    return {
+      valid: false,
+      error: settingDeltaForbiddenCharMessage(forbiddenStatement, "设定说明"),
+    };
   }
   const statement = normalizeSettingDeltaText(draft.statement);
   if (statement.length === 0) {
@@ -163,8 +167,12 @@ export function validateSettingDeltaDraft(
     };
   }
 
-  if (findForbiddenSettingDeltaChar(draft.termName) !== null) {
-    return { valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE };
+  const forbiddenTermName = findForbiddenSettingDeltaChar(draft.termName);
+  if (forbiddenTermName !== null) {
+    return {
+      valid: false,
+      error: settingDeltaForbiddenCharMessage(forbiddenTermName, "词条名"),
+    };
   }
   const termName = normalizeSettingDeltaText(draft.termName);
   if (termName.length === 0) {

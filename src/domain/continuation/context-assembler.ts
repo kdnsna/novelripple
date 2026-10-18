@@ -85,6 +85,8 @@ export type ContextEvidenceItem = {
   text: string;
   priority?: number;
   pinned?: boolean;
+  /** 原本 pinned，但因 pinned 上限被降级为普通可裁剪证据；仅用于 manifest。 */
+  demotedFromPinned?: boolean;
 };
 
 export type ContextSceneItem = {
@@ -141,6 +143,7 @@ type NormalizedItem = {
   priority: number;
   summary: string;
   pinned: boolean;
+  demotedFromPinned: boolean;
 };
 
 type NormalizedSettingDelta = {
@@ -365,18 +368,31 @@ export function assembleContext(
   }
 
   // 9. 所有可用降级都试过仍放不下：fail closed，不返回半成品。
+  // 最新场景永远不能整段丢弃；阶梯真正能接受的最小形式是“摘要”或
+  // “最短安全句末前缀 + 截断标记”。neededChars 必须按这个最小形式计算，
+  // 否则调用方按报告值重试时仍可能失败。
   const mandatoryPrompt = renderMandatoryPrompt(live);
+  const newest = live.recentScenes.at(-1);
+  const minimalNewestText =
+    newest === undefined
+      ? null
+      : minimalNewestSceneText(newest, summarySwapped);
+  const minimalPrompt =
+    newest !== undefined && minimalNewestText !== null
+      ? renderMandatoryPrompt(live, minimalNewestText)
+      : mandatoryPrompt;
+  const neededChars = minimalPrompt.length;
   if (mandatoryPrompt.length > maxChars) {
     throw new ContinuationContextBudgetError({
-      neededChars: mandatoryPrompt.length,
+      neededChars,
       maxChars,
-      message: `必需上下文段超过预算：需要 ${mandatoryPrompt.length} 字符，maxChars=${maxChars}`,
+      message: `必需上下文段超过预算：需要 ${neededChars} 字符，maxChars=${maxChars}`,
     });
   }
   throw new ContinuationContextBudgetError({
-    neededChars: prompt.length,
+    neededChars,
     maxChars,
-    message: `必需上下文段与最新场景超过预算：需要 ${prompt.length} 字符，maxChars=${maxChars}`,
+    message: `必需上下文段与最新场景超过预算：需要 ${neededChars} 字符，maxChars=${maxChars}`,
   });
 }
 
@@ -411,7 +427,11 @@ function renderPrompt(sections: LiveSections): string {
   return blocks.join("\n\n");
 }
 
-function renderMandatoryPrompt(sections: LiveSections): string {
+function renderMandatoryPrompt(
+  sections: LiveSections,
+  newestSceneText?: string,
+): string {
+  const newest = sections.recentScenes.at(-1);
   return renderPrompt({
     worldlineSetup: sections.worldlineSetup,
     canonEvents: sections.canonEvents,
@@ -420,10 +440,24 @@ function renderMandatoryPrompt(sections: LiveSections): string {
     pathSummaryCoveredSceneIds: [],
     pathSummaryWatermarkSceneId: null,
     canonEvidence: sections.canonEvidence.filter((item) => item.pinned),
-    recentScenes: [],
+    recentScenes:
+      newestSceneText === undefined || newest === undefined
+        ? []
+        : [{ ...newest, text: newestSceneText, summary: "" }],
     selectedDirection: sections.selectedDirection,
     anchorReminder: sections.anchorReminder,
   });
+}
+
+/** 最新场景在阶梯上能接受的最小文本：摘要或最短安全前缀 + 截断标记。 */
+function minimalNewestSceneText(
+  scene: NormalizedItem,
+  summarySwapped: boolean,
+): string | null {
+  if (summarySwapped) return scene.text;
+  if (hasUsableSummary(scene)) return scene.summary;
+  const prefix = shortestSentencePrefix(scene.text);
+  return prefix === null ? null : `${prefix}${TRUNCATION_MARKER}`;
 }
 
 function renderStringSection(
@@ -461,6 +495,7 @@ function normalizeEvidence(
         priority,
         summary: "",
         pinned: item.pinned ?? false,
+        demotedFromPinned: item.demotedFromPinned ?? false,
       };
     })
     .filter((item) => item.text.length > 0);
@@ -474,6 +509,7 @@ function normalizeScenes(items: readonly ContextSceneItem[]): NormalizedItem[] {
       priority: 0,
       summary: item.summary?.trim() ?? "",
       pinned: false,
+      demotedFromPinned: false,
     }))
     .filter((item) => item.text.length > 0);
 }
@@ -583,6 +619,20 @@ function longestSentencePrefix(
 
   if (cut > 0) return text.slice(0, cut);
   if (fallbackOpenIndex > 0) return text.slice(0, fallbackOpenIndex);
+  return null;
+}
+
+/**
+ * 最短安全句末前缀。
+ *
+ * 只在 fail closed 时用于计算阶梯真正能接受的最小 newest-scene 形式；
+ * 与 `longestSentencePrefix` 共用同一套引号/省略号边界规则。
+ */
+function shortestSentencePrefix(text: string): string | null {
+  for (let length = 1; length <= text.length; length += 1) {
+    const prefix = longestSentencePrefix(text, length);
+    if (prefix !== null) return prefix;
+  }
   return null;
 }
 
@@ -799,6 +849,9 @@ function buildManifest(input: {
         const pinnedItemIds = live.canonEvidence
           .filter((item) => item.pinned)
           .map((item) => item.id);
+        const demotedItemIds = live.canonEvidence
+          .filter((item) => item.demotedFromPinned)
+          .map((item) => item.id);
         return section(
           kind,
           included,
@@ -807,7 +860,10 @@ function buildManifest(input: {
             : 0,
           input.evidenceTrimmed,
           input.droppedEvidenceIds,
-          pinnedItemIds.length > 0 ? { pinnedItemIds } : {},
+          {
+            ...(pinnedItemIds.length > 0 ? { pinnedItemIds } : {}),
+            ...(demotedItemIds.length > 0 ? { demotedItemIds } : {}),
+          },
         );
       }
       case "recent_scenes": {
@@ -871,6 +927,7 @@ function buildManifest(input: {
 
 type SectionExtras = {
   pinnedItemIds?: string[];
+  demotedItemIds?: string[];
   summarizedItemIds?: string[];
   truncatedItemIds?: string[];
   compactedFields?: string[];

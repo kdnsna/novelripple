@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildCanonEventsSection,
   buildRelatedEvidenceItems,
+  capPinnedEvidence,
+  CONTEXT_PINNED_EVIDENCE_MAX_CHARS,
+  CONTEXT_PINNED_EVIDENCE_MAX_ITEMS,
   divergenceDependencyEventIds,
   selectRelatedCanon,
 } from "@/domain/continuation/canon-context";
@@ -294,3 +297,94 @@ describe("divergenceDependencyEventIds", () => {
     expect(ids.some((id) => id.startsWith("related:event_08:"))).toBe(false);
   });
 });
+
+describe("capPinnedEvidence", () => {
+  it("keeps divergence evidence first and caps dependencies deterministically", async () => {
+    const fixture = await loadRippleFixture();
+    const items = fixture.storyMap.events.flatMap((event) =>
+      Array.from({ length: 3 }, (_, index) => ({
+        id: `related:${event.id}:${index}`,
+        text: `[${event.id}] 分歧前证据 ${index}。`,
+        priority: 2,
+        pinned: true,
+      })),
+    );
+    const input = {
+      items,
+      storyMap: fixture.storyMap,
+      divergenceEventId: "event_07",
+    };
+    const first = capPinnedEvidence(input);
+    const second = capPinnedEvidence(input);
+
+    expect(first.pinnedItemIds.length).toBeLessThanOrEqual(
+      CONTEXT_PINNED_EVIDENCE_MAX_ITEMS,
+    );
+    expect(first.pinnedItemIds).toHaveLength(
+      CONTEXT_PINNED_EVIDENCE_MAX_ITEMS,
+    );
+    // 分歧事件自身的证据全部保留（manifest 按渲染顺序记录）。
+    expect(first.pinnedItemIds).toEqual(
+      expect.arrayContaining([
+        "related:event_07:0",
+        "related:event_07:1",
+        "related:event_07:2",
+      ]),
+    );
+    expect(
+      first.demotedItemIds.some((id) => id.startsWith("related:event_07:")),
+    ).toBe(false);
+    // 最近的直接依赖先拿到第二轮；最远的 event_01 只保留第一条。
+    expect(first.pinnedItemIds).toEqual(
+      expect.arrayContaining([
+        "related:event_06:0",
+        "related:event_06:1",
+      ]),
+    );
+    // 轮转保证每条依赖事件都先拿到第一条；最远的 event_01 的其余条目被降级。
+    expect(first.demotedItemIds).toEqual(
+      expect.arrayContaining([
+        "related:event_01:1",
+        "related:event_01:2",
+      ]),
+    );
+    expect(first.pinnedItemIds).toContain("related:event_01:0");
+    // 确定性：同一输入逐项相同。
+    expect(second.pinnedItemIds).toEqual(first.pinnedItemIds);
+    expect(second.demotedItemIds).toEqual(first.demotedItemIds);
+    // 超限条目仍留在候选中，只是降级为可裁剪证据；不在 droppedItemIds。
+    expect(first.items).toHaveLength(items.length);
+    for (const id of first.demotedItemIds) {
+      const item = first.items.find((candidate) => candidate.id === id)!;
+      expect(item.pinned).toBe(false);
+      expect(item.demotedFromPinned).toBe(true);
+    }
+    expect(first.demotedItemIds).toHaveLength(
+      items.length - CONTEXT_PINNED_EVIDENCE_MAX_ITEMS,
+    );
+  });
+
+  it("applies the pinned character cap without changing the candidate list", async () => {
+    const fixture = await loadRippleFixture();
+    const items = fixture.storyMap.events.map((event) => ({
+      id: `related:${event.id}:0`,
+      text: "长".repeat(CONTEXT_PINNED_EVIDENCE_MAX_CHARS),
+      priority: 2,
+      pinned: true,
+    }));
+    const result = capPinnedEvidence({
+      items,
+      storyMap: fixture.storyMap,
+      divergenceEventId: "event_07",
+    });
+    const pinnedChars = result.items
+      .filter((item) => item.pinned)
+      .reduce((total, item) => total + item.text.trim().length, 0);
+    expect(pinnedChars).toBeLessThanOrEqual(
+      CONTEXT_PINNED_EVIDENCE_MAX_CHARS,
+    );
+    expect(result.items).toHaveLength(items.length);
+    expect(result.demotedItemIds.length).toBeGreaterThan(0);
+  });
+});
+
