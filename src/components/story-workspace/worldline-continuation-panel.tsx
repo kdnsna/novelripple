@@ -34,6 +34,7 @@ import {
   type ContinuationTreeView,
 } from "./continuation-tree-view";
 import { PathCharacterStates } from "./path-character-states";
+import { PathSettingDeltas } from "./path-setting-deltas";
 import { WorldlineTreeNav } from "./worldline-tree-nav";
 import {
   defaultExpandedTreeIds,
@@ -411,6 +412,18 @@ export function WorldlineContinuationPanel({
       {!pathDerivation.error && pathDerivation.pathState ? (
         <PathCharacterStates states={pathDerivation.characters} />
       ) : null}
+
+      <PathSettingDeltas
+        characters={storyMap.characters}
+        currentPath={currentPath}
+        onArtifactAdded={(artifact) =>
+          setView((current) => appendContinuationArtifact(current, artifact))
+        }
+        projectId={projectId}
+        settingDeltas={view.settingDeltas}
+        tree={tree}
+        worldlineId={worldline.id}
+      />
 
       {currentPath.length === 0 && !activeBatch ? (
         <section className="continuation-empty">

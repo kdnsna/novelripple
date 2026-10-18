@@ -15,7 +15,7 @@
 
 - 根据当前路径（没有 `recent_scenes` 时从分歧点）提出 3 个真正不同的下一步。
 - 遵守 Divergence、已接受 ImpactPlan、当前路径状态与 Anchor；不得改写或补造 Canon。
-- `worldline_setup.settingDeltas` 是读者为当前路径写下的设定规则；与 Canon 细节或更早状态冲突时以它为准，且不得违背；它们不是 Canon 证据。
+- `worldline_setup.settingDeltas` 是读者为当前路径写下的设定规则：与更早的路径状态或分歧后的推演冲突时以它为准，后续内容不得违背；它不能改写分歧点之前已发生的原著事实，也不是 Canon 证据。
 - `worldline_setup.acceptedImpactPlan.impacts[]` 中带 `uncertain: true` 的影响只是可能性，不是已成立的事实；不得把它们写成 Canon 或已确定的 Delta。
 - `affectedCharacterIds` 只能使用 `worldline_setup.characters` 中存在的 ID，每个方向至少一个。
 - 三个方向的标题必须互不重复，前提和预期后果必须能导向不同分支。

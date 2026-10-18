@@ -256,6 +256,91 @@ test("reopens an inner scene from the worldline tree and branches a new sibling 
   await expect(page.getByTestId("path-character-states")).toBeVisible();
 });
 
+test("adds a path-scoped setting delta and keeps it visible on descendants", async ({
+  page,
+}) => {
+  await enterReroutedWorldline(page, `Setting delta ${Date.now()}`);
+
+  // 根批次 → 第 1 幕；再为第 1 幕生成方向 → 第 2 幕（第一个方向）。
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站的第二把锁",
+  );
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+
+  // 回到第 1 幕添加一条术语设定增量；它只从第 1 幕起对本路径生效。
+  const tree = page.getByTestId("worldline-tree");
+  await tree
+    .getByRole("button", { name: "第 1 幕 · 潮标站的第二把锁" })
+    .click();
+  await page.getByRole("button", { name: "添加设定增量" }).click();
+  await page.getByLabel("主体类型").selectOption("term");
+  await page.getByLabel("设定词条").fill("旧灯塔");
+  await page.getByLabel("规则说明").fill("旧灯塔已被封锁");
+  await page.getByRole("button", { name: "保存设定增量" }).click();
+
+  const settingDeltas = page.getByTestId("path-setting-deltas");
+  await expect(settingDeltas.getByTestId("path-setting-delta")).toHaveCount(1);
+  await expect(settingDeltas).toContainText("旧灯塔");
+  await expect(settingDeltas).toContainText("旧灯塔已被封锁");
+  await expect(settingDeltas).toContainText("自第 1 幕起");
+
+  // 选一个尚未探索的方向创建兄弟第 2 幕：规则作为祖先对后代可见。
+  await page
+    .locator(".direction-card")
+    .nth(1)
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+  await expect(settingDeltas.getByTestId("path-setting-delta")).toHaveCount(1);
+
+  // 原始第 2 幕同样是第 1 幕的后代，规则仍然可见。
+  const secondActRows = tree
+    .getByTestId("worldline-tree-row")
+    .filter({ hasText: "第 2 幕 · 潮标站之后" });
+  await expect(secondActRows).toHaveCount(2);
+  await secondActRows
+    .first()
+    .getByRole("button", { name: "第 2 幕 · 潮标站之后" })
+    .click();
+  await expect(settingDeltas.getByTestId("path-setting-delta")).toHaveCount(1);
+
+  // 分歧点不是任何场景的后代，规则不可见。
+  await tree.getByRole("button", { name: "分歧点", exact: true }).click();
+  await expect(settingDeltas).toContainText("本路径还没有设定增量。");
+
+  // 刷新后规则仍在，并从最新 Worldline 的第 1 幕重新读到。
+  await page.reload();
+  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
+  await page.getByRole("button", { name: "继续最近 Worldline" }).click();
+  await expect(page.getByTestId("worldline-continuation")).toBeVisible();
+  await page
+    .getByTestId("worldline-tree")
+    .getByRole("button", { name: "第 1 幕 · 潮标站的第二把锁" })
+    .click();
+  await expect(
+    page.getByTestId("path-setting-deltas").getByTestId("path-setting-delta"),
+  ).toHaveCount(1);
+  await expect(page.getByTestId("path-setting-deltas")).toContainText(
+    "旧灯塔已被封锁",
+  );
+});
+
 test("shows incompatible and blocks strict acceptance", async ({ page }) => {
   await createConfirmedFixtureProject(page, `Ripple incompatible ${Date.now()}`);
   await page.getByTestId("event-node-event_07").click();

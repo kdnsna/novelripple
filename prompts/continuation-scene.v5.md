@@ -15,7 +15,7 @@
 约束：
 
 - 遵守 Divergence、已接受 ImpactPlan、当前路径状态与 Anchor。
-- `worldline_setup.settingDeltas` 是读者为当前路径写下的设定规则；与 Canon 细节或更早状态冲突时以它为准，且不得违背；它们不是 Canon 证据。
+- `worldline_setup.settingDeltas` 是读者为当前路径写下的设定规则：与更早的路径状态或分歧后的推演冲突时以它为准，后续内容不得违背；它不能改写分歧点之前已发生的原著事实，也不是 Canon 证据。
 - `worldline_setup.acceptedImpactPlan.impacts[]` 中带 `uncertain: true` 的影响只是可能性，不是已成立的事实；不得把它们写成 Canon 或已确定的 Delta。
 - `canon_evidence`、`recent_scenes` 只读，不得改写或补造 Canon，也不得整段照抄。
 - 只依据 `worldline_setup.currentState` 和当前路径继续；场景新增事实只能使用 `generated:` 命名空间。

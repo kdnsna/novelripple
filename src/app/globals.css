@@ -2681,6 +2681,7 @@ input:focus-visible,
 
 .worldline-delta,
 .path-character-states,
+.path-setting-deltas,
 .continuation-empty,
 .continuation-directions,
 .continuation-path {
@@ -2694,6 +2695,7 @@ input:focus-visible,
 
 .worldline-delta h3,
 .path-character-states h3,
+.path-setting-deltas h3,
 .continuation-empty h3,
 .continuation-directions h3,
 .path-scene h3,
@@ -2751,6 +2753,121 @@ input:focus-visible,
   color: var(--muted);
   font-size: 0.7rem;
   line-height: 1.5;
+}
+
+.path-setting-deltas-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.path-setting-delta-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path-setting-delta-list > li {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+}
+
+.path-setting-delta-item-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+
+.path-setting-delta-item-heading span,
+.path-setting-delta-counter {
+  color: var(--ink-soft);
+}
+
+.path-setting-delta-statement {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.path-setting-delta-history {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-setting-delta-empty,
+.path-setting-delta-cap,
+.path-setting-delta-counter,
+.path-setting-delta-hint {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.path-setting-delta-cap {
+  color: var(--rust-dark);
+}
+
+.path-setting-delta-form {
+  display: grid;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--line);
+  gap: 0.35rem;
+}
+
+.path-setting-delta-form label {
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.path-setting-delta-form select,
+.path-setting-delta-form input,
+.path-setting-delta-form textarea {
+  width: 100%;
+  padding: 0.45rem;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 0.75rem;
+}
+
+.path-setting-delta-form textarea {
+  resize: vertical;
+}
+
+.path-setting-delta-counter {
+  text-align: right;
+}
+
+.path-setting-delta-form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.setting-delta-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .direction-generated-actions {

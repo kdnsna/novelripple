@@ -229,7 +229,7 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 读者可在任意场景节点添加一条短设定规则（`setting_delta` continuation Artifact，payload `SettingDeltaV1`：`subject`、`statement`、`anchorSceneId`）。`anchorSceneId` 为 `null` 时规则从分歧点起整条世界线生效；否则只在该锚点场景及其后代生效。规则只沿当前路径可见：祖先节点与当前节点上的规则生效，兄弟分支的规则永不出现。同一主体（人物稳定 ID 或规范化术语名）沿路径更晚/更深的规则覆盖较早规则，旧行保留为只读 history，不 UPDATE 或 DELETE。
 
-每条世界线最多保存 `SETTING_DELTA_MAX_PER_WORLDLINE = 50` 条；派生当前路径时最多保留 `SETTING_DELTA_MAX_ACTIVE = 20` 个生效主体（最深/最新优先）。因此 `worldline_setup.settingDeltas` 有界，不进入裁剪阶梯。设定增量是读者规则，不是 Canon 证据，也不写入 `statePatch` 或路径状态；方向与场景生成的 full / compact `worldline_setup` 都携带它们（compact 只省略 anchor 标签），Prompt 要求其覆盖冲突的 Canon 细节与更早状态且不得被违背。
+每条世界线最多保存 `SETTING_DELTA_MAX_PER_WORLDLINE = 50` 条；派生当前路径时最多保留 `SETTING_DELTA_MAX_ACTIVE = 20` 个生效主体（最深/最新优先）。因此 `worldline_setup.settingDeltas` 有界，不进入裁剪阶梯。设定增量是读者规则，不是 Canon 证据，也不写入 `statePatch` 或路径状态；方向与场景生成的 full / compact `worldline_setup` 都携带它们（compact 只省略 anchor 标签），Prompt 要求其覆盖更早的路径状态与分歧后的推演，但不能改写分歧点之前已发生的原著事实。
 
 ### 上下文组装与清单
 

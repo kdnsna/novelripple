@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+/** 设定词条名与规则说明的输入上限；Schema 与界面共用同一份常量。 */
+export const SETTING_DELTA_TERM_NAME_MAX_CHARS = 40;
+export const SETTING_DELTA_STATEMENT_MAX_CHARS = 200;
+
 /**
  * 设定增量（setting delta）是读者在某个场景节点新增的短设定规则。
  *
@@ -16,7 +20,11 @@ export const SettingDeltaSubjectSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("term"),
-      name: z.string().trim().min(1).max(40),
+      name: z
+        .string()
+        .trim()
+        .min(1)
+        .max(SETTING_DELTA_TERM_NAME_MAX_CHARS),
     })
     .strict(),
 ]);
@@ -28,7 +36,11 @@ export const SettingDeltaV1Schema = z
     /** null 表示从分歧点起整条世界线生效。 */
     anchorSceneId: z.string().min(1).nullable(),
     subject: SettingDeltaSubjectSchema,
-    statement: z.string().trim().min(1).max(200),
+    statement: z
+      .string()
+      .trim()
+      .min(1)
+      .max(SETTING_DELTA_STATEMENT_MAX_CHARS),
     contentKind: z.literal("user"),
     createdAt: z.iso.datetime(),
   })

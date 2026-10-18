@@ -1252,6 +1252,9 @@ describe("Continuation scene tree generation", () => {
       "北侧石阶已经塌方，不能通行。",
     );
     expect(childDirectionsPrompt).toContain('"anchor":"第 1 幕"');
+    expect(childDirectionsPrompt).toContain(
+      "不能改写分歧点之前已发生的原著事实",
+    );
     expect(
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === childDirections.generation?.runId,
@@ -1280,5 +1283,8 @@ describe("Continuation scene tree generation", () => {
     expect(scenePrompt).toContain("夜班渡船已经停航。");
     expect(scenePrompt).not.toContain("北侧石阶已经塌方，不能通行。");
     expect(scenePrompt).toContain("worldline_setup.settingDeltas");
+    expect(scenePrompt).toContain(
+      "不能改写分歧点之前已发生的原著事实",
+    );
   });
 });
