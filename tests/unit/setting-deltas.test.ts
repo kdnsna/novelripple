@@ -11,10 +11,10 @@ import {
   deriveActiveSettingDeltasAsOf,
   derivePathSettingDeltas,
   isDirectionBatchStale,
-  normalizedContextChars,
-  serializeSettingDeltasForContext,
   settingDeltaActiveFingerprint,
+  settingDeltaAffectedPaths,
   settingDeltaLifecycleStatuses,
+  renderSettingDeltaContextText,
   subjectKey,
 } from "@/domain/continuation/setting-deltas";
 import {
@@ -519,12 +519,13 @@ describe("setting delta context serialization", () => {
     ]);
     expect(items[0]!.text).toContain("沈砚（自分歧点起）");
     expect(items[1]!.text).toContain("旧灯塔（自第 1 幕起）");
-    expect(serializeSettingDeltasForContext(items)).toBe(
+    // 写时测量与 Prompt 段内文本共用同一个渲染函数。
+    expect(renderSettingDeltaContextText(items)).toBe(
       items.map((item) => item.text).join("\n"),
     );
   });
 
-  it("rejects 20 maximum-length statements but accepts a small set", () => {
+  it("measures the exact rendered setting_deltas text for the 2k cap", () => {
     const tree = buildTree();
     const maxStatements = Array.from({ length: 20 }, (_, index) =>
       settingDelta({
@@ -539,33 +540,36 @@ describe("setting delta context serialization", () => {
       deltas: maxStatements,
       path: [],
     });
-    const serialized = serializeSettingDeltasForContext(
+    const rendered = renderSettingDeltaContextText(
       buildSettingDeltaContextItems({ active, characters: [] }),
     );
-    expect(normalizedContextChars(serialized)).toBeGreaterThan(
-      SETTING_DELTA_CONTEXT_MAX_CHARS,
-    );
+    expect(rendered.length).toBeGreaterThan(SETTING_DELTA_CONTEXT_MAX_CHARS);
 
     const small = maxStatements.slice(0, 2);
-    const smallSerialized = serializeSettingDeltasForContext(
+    const smallRendered = renderSettingDeltaContextText(
       buildSettingDeltaContextItems({
         active: deriveActiveSettingDeltas({ tree, deltas: small, path: [] }),
         characters: [],
       }),
     );
-    expect(normalizedContextChars(smallSerialized)).toBeLessThanOrEqual(
+    expect(smallRendered.length).toBeLessThanOrEqual(
       SETTING_DELTA_CONTEXT_MAX_CHARS,
     );
   });
 
-  it("measures control-character padding after normalization, not before", () => {
-    const padding = "\u0000".repeat(10_000);
-    expect(normalizedContextChars(`旧灯塔${padding}已被封锁`)).toBe(
-      normalizedContextChars("旧灯塔已被封锁"),
-    );
-    expect(normalizedContextChars(`${padding}\n${padding}`)).toBe(0);
-    // NFKC 后全角字符按统一形式计数。
-    expect(normalizedContextChars("ＡＢＣ")).toBe(3);
+  it("lists the anchor subtree paths that a write can affect", () => {
+    const tree = buildTree();
+    const rootPaths = settingDeltaAffectedPaths(tree, null);
+    // 空根路径 + 树中每个节点。
+    expect(rootPaths).toHaveLength(tree.nodes.size + 1);
+    expect(rootPaths[0]).toEqual({ path: [], label: "分歧点" });
+
+    const anchorPaths = settingDeltaAffectedPaths(tree, "scene_a");
+    const ids = anchorPaths.map((entry) => entry.path.at(-1)?.id ?? "root");
+    expect(ids).toContain("scene_a");
+    expect(ids).toContain("scene_a1");
+    expect(ids).not.toContain("scene_b");
+    expect(anchorPaths[0]!.label).toBe("第 1 幕 · 第一幕 A");
   });
 });
 

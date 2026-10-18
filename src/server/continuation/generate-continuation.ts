@@ -19,6 +19,7 @@ import {
   deriveActiveSettingDeltas,
   isDirectionBatchStale,
   SETTING_DELTA_STALE_BATCH_MESSAGE,
+  settingDeltaActiveFingerprint,
   type ActiveSettingDelta,
   type SettingDeltaContextItem,
 } from "@/domain/continuation/setting-deltas";
@@ -36,6 +37,8 @@ import {
   validateAgainstPreDivergenceCanon,
   validateContinuationDirections,
   validateContinuationStatePatch,
+  type ContinuationCanonHardRejection,
+  type ContinuationCanonWarning,
 } from "@/domain/invariants/validate-continuation";
 import {
   assertValidImpactPlan,
@@ -58,6 +61,10 @@ import {
 import { generateStructured } from "@/server/ai/generate-structured";
 import { runWithInFlightLock } from "@/server/ai/in-flight-generation";
 import type { AIProvider, ModelConfig } from "@/server/ai/types";
+import {
+  readContinuationCanonGuardPolicy,
+  runWithCanonGuard,
+} from "@/server/continuation/canon-guard";
 import { readContinuationContextMaxChars } from "@/server/continuation/continuation-limits";
 import {
   createContinuationDirectionsArtifactV2,
@@ -96,11 +103,20 @@ export async function generateContinuationDirections(input: {
   const parentSceneId = input.parentSceneId ?? null;
   const newBatch = input.newBatch ?? false;
   const context = loadContinuationContext(input);
+  const canonGuardPolicy = readContinuationCanonGuardPolicy();
+  const divergenceEventId = context.worldline.divergence?.eventId;
+  if (!divergenceEventId) {
+    throw new Error("Continuation Worldline 缺少 Divergence Event");
+  }
   const resolvedPath = resolveScenePath({
     worldlineId: context.worldline.id,
     parentSceneId,
   });
   const { path, activeSettingDeltas } = resolvedPath;
+  // 这里就是组装上下文时真正使用的 active 集合；把它冻结成指纹写进新批次，
+  // 生成期间新增/改写/停用规则都能在落库后被识别为 stale。
+  const settingDeltaFingerprint =
+    settingDeltaActiveFingerprint(activeSettingDeltas);
   const settingDeltas = buildSettingDeltaContextItems({
     active: activeSettingDeltas,
     characters: context.storyMapArtifact.storyMap.characters,
@@ -148,34 +164,51 @@ export async function generateContinuationDirections(input: {
       selectedDirection: null,
     });
     const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
+    let canonWarnings: ContinuationCanonWarning[] = [];
+    let hardRejections: ContinuationCanonHardRejection[] = [];
 
-    const generation = await generateStructured(
-      {
-        projectId: input.projectId,
-        worldlineId: context.worldline.id,
-        kind: "continuation_directions",
-        promptVersion: directionsPromptVersion,
-        prompt,
-        schemaName: "continuation_directions",
-        schema: ContinuationDirectionsModelOutputSchema,
-        modelConfig: input.modelConfig,
-        validate: (output) => [
-          ...validateContinuationDirections(
-            output,
-            context.storyMapArtifact.storyMap,
-          ),
-          ...validateAgainstPreDivergenceCanon({
-            textFields: output.directions.flatMap((direction) => [
-              direction.title,
-              direction.premise,
-              direction.expectedConsequence,
-            ]),
-            storyMap: context.storyMapArtifact.storyMap,
-            baseDelta: context.baseState,
-          }),
-        ],
-      },
-      input.provider,
+    const generation = await runWithCanonGuard(
+      () => generateStructured(
+        {
+          projectId: input.projectId,
+          worldlineId: context.worldline.id,
+          kind: "continuation_directions",
+          promptVersion: directionsPromptVersion,
+          prompt,
+          schemaName: "continuation_directions",
+          schema: ContinuationDirectionsModelOutputSchema,
+          modelConfig: input.modelConfig,
+          validate: (output) => {
+            const canon = validateAgainstPreDivergenceCanon({
+              textFields: output.directions.flatMap((direction, index) => [
+                { field: `directions.${index}.title`, text: direction.title },
+                { field: `directions.${index}.premise`, text: direction.premise },
+                {
+                  field: `directions.${index}.expectedConsequence`,
+                  text: direction.expectedConsequence,
+                },
+              ]),
+              storyMap: context.storyMapArtifact.storyMap,
+              divergenceEventId,
+              pathState,
+              policy: canonGuardPolicy,
+            });
+            hardRejections = canon.hardRejections;
+            if (canon.issues.length === 0) {
+              canonWarnings = canon.warnings;
+            }
+            return [
+              ...validateContinuationDirections(
+                output,
+                context.storyMapArtifact.storyMap,
+              ),
+              ...canon.issues,
+            ];
+          },
+        },
+        input.provider,
+      ),
+      () => hardRejections.map((rejection) => rejection.title),
     );
     const artifact = createContinuationDirectionsArtifactV2({
       projectId: input.projectId,
@@ -186,6 +219,8 @@ export async function generateContinuationDirections(input: {
       batchIndex,
       output: generation.value,
       generationRunId: generation.generation.runId,
+      settingDeltaFingerprint,
+      ...(canonWarnings.length > 0 ? { canonWarnings } : {}),
     });
 
     return { artifact, generation: generation.generation };
@@ -202,6 +237,7 @@ export async function generateContinuationScene(input: {
   modelConfig: ModelConfig;
 }) {
   const context = loadContinuationContext(input);
+  const canonGuardPolicy = readContinuationCanonGuardPolicy();
   const retry = input.retry ?? false;
   const directionsArtifact = getContinuationArtifact(
     input.directionsArtifactId,
@@ -290,32 +326,51 @@ export async function generateContinuationScene(input: {
       throw new Error("Continuation Worldline 缺少 Divergence Event");
     }
 
-    const generation = await generateStructured(
-      {
-        projectId: input.projectId,
-        worldlineId: context.worldline.id,
-        kind: "continuation_scene",
-        promptVersion: scenePromptVersion,
-        prompt,
-        schemaName: "continuation_scene",
-        schema: ContinuationSceneModelOutputV3Schema,
-        modelConfig: input.modelConfig,
-        validate: (output) => [
-          ...validateContinuationStatePatch(
-            output.statePatch,
-            pathState,
-            context.storyMapArtifact.storyMap,
-            divergenceEventId,
-            context.worldline.anchors.map((anchor) => anchor.targetEventId),
-          ),
-          ...validateAgainstPreDivergenceCanon({
-            textFields: [output.title, output.prose, output.summary],
-            storyMap: context.storyMapArtifact.storyMap,
-            baseDelta: context.baseState,
-          }),
-        ],
-      },
-      input.provider,
+    let canonWarnings: ContinuationCanonWarning[] = [];
+    let hardRejections: ContinuationCanonHardRejection[] = [];
+
+    const generation = await runWithCanonGuard(
+      () => generateStructured(
+        {
+          projectId: input.projectId,
+          worldlineId: context.worldline.id,
+          kind: "continuation_scene",
+          promptVersion: scenePromptVersion,
+          prompt,
+          schemaName: "continuation_scene",
+          schema: ContinuationSceneModelOutputV3Schema,
+          modelConfig: input.modelConfig,
+          validate: (output) => {
+            const canon = validateAgainstPreDivergenceCanon({
+              textFields: [
+                { field: "title", text: output.title },
+                { field: "prose", text: output.prose },
+                { field: "summary", text: output.summary },
+              ],
+              storyMap: context.storyMapArtifact.storyMap,
+              divergenceEventId,
+              pathState,
+              policy: canonGuardPolicy,
+            });
+            hardRejections = canon.hardRejections;
+            if (canon.issues.length === 0) {
+              canonWarnings = canon.warnings;
+            }
+            return [
+              ...validateContinuationStatePatch(
+                output.statePatch,
+                pathState,
+                context.storyMapArtifact.storyMap,
+                divergenceEventId,
+                context.worldline.anchors.map((anchor) => anchor.targetEventId),
+              ),
+              ...canon.issues,
+            ];
+          },
+        },
+        input.provider,
+      ),
+      () => hardRejections.map((rejection) => rejection.title),
     );
     const artifact = createContinuationSceneArtifactV2({
       projectId: input.projectId,
@@ -332,6 +387,7 @@ export async function generateContinuationScene(input: {
       contextManifest: material.manifest,
       output: sceneOutputWithoutSummary(generation.value),
       generationRunId: generation.generation.runId,
+      ...(canonWarnings.length > 0 ? { canonWarnings } : {}),
     });
 
     return { artifact, generation: generation.generation };
@@ -451,14 +507,22 @@ function resolveScenePath(input: {
 /** 方向批次的稳定元组；v1 批次视为根批次。 */
 function directionBatchDescriptor(
   artifact: ContinuationDirectionsArtifact,
-): { id: string; parentSceneId: string | null; createdAt: string } {
+): {
+  id: string;
+  parentSceneId: string | null;
+  createdAt: string;
+  settingDeltaFingerprint?: string;
+} {
+  const continuation = artifact.continuation;
   return {
     id: artifact.id,
     parentSceneId:
-      artifact.continuation.schemaVersion === 2
-        ? artifact.continuation.parentSceneId
-        : null,
-    createdAt: artifact.continuation.createdAt,
+      continuation.schemaVersion === 2 ? continuation.parentSceneId : null,
+    createdAt: continuation.createdAt,
+    ...(continuation.schemaVersion === 2 &&
+    continuation.settingDeltaFingerprint !== undefined
+      ? { settingDeltaFingerprint: continuation.settingDeltaFingerprint }
+      : {}),
   };
 }
 

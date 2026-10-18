@@ -2,6 +2,7 @@ import {
   StatePatchSchema,
   WorldlineDeltaSchema,
   type ContextManifest,
+  type ContinuationCanonWarning,
   type ContinuationSceneV1,
   type ContinuationSceneV2,
   type StatePatch,
@@ -30,6 +31,8 @@ export type SceneNode = {
   attemptIndex: number;
   summary: string | null;
   contextManifest: ContextManifest | null;
+  /** 低置信 Canon 提示；v1 与无提示的 v2 场景为 null。 */
+  canonWarnings: ContinuationCanonWarning[] | null;
   title: string;
   prose: string;
   statePatch: StatePatch;
@@ -278,6 +281,7 @@ function normalizeSceneNode(scene: ScenePayload): SceneNode {
       attemptIndex: 0,
       summary: null,
       contextManifest: null,
+      canonWarnings: null,
     };
   }
 
@@ -289,6 +293,7 @@ function normalizeSceneNode(scene: ScenePayload): SceneNode {
     attemptIndex: scene.attemptIndex,
     summary: scene.summary,
     contextManifest: scene.contextManifest,
+    canonWarnings: scene.canonWarnings ?? null,
   };
 }
 

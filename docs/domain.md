@@ -231,9 +231,11 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 停用、重新启用与软删除同样是不可变 `continuation` Artifact（`artifactType: "setting_delta_lifecycle"`，payload `SettingDeltaLifecycleV1`：`targetDeltaId`、`status: "deactivated" | "reactivated" | "deleted"`），不 UPDATE 原规则。同一 `targetDeltaId` 按 `(createdAt, id)` 取最新生命周期；没有生命周期视为 active。`deleted` 是软删除：从界面列表与生成上下文完全隐藏，也不占 active 名额；`deactivated` 在界面显示为“已停用”、不进入上下文、不占 active 名额，可被 `reactivated` 恢复（使用原规则说明）。软删除的规则不出现在任何主体的 history 中；生效版本被软删除时整个主体隐藏，不回退到更早版本。
 
-写入时按规则的 `anchorSceneId` 构造路径（`null` = 分歧点空路径）并检查该路径的生效主体：新主体会让 active 数超过 `SETTING_DELTA_MAX_ACTIVE = 20` 时 fail closed，已有生效主体的改写属于替换、不增加 active 数。写入与重新启用还要检查 post-write active 集合的序列化长度：`serializeSettingDeltasForContext` 产生逐条紧凑文本，`normalizedContextChars` 做 NFKC、换行转空格、移除其余 C0/C1 控制字符并合并连续空格，超过 `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000` 时 fail closed。每条 Worldline 最多 `SETTING_DELTA_MAX_PER_WORLDLINE = 50` 条非软删除规则，软删除释放名额。设定增量是读者规则，不是 Canon 证据，也不写入 `statePatch` 或路径状态；生效规则进入独立的可裁剪 `setting_deltas` 段，不再放入 `worldline_setup`。Prompt 要求其覆盖更早的路径状态与分歧后的推演，但不能改写分歧点之前已发生的原著事实。
+写入与重新启用时，按规则的 `anchorSceneId` 确定受影响路径：`null` 为空根路径加树中每个节点，场景锚点为该场景及其全部后代。对每条路径派生 post-write active 集合（含生命周期），检查 active 主体数 ≤ `SETTING_DELTA_MAX_ACTIVE = 20`，且真正渲染进 Prompt 的 `setting_deltas` 文本（`renderSettingDeltaContextText`，逐条文本以 `\n` 连接）长度 ≤ `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000`；任一路径超限 fail closed 并指出具体路径。同一主体的替换不增加 active 数，但仍必须所有受影响路径都通过。检查与插入之间没有 `await`。`statement` 与术语 `name` 写入时做 NFKC + trim，长度按规范化文本检查（200 / 40）；C0（含换行、制表符）、DEL、C1 与 U+2028/U+2029 一律拒绝（「设定说明/词条名不能包含控制字符或换行」）。每条 Worldline 最多 `SETTING_DELTA_MAX_ROWS_PER_WORLDLINE = 200` 条 `setting_delta` 行，**包含软删除行**；软删除只释放 active 名额，不释放存储行。设定增量是读者规则，不是 Canon 证据，也不写入 `statePatch` 或路径状态；生效规则进入独立的可裁剪 `setting_deltas` 段，不再放入 `worldline_setup`。Prompt 要求其覆盖更早的路径状态与分歧后的推演，但不能改写分歧点之前已发生的原著事实。
 
-设定增量的新增、改写、停用、重新启用或软删除都可能让受影响父路径上**早于该变化的未确认方向批次**变为 stale（以当前 active 集合指纹是否变化为准；停用后重新启用回原规则不算）；已确认场景不变。stale 批次在界面显示「设定已更新，请换一批以生效」，禁用选择与重试方向，系统绝不自动换批，只有用户显式「换一批」才创建新批次；`generateContinuationScene` 对 stale 批次 fail closed 且不写 Artifact。生成后、落库前还会用 `validateAgainstPreDivergenceCanon` 拒绝改写分歧前 Canon 的候选：锁定集合是 Story Map 中 `event:<id>` 不在 `baseDelta.factsRemoved` 的事件，命中固定改写/否定线索即走既有 repair→fail-closed 路径，绝不静默裁剪或修补。
+设定增量的新增、改写、停用、重新启用或软删除都可能让受影响父路径上**早于该变化的未确认方向批次**变为 stale。新 v2 方向批次在组装上下文时记录 active 集合指纹 `settingDeltaFingerprint`，当前父路径指纹不同即 stale；旧批次没有该字段时按 `createdAt` 回放；停用后重新启用回原规则不算。已确认场景不变。stale 批次在界面显示「设定已更新，请换一批以生效」，禁用选择与重试方向，系统绝不自动换批，只有用户显式「换一批」才创建新批次；`generateContinuationScene` 对 stale 批次 fail closed 且不写 Artifact。
+
+生成后、落库前还会用 `validateAgainstPreDivergenceCanon` 做低召回的字面 Canon 护栏：锁定集合是 `sequence < 分歧事件.sequence` 且不在**当前路径状态** `factsRemoved`（`derivePathState(baseDelta, path)`）中的事件。只有锁定事件标题与明确“未发生 / 不存在 / 是假的 / 是捏造的”谓词直接绑定（同一句、中间助词 ≤4 字）时才硬拒绝；回忆、因果、`没有忘记<title>`、附近出现其它否定词、分歧后事件与路径删除事件只产生 warning。策略由 `CONTINUATION_CANON_GUARD=strict|warn|off` 控制（默认 `strict`，非法值在模型调用前 fail closed）。硬拒绝走既有 repair → fail-closed 路径，Generation Run 记为 failed、保留原始输出、不落 Artifact；warning 不阻断保存，作为可选 `canonWarnings` 附加在 v2 方向/场景上并在界面提示。护栏不抓同义改写、隐含矛盾或设定矛盾。标注探针测得 catch 7/11、hard false-reject 0/14、legit warnings 5/14、中性长文 hard reject 0。
 
 ### 上下文组装与清单
 
@@ -260,7 +262,7 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 6. 若调用方提供了严格更短的紧凑 `worldline_setup`，整体替换为紧凑形式（只保留计数与 key，不包含任何 fact 正文）；
 7. 最新场景有非空且严格短于正文的 `summary` 时，用该摘要替换正文；
 8. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；截断不得落在未闭合的引号内（`「」『』“”‘’` 与 ASCII 引号），也不得拆开 `……`；句末后紧跟恰好闭合引号的闭引号时（如 `。」`、`。』」`、`……」`），在所有闭引号之后截断；若只有引号内的句末可用，则在最外层开引号之前截断；若最外层开引号就在正文开头（整段都在引号内）、连安全前缀都放不下或正文没有句末边界，则进入第 9 步；
-9. 仍超过预算则 fail closed，组装器抛出类型化 `ContinuationContextBudgetError`（`continuation_context_budget_exceeded`，携带 `neededChars` / `maxChars`），`message` 保留内部细节供日志；服务端边界把它映射为普通中文说明与可执行出路（换分歧瞬间或开放模式、减少 Anchor、停用或软删除本路径上过长/过多的设定增量、或由部署方提高 `CONTINUATION_CONTEXT_MAX_CHARS`），界面不直接展示内部术语。
+9. 仍超过预算则 fail closed，组装器抛出类型化 `ContinuationContextBudgetError`（`continuation_context_budget_exceeded`，携带 `neededChars` / `maxChars`），`message` 保留内部细节供日志；服务端边界把它映射为普通中文说明与可执行出路（换分歧瞬间或开放模式、减少 Anchor、说明设定增量会自动裁剪而不是失败原因、或由部署方提高 `CONTINUATION_CONTEXT_MAX_CHARS`），界面不直接展示内部术语。
 
 第 6—8 步释放的预算不会回填第 2 步丢弃的证据：跨层回填会把低优先级内容塞进更小预算的结果（大预算停留在第 4—5 步时证据为零，小预算却带着回填证据），破坏嵌套顺序。紧凑 `worldline_setup`、摘要替换与 v1 截断释放的预算只用于让当前状态本身放得下；摘要与 v1 截断仍只在仍超预算时使用。
 

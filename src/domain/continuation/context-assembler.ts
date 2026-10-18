@@ -5,6 +5,8 @@ import {
   type ContextManifestSectionKind,
 } from "@/domain/schemas";
 
+import { renderSettingDeltaContextText } from "./setting-deltas";
+
 /** 素材段在 Prompt 中的固定顺序，同时也是 manifest 的顺序。 */
 export const CONTEXT_SECTION_ORDER: readonly ContextManifestSectionKind[] = [
   "worldline_setup",
@@ -431,9 +433,7 @@ function renderItemSection(
 function renderSettingDeltaSection(
   items: readonly NormalizedSettingDelta[],
 ): string {
-  return `<setting_deltas>\n${items
-    .map((item) => item.text)
-    .join("\n")}\n</setting_deltas>`;
+  return `<setting_deltas>\n${renderSettingDeltaContextText(items)}\n</setting_deltas>`;
 }
 
 function normalizeEvidence(

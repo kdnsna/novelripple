@@ -11,14 +11,16 @@ import type {
   ImpactPlan,
 } from "@/domain/schemas";
 import {
+  buildSettingDeltaContextItems,
   deriveActiveSettingDeltas,
   derivePathSettingDeltas,
+  renderSettingDeltaContextText,
 } from "@/domain/continuation/setting-deltas";
-import { buildSceneTree } from "@/domain/continuation/scene-tree";
+import { buildSceneTree, getScenePath } from "@/domain/continuation/scene-tree";
 import {
   SETTING_DELTA_CONTEXT_MAX_CHARS,
   SETTING_DELTA_MAX_ACTIVE,
-  SETTING_DELTA_MAX_PER_WORLDLINE,
+  SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
 } from "@/domain/continuation/setting-delta-limits";
 import {
   addSettingDeltaAction,
@@ -212,6 +214,63 @@ async function createRootScene(
   });
 }
 
+async function createSceneUnder(
+  context: Awaited<ReturnType<typeof createBaseContext>>,
+  worldline: Awaited<ReturnType<typeof createChildWorldline>>["worldline"],
+  acceptedArtifact: Awaited<
+    ReturnType<typeof createChildWorldline>
+  >["acceptedArtifact"],
+  parent: Awaited<ReturnType<typeof createRootScene>>,
+) {
+  const directionsRun = successfulRun({
+    projectId: context.project.id,
+    worldlineId: worldline.id,
+    kind: "continuation_directions",
+    promptVersion: "continuation-directions.v4",
+  });
+  const directions = createContinuationDirectionsArtifactV2({
+    projectId: context.project.id,
+    sourceId: context.source.id,
+    worldline,
+    acceptedImpactPlanArtifact: acceptedArtifact,
+    parentSceneId: parent.id,
+    batchIndex: 0,
+    output: context.fixture.continuation.directions,
+    generationRunId: directionsRun.id,
+  });
+  const sceneRun = successfulRun({
+    projectId: context.project.id,
+    worldlineId: worldline.id,
+    kind: "continuation_scene",
+    promptVersion: "continuation-scene.v5",
+  });
+  const fixtureScene: ContinuationSceneModelOutputV3 =
+    context.fixture.continuation.scene;
+  return createContinuationSceneArtifactV2({
+    projectId: context.project.id,
+    sourceId: context.source.id,
+    worldline,
+    acceptedImpactPlanArtifact: acceptedArtifact,
+    directionsArtifact: directions,
+    selectedDirectionId: directions.continuation.directions[0]!.id,
+    parentSceneId: parent.id,
+    depth:
+      (parent.continuation.schemaVersion === 2
+        ? parent.continuation.depth
+        : 1) + 1,
+    origin: "generated",
+    attemptIndex: 0,
+    summary: fixtureScene.summary,
+    contextManifest: testContextManifest(),
+    output: {
+      title: fixtureScene.title,
+      prose: fixtureScene.prose,
+      statePatch: fixtureScene.statePatch,
+    },
+    generationRunId: sceneRun.id,
+  });
+}
+
 describe("setting delta repository and action", () => {
   let context: Awaited<ReturnType<typeof createBaseContext>>;
 
@@ -227,7 +286,7 @@ describe("setting delta repository and action", () => {
       worldlineId: worldline.id,
       anchorSceneId: null,
       subject: { kind: "term" as const, name: "旧灯塔" },
-      statement: "旧灯塔已被封锁，任何人不得进入。",
+      statement: "旧灯塔已被封锁,任何人不得进入。",
       idempotencyKey: "setting-delta-root-1",
     };
     const first = createSettingDeltaArtifact(input);
@@ -239,7 +298,7 @@ describe("setting delta repository and action", () => {
     const rewritten = createSettingDeltaArtifact({
       ...input,
       idempotencyKey: "setting-delta-root-2",
-      statement: "旧灯塔已被封锁，只能从海侧靠近。",
+      statement: "旧灯塔已被封锁,只能从海侧靠近。",
     });
     expect(rewritten.id).not.toBe(first.id);
     expect(
@@ -248,8 +307,8 @@ describe("setting delta repository and action", () => {
       ),
     ).toEqual(
       expect.arrayContaining([
-        "旧灯塔已被封锁，任何人不得进入。",
-        "旧灯塔已被封锁，只能从海侧靠近。",
+        "旧灯塔已被封锁,任何人不得进入。",
+        "旧灯塔已被封锁,只能从海侧靠近。",
       ]),
     );
   });
@@ -289,6 +348,63 @@ describe("setting delta repository and action", () => {
     ).toThrow("设定增量的人物不在当前 Worldline 的 Story Map 中");
   });
 
+  it("rejects control characters in statement and term name", async () => {
+    const accepted = await createChildWorldline(context);
+    const base = {
+      projectId: context.project.id,
+      worldlineId: accepted.worldline.id,
+      anchorSceneId: null,
+      idempotencyKey: "control-char",
+    };
+    // 20 条用 U+0001 填满的规则都必须停在输入校验，不留下任何行。
+    for (let index = 0; index < SETTING_DELTA_MAX_ACTIVE; index += 1) {
+      expect(() =>
+        createSettingDeltaArtifact({
+          ...base,
+          idempotencyKey: `control-char-${index}`,
+          subject: { kind: "term", name: `旧灯塔 ${index}` },
+          statement: `旧灯塔${"\u0001".repeat(200)}已被封锁。`,
+        }),
+      ).toThrow("不能包含控制字符或换行");
+    }
+    expect(listSettingDeltasForWorldline(accepted.worldline.id)).toHaveLength(0);
+    expect(() =>
+      createSettingDeltaArtifact({
+        ...base,
+        subject: { kind: "term", name: `旧灯${"\u0001"}塔` },
+        statement: "旧灯塔已被封锁。",
+      }),
+    ).toThrow("不能包含控制字符或换行");
+    expect(() =>
+      createSettingDeltaArtifact({
+        ...base,
+        subject: { kind: "term", name: "旧灯塔" },
+        statement: "旧灯塔已被封锁。\n",
+      }),
+    ).toThrow("不能包含控制字符或换行");
+  });
+
+  it("stores NFKC-normalized text and validates length after normalization", async () => {
+    const accepted = await createChildWorldline(context);
+    // 每个谚文音节由 3 个 jamo 组合而成：原始 42 字符，NFKC 后 14 字符。
+    const jamoName = "\u1100\u1161\u11a8".repeat(14);
+    const jamoStatement = "\u1100\u1161\u11a8".repeat(150);
+    const artifact = createSettingDeltaArtifact({
+      projectId: context.project.id,
+      worldlineId: accepted.worldline.id,
+      anchorSceneId: null,
+      subject: { kind: "term", name: jamoName },
+      statement: jamoStatement,
+      idempotencyKey: "nfkc-normalized",
+    });
+    expect(artifact.settingDelta.subject).toEqual({
+      kind: "term",
+      name: "\uAC01".repeat(14),
+    });
+    expect(artifact.settingDelta.statement).toBe("\uAC01".repeat(150));
+    expect(artifact.settingDelta.statement.length).toBe(150);
+  });
+
   it("rejects a new subject past the active cap but allows replacing an active subject", async () => {
     const accepted = await createChildWorldline(context);
     const createRule = (index: number, idempotencyKey = `active-${index}`) =>
@@ -304,7 +420,7 @@ describe("setting delta repository and action", () => {
       createRule(index);
     }
     expect(() => createRule(SETTING_DELTA_MAX_ACTIVE)).toThrow(
-      "当前路径最多保留",
+      "所在路径的生效设定增量超过",
     );
 
     // 同一主体改写说明属于替换，不增加生效主体数，即使已经到 20 也允许。
@@ -313,7 +429,7 @@ describe("setting delta repository and action", () => {
       worldlineId: accepted.worldline.id,
       anchorSceneId: null,
       subject: { kind: "term", name: "规则 0" },
-      statement: "规则 0 已改写，仍然只占一个主体。",
+      statement: "规则 0 已改写,仍然只占一个主体。",
       idempotencyKey: "active-replacement",
     });
     expect(replacement.id).not.toBe(
@@ -328,7 +444,7 @@ describe("setting delta repository and action", () => {
     expect(active).toHaveLength(SETTING_DELTA_MAX_ACTIVE);
     const ruleZero = active.find((item) => item.subjectKey === "term:规则 0");
     expect(ruleZero?.active.statement).toBe(
-      "规则 0 已改写，仍然只占一个主体。",
+      "规则 0 已改写,仍然只占一个主体。",
     );
   });
 
@@ -372,7 +488,7 @@ describe("setting delta repository and action", () => {
         status: "reactivated",
         idempotencyKey: "reactivate-over-cap",
       }),
-    ).toThrow("当前路径最多保留");
+    ).toThrow("所在路径的生效设定增量超过");
 
     // 再停用一条后重新启用会回到 20，允许写入。
     createSettingDeltaLifecycleArtifact({
@@ -440,6 +556,163 @@ describe("setting delta repository and action", () => {
     expect(deltas.some((delta) => delta.id === created[0]!.id)).toBe(true);
   });
 
+  it("checks every descendant path when a root write would exceed the active cap", async () => {
+    const accepted = await createChildWorldline(context);
+    const root = await createRootScene(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+    );
+    const depth2 = await createSceneUnder(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+      root,
+    );
+    const deep = await createSceneUnder(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+      depth2,
+    );
+    const createAt = (anchorSceneId: string | null, index: number) =>
+      createSettingDeltaArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        anchorSceneId,
+        subject: { kind: "term", name: `深层规则 ${index}` },
+        statement: `深层规则 ${index} 已生效。`,
+        idempotencyKey: `descendant-active-${anchorSceneId ?? "root"}-${index}`,
+      });
+
+    // 深层路径已经有 19 个生效主体；根规则的祖先作用域会让它变成 20。
+    for (let index = 0; index < SETTING_DELTA_MAX_ACTIVE - 1; index += 1) {
+      createAt(deep.id, index);
+    }
+    createAt(null, 100);
+    expect(() => createAt(null, 101)).toThrow(
+      "所在路径的生效设定增量超过",
+    );
+  });
+
+  it("checks descendant path rendered length for the 2k cap", async () => {
+    const accepted = await createChildWorldline(context);
+    const root = await createRootScene(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+    );
+    const depth2 = await createSceneUnder(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+      root,
+    );
+    const deep = await createSceneUnder(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+      depth2,
+    );
+    const createAt = (anchorSceneId: string | null, index: number) =>
+      createSettingDeltaArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        anchorSceneId,
+        subject: { kind: "term", name: `超长深层规则 ${index}` },
+        statement: "灯".repeat(200),
+        idempotencyKey: `descendant-chars-${anchorSceneId ?? "root"}-${index}`,
+      });
+
+    for (let index = 0; index < 9; index += 1) {
+      createAt(deep.id, index);
+    }
+    const tree = buildSceneTree([
+      root.continuation,
+      depth2.continuation,
+      deep.continuation,
+    ]);
+    const deltas = listSettingDeltasForWorldline(accepted.worldline.id);
+    const active = deriveActiveSettingDeltas({
+      tree,
+      deltas,
+      path: getScenePath(tree, deep.id),
+    });
+    const rendered = renderSettingDeltaContextText(
+      buildSettingDeltaContextItems({
+        active,
+        characters: context.storyMapArtifact.storyMap.characters,
+      }),
+    );
+    expect(rendered.length).toBeGreaterThan(1800);
+    expect(rendered.length).toBeLessThanOrEqual(
+      SETTING_DELTA_CONTEXT_MAX_CHARS,
+    );
+
+    // 根规则会同时进入深层路径，超过 2k 时拒绝并指出是哪条路径。
+    expect(() => createAt(null, 100)).toThrow(
+      "所在路径的设定增量超过",
+    );
+    expect(() => createAt(null, 101)).toThrow("第 3 幕");
+  });
+
+  it("rejects reactivating an ancestor that would push a descendant over the active cap", async () => {
+    const accepted = await createChildWorldline(context);
+    const root = await createRootScene(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+    );
+    const depth2 = await createSceneUnder(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+      root,
+    );
+    const deep = await createSceneUnder(
+      context,
+      accepted.worldline,
+      accepted.acceptedArtifact,
+      depth2,
+    );
+    const createAt = (
+      anchorSceneId: string | null,
+      index: number,
+      statement = `规则 ${index}。`,
+    ) =>
+      createSettingDeltaArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        anchorSceneId,
+        subject: { kind: "term", name: `复活测试 ${index}` },
+        statement,
+        idempotencyKey: `descendant-reactivate-${anchorSceneId ?? "root"}-${index}`,
+      });
+
+    for (let index = 0; index < SETTING_DELTA_MAX_ACTIVE - 1; index += 1) {
+      createAt(deep.id, index);
+    }
+    const rootRule = createAt(null, 100);
+    createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: accepted.worldline.id,
+      targetDeltaId: rootRule.id,
+      status: "deactivated",
+      idempotencyKey: "descendant-reactivate-deactivate",
+    });
+    // 祖先停用后深层补到 20；重新启用祖先会让深层变成 21。
+    createAt(deep.id, 101);
+    expect(() =>
+      createSettingDeltaLifecycleArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        targetDeltaId: rootRule.id,
+        status: "reactivated",
+        idempotencyKey: "descendant-reactivate-over-cap",
+      }),
+    ).toThrow("所在路径的生效设定增量超过");
+  });
+
   it("rejects a post-write active set whose serialized rules exceed the 2k cap", async () => {
     const accepted = await createChildWorldline(context);
     const created: string[] = [];
@@ -462,7 +735,7 @@ describe("setting delta repository and action", () => {
       }
     }
     expect(created.length).toBeGreaterThan(0);
-    expect(rejectedMessage).toContain("设定增量上下文最多");
+    expect(rejectedMessage).toContain("所在路径的设定增量超过");
     expect(rejectedMessage).toContain(
       String(SETTING_DELTA_CONTEXT_MAX_CHARS),
     );
@@ -471,17 +744,21 @@ describe("setting delta repository and action", () => {
     ).toHaveLength(created.length);
   });
 
-  it("caps stored non-deleted setting deltas per worldline and frees a slot on soft-delete", async () => {
+  it("caps all setting delta rows per worldline including soft-deleted ones", async () => {
     const accepted = await createChildWorldline(context);
     const created = [];
-    for (let index = 0; index < SETTING_DELTA_MAX_PER_WORLDLINE; index += 1) {
+    for (
+      let index = 0;
+      index < SETTING_DELTA_MAX_ROWS_PER_WORLDLINE;
+      index += 1
+    ) {
       if (index >= SETTING_DELTA_MAX_ACTIVE) {
         createSettingDeltaLifecycleArtifact({
           projectId: context.project.id,
           worldlineId: accepted.worldline.id,
           targetDeltaId: created[index - SETTING_DELTA_MAX_ACTIVE]!.id,
-          status: "deactivated",
-          idempotencyKey: `cap-deactivate-${index}`,
+          status: "deleted",
+          idempotencyKey: `rows-delete-${index}`,
         });
       }
       created.push(
@@ -491,13 +768,13 @@ describe("setting delta repository and action", () => {
           anchorSceneId: null,
           subject: { kind: "term", name: `规则 ${index}` },
           statement: `这是第 ${index} 条测试规则。`,
-          idempotencyKey: `cap-${index}`,
+          idempotencyKey: `rows-${index}`,
         }),
       );
     }
-    expect(
-      listSettingDeltasForWorldline(accepted.worldline.id),
-    ).toHaveLength(SETTING_DELTA_MAX_PER_WORLDLINE);
+    expect(listSettingDeltasForWorldline(accepted.worldline.id)).toHaveLength(
+      SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
+    );
     expect(() =>
       createSettingDeltaArtifact({
         projectId: context.project.id,
@@ -505,27 +782,114 @@ describe("setting delta repository and action", () => {
         anchorSceneId: null,
         subject: { kind: "term", name: "超出上限" },
         statement: "这条规则不应被写入。",
-        idempotencyKey: "cap-overflow",
+        idempotencyKey: "rows-overflow",
       }),
-    ).toThrow("设定增量已达到每条世界线的上限");
+    ).toThrow("含已删除规则");
 
-    // 软删除释放非删除行名额，可以继续追加。
+    // 软删除不会释放总行数名额，只会释放 active 名额。
     createSettingDeltaLifecycleArtifact({
       projectId: context.project.id,
       worldlineId: accepted.worldline.id,
       targetDeltaId: created.at(-1)!.id,
       status: "deleted",
-      idempotencyKey: "cap-delete-last",
+      idempotencyKey: "rows-delete-last",
     });
-    const afterDelete = createSettingDeltaArtifact({
+    expect(() =>
+      createSettingDeltaArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        anchorSceneId: null,
+        subject: { kind: "term", name: "删除后的新规则" },
+        statement: "软删除不释放世界线总行数。",
+        idempotencyKey: "rows-after-delete",
+      }),
+    ).toThrow("含已删除规则");
+  });
+
+  it("rejects reactivating or deactivating a soft-deleted rule", async () => {
+    const accepted = await createChildWorldline(context);
+    const delta = createSettingDeltaArtifact({
       projectId: context.project.id,
       worldlineId: accepted.worldline.id,
       anchorSceneId: null,
-      subject: { kind: "term", name: "删除后的新规则" },
-      statement: "软删除腾出世界线名额。",
-      idempotencyKey: "cap-after-delete",
+      subject: { kind: "term", name: "已删除规则" },
+      statement: "这条规则会被删除。",
+      idempotencyKey: "deleted-terminal",
     });
-    expect(afterDelete.settingDelta.statement).toBe("软删除腾出世界线名额。");
+    createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: accepted.worldline.id,
+      targetDeltaId: delta.id,
+      status: "deleted",
+      idempotencyKey: "deleted-terminal-delete",
+    });
+
+    expect(() =>
+      createSettingDeltaLifecycleArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        targetDeltaId: delta.id,
+        status: "reactivated",
+        idempotencyKey: "deleted-terminal-reactivate",
+      }),
+    ).toThrow("已删除的设定增量不能恢复");
+    expect(() =>
+      createSettingDeltaLifecycleArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        targetDeltaId: delta.id,
+        status: "deactivated",
+        idempotencyKey: "deleted-terminal-deactivate",
+      }),
+    ).toThrow("已删除的设定增量不能恢复");
+  });
+
+  it("keeps add/delete cycles bounded after five rounds", async () => {
+    const accepted = await createChildWorldline(context);
+    let deletedId: string | null = null;
+    for (let round = 0; round < 5; round += 1) {
+      const created = createSettingDeltaArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        anchorSceneId: null,
+        subject: { kind: "term", name: `循环规则 ${round}` },
+        statement: `第 ${round} 轮循环规则。`,
+        idempotencyKey: `cycle-${round}`,
+      });
+      if (deletedId !== null) {
+        createSettingDeltaLifecycleArtifact({
+          projectId: context.project.id,
+          worldlineId: accepted.worldline.id,
+          targetDeltaId: deletedId,
+          status: "deleted",
+          idempotencyKey: `cycle-delete-${round}`,
+        });
+      }
+      deletedId = created.id;
+    }
+    createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: accepted.worldline.id,
+      targetDeltaId: deletedId!,
+      status: "deleted",
+      idempotencyKey: "cycle-delete-last",
+    });
+    const deltas = listSettingDeltasForWorldline(accepted.worldline.id);
+    const lifecycles = listSettingDeltaLifecyclesForWorldline(
+      accepted.worldline.id,
+    );
+    // 五轮“新增 → 删除”只产生 5 条规则 + 5 条生命周期事件，且删除是终态。
+    expect(deltas).toHaveLength(5);
+    expect(lifecycles).toHaveLength(5);
+    expect(() =>
+      createSettingDeltaLifecycleArtifact({
+        projectId: context.project.id,
+        worldlineId: accepted.worldline.id,
+        targetDeltaId: deltas[0]!.id,
+        status: "reactivated",
+        idempotencyKey: "cycle-reactivate-deleted",
+      }),
+    ).toThrow("已删除的设定增量不能恢复");
   });
 
   it("appends idempotent lifecycle events and applies the latest status", async () => {

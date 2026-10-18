@@ -1,12 +1,15 @@
 import type { SceneNode, SceneTree } from "@/domain/continuation/scene-tree";
 import {
   SETTING_DELTA_MAX_ACTIVE,
-  SETTING_DELTA_MAX_PER_WORLDLINE,
+  SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
 } from "@/domain/continuation/setting-delta-limits";
 import type { PathSettingDelta } from "@/domain/continuation/setting-deltas";
 import {
+  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
+  normalizeSettingDeltaText,
+  settingDeltaTextHasControlChars,
   type SettingDeltaSubject,
   type SettingDeltaV1,
 } from "@/domain/schemas";
@@ -68,7 +71,11 @@ export function settingDeltaHistoryLabel(
 }
 
 export function settingDeltaStatementRemaining(statement: string): number {
-  return Math.max(0, SETTING_DELTA_STATEMENT_MAX_CHARS - statement.length);
+  return Math.max(
+    0,
+    SETTING_DELTA_STATEMENT_MAX_CHARS -
+      normalizeSettingDeltaText(statement).length,
+  );
 }
 
 /** 当前路径真正生效（非停用/非软删除）的主体数量。 */
@@ -82,17 +89,18 @@ export function settingDeltaActiveCount(
  * 添加按钮的禁用原因。
  *
  * 写时上限按当前路径的生效主体计算，因此界面必须在 active ≥ 20 时提示
- * 停用/删除/改写已有主体，而不是只等每条世界线 50 条的总上限。
+ * 停用/删除/改写已有主体；存储行数上限包含软删除行，软删除不会腾出总行数
+ * 名额（只腾出生效名额）。
  */
 export function settingDeltaAddBlockReason(input: {
   activeCount: number;
-  storedCount: number;
+  totalCount: number;
 }): string | null {
   if (input.activeCount >= SETTING_DELTA_MAX_ACTIVE) {
     return `本路径已有 ${SETTING_DELTA_MAX_ACTIVE} 条生效规则；请先停用或软删除已有规则，或改写已有主体的说明。`;
   }
-  if (input.storedCount >= SETTING_DELTA_MAX_PER_WORLDLINE) {
-    return `每条 Worldline 最多保存 ${SETTING_DELTA_MAX_PER_WORLDLINE} 条设定增量，当前已达到上限；请先软删除不再需要的规则。`;
+  if (input.totalCount >= SETTING_DELTA_MAX_ROWS_PER_WORLDLINE) {
+    return `每条 Worldline 最多保存 ${SETTING_DELTA_MAX_ROWS_PER_WORLDLINE} 条设定增量（含已删除规则），当前已达到上限。`;
   }
   return null;
 }
@@ -112,7 +120,10 @@ export function settingDeltaAnchorHint(currentNode: SceneNode | null): string {
 export function validateSettingDeltaDraft(
   draft: SettingDeltaDraft,
 ): SettingDeltaDraftValidation {
-  const statement = draft.statement.trim();
+  if (settingDeltaTextHasControlChars(draft.statement)) {
+    return { valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE };
+  }
+  const statement = normalizeSettingDeltaText(draft.statement);
   if (statement.length === 0) {
     return { valid: false, error: "请输入设定说明。" };
   }
@@ -134,7 +145,10 @@ export function validateSettingDeltaDraft(
     };
   }
 
-  const termName = draft.termName.trim();
+  if (settingDeltaTextHasControlChars(draft.termName)) {
+    return { valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE };
+  }
+  const termName = normalizeSettingDeltaText(draft.termName);
   if (termName.length === 0) {
     return { valid: false, error: "请输入设定词条名称。" };
   }

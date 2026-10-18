@@ -371,6 +371,46 @@ test("adds a path-scoped setting delta and keeps it visible on descendants", asy
   );
 });
 
+test("deactivates, reactivates, and permanently deletes a setting delta", async ({
+  page,
+}) => {
+  await enterReroutedWorldline(page, `Setting delta lifecycle ${Date.now()}`);
+
+  await page.getByRole("button", { name: "添加设定增量" }).click();
+  await page.getByLabel("主体类型").selectOption("term");
+  await page.getByLabel("设定词条").fill("雾灯");
+  await page.getByLabel("规则说明").fill("雾灯只在退潮时点亮");
+  await page.getByRole("button", { name: "保存设定增量" }).click();
+
+  const settingDeltas = page.getByTestId("path-setting-deltas");
+  const rule = settingDeltas.getByTestId("path-setting-delta");
+  await expect(rule).toHaveCount(1);
+  await expect(rule).toHaveAttribute("data-status", "active");
+
+  // 停用：规则仍在列表里，但显示为已停用，并提供重新启用。
+  await settingDeltas.getByRole("button", { name: "停用" }).click();
+  await expect(rule).toHaveAttribute("data-status", "deactivated");
+  await expect(settingDeltas).toContainText("已停用");
+  await expect(
+    settingDeltas.getByRole("button", { name: "重新启用" }),
+  ).toBeVisible();
+
+  // 重新启用：回到生效状态。
+  await settingDeltas.getByRole("button", { name: "重新启用" }).click();
+  await expect(rule).toHaveAttribute("data-status", "active");
+  await expect(
+    settingDeltas.getByRole("button", { name: "停用" }),
+  ).toBeVisible();
+
+  // 删除：软删除规则从界面完全消失，且没有重新启用入口。
+  await settingDeltas.getByRole("button", { name: "删除" }).click();
+  await expect(rule).toHaveCount(0);
+  await expect(settingDeltas).toContainText("本路径还没有设定增量。");
+  await expect(
+    settingDeltas.getByRole("button", { name: "重新启用" }),
+  ).toHaveCount(0);
+});
+
 test("shows incompatible and blocks strict acceptance", async ({ page }) => {
   await createConfirmedFixtureProject(page, `Ripple incompatible ${Date.now()}`);
   await page.getByTestId("event-node-event_07").click();

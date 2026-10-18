@@ -2,6 +2,10 @@ import { z } from "zod";
 
 import { isContinuationContextBudgetError } from "@/domain/continuation/context-assembler";
 import { SETTING_DELTA_STALE_BATCH_MESSAGE } from "@/domain/continuation/setting-deltas";
+import {
+  CONTINUATION_CANON_GUARD_ENV,
+  isCanonGuardRejectionError,
+} from "@/server/continuation/canon-guard";
 import { CONTINUATION_CONTEXT_MAX_CHARS_ENV } from "@/server/continuation/continuation-limits";
 
 export type ContinuationGenerationStage = "directions" | "scene";
@@ -23,9 +27,14 @@ export function continuationErrorMessage(
       "接下来可以：",
       "• 换一个分歧瞬间，或改用「让故事自由发展」（开放模式通常更短）；",
       "• 减少保留的结局 Anchor；",
-      "• 停用或软删除本路径上过长/过多的设定增量后重试；",
+      "• 设定增量会在预算不足时自动裁剪，不是本次失败的原因；",
       `• 若由部署方配置，可提高环境变量 ${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 后重试。`,
     ].join("\n");
+  }
+  if (isCanonGuardRejectionError(error)) {
+    return error instanceof Error
+      ? error.message
+      : "生成内容明确否定了分歧前已确认的原著事件，已拒绝且未保存；请重试或换一批。";
   }
   if (error instanceof z.ZodError) {
     return "AI 配置不完整：请检查模型与结构化输出模式。";
@@ -76,7 +85,10 @@ export function continuationErrorMessage(
       );
     }
   }
-  if (error.message.includes(CONTINUATION_CONTEXT_MAX_CHARS_ENV)) {
+  if (
+    error.message.includes(CONTINUATION_CONTEXT_MAX_CHARS_ENV) ||
+    error.message.includes(CONTINUATION_CANON_GUARD_ENV)
+  ) {
     return error.message;
   }
   return "Continuation 生成失败；结构化输出未通过校验，未保存 Artifact。";

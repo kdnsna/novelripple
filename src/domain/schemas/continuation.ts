@@ -109,6 +109,20 @@ const ContinuationDirectionsBaseSchema = z
   })
   .strict();
 
+/**
+ * 生成后 Canon 护栏的低置信提示。
+ *
+ * 只保存稳定事件 id、字段路径与简短原因，不复制模型正文；旧行没有该字段
+ * 仍可解析。警告从不阻断保存，只供界面提示读者自行判断。
+ */
+export const ContinuationCanonWarningSchema = z
+  .object({
+    eventId: z.string().min(1),
+    field: z.string().min(1),
+    reason: z.string().trim().min(1).max(500),
+  })
+  .strict();
+
 export const ContinuationDirectionsV1Schema =
   ContinuationDirectionsBaseSchema.extend({
     schemaVersion: z.literal(1),
@@ -119,6 +133,9 @@ export const ContinuationDirectionsV2Schema =
     schemaVersion: z.literal(2),
     parentSceneId: z.string().min(1).nullable(),
     batchIndex: z.number().int().min(0),
+    /** 组装上下文时生效集合的指纹；旧批次没有该字段，回退 createdAt 回放。 */
+    settingDeltaFingerprint: z.string().optional(),
+    canonWarnings: z.array(ContinuationCanonWarningSchema).optional(),
   }).strict();
 
 export const ContinuationDirectionsSchema = z.discriminatedUnion(
@@ -167,6 +184,7 @@ export const ContinuationSceneV2Schema = ContinuationSceneBaseSchema.extend({
   attemptIndex: z.number().int().min(0),
   summary: z.string().trim().min(1).max(200),
   contextManifest: ContextManifestSchema,
+  canonWarnings: z.array(ContinuationCanonWarningSchema).optional(),
 }).strict();
 
 export const ContinuationSchema = z.discriminatedUnion("schemaVersion", [
@@ -199,6 +217,9 @@ export type ContinuationDirectionsModelOutput = z.infer<
   typeof ContinuationDirectionsModelOutputSchema
 >;
 export type ContinuationDirection = z.infer<typeof ContinuationDirectionSchema>;
+export type ContinuationCanonWarning = z.infer<
+  typeof ContinuationCanonWarningSchema
+>;
 export type ContinuationDirectionsV1 = z.infer<
   typeof ContinuationDirectionsV1Schema
 >;

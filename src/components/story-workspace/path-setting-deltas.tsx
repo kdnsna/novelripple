@@ -17,7 +17,6 @@ import {
 import type { SceneNode, SceneTree } from "@/domain/continuation/scene-tree";
 import {
   derivePathSettingDeltas,
-  settingDeltaLifecycleStatuses,
   type PathSettingDelta,
 } from "@/domain/continuation/setting-deltas";
 import {
@@ -124,19 +123,11 @@ export function PathSettingDeltas({
   }, [currentPath, settingDeltaLifecycles, settingDeltas, tree]);
 
   const activeCount = settingDeltaActiveCount(derivation.items);
-  const storedCount = useMemo(() => {
-    try {
-      const statuses = settingDeltaLifecycleStatuses(settingDeltaLifecycles);
-      return settingDeltas.filter(
-        (delta) => statuses.get(delta.id) !== "deleted",
-      ).length;
-    } catch {
-      return settingDeltas.length;
-    }
-  }, [settingDeltaLifecycles, settingDeltas]);
+  // 世界线行数上限包含软删除行；这里展示全部已保存规则数。
+  const totalCount = settingDeltas.length;
   const addBlockReason = derivation.error
     ? "无法沿当前路径推导设定增量，请刷新后重试。"
-    : settingDeltaAddBlockReason({ activeCount, storedCount });
+    : settingDeltaAddBlockReason({ activeCount, totalCount });
 
   const validation = validateSettingDeltaDraft(draft);
 

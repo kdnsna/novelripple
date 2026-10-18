@@ -8,6 +8,7 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import {
+  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
   SettingDeltaSubjectSchema,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
@@ -433,7 +434,9 @@ const AddSettingDeltaInputSchema = z
     worldlineId: z.string().min(1),
     anchorSceneId: z.string().min(1).nullable(),
     subject: SettingDeltaSubjectSchema,
-    statement: z.string().trim().min(1).max(200),
+    // 长度/控制字符/NFKC 由仓储层在规范化后统一校验，避免 Action 的原始
+    // 长度上限抢先拒绝本应被规范化接受的文本。
+    statement: z.string(),
     idempotencyKey: z.string().trim().min(1).max(200),
   })
   .strict();
@@ -511,12 +514,20 @@ export async function deleteSettingDeltaAction(
 
 function settingDeltaErrorMessage(error: unknown): string {
   if (error instanceof z.ZodError) {
+    if (
+      error.issues.some(
+        (issue) => issue.message === SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+      )
+    ) {
+      return SETTING_DELTA_CONTROL_CHAR_MESSAGE;
+    }
     return "设定增量参数无效：请检查主体、说明与锚点。";
   }
   if (!(error instanceof Error)) {
     return "设定增量保存失败，未写入任何规则。";
   }
   const safeMessages = [
+    SETTING_DELTA_CONTROL_CHAR_MESSAGE,
     "设定增量说明必须为 1–200 个字符",
     "设定增量幂等键必须为 1–200 个字符",
     "设定增量生命周期幂等键必须为 1–200 个字符",
@@ -527,6 +538,7 @@ function settingDeltaErrorMessage(error: unknown): string {
     "设定增量幂等键已被其他内容占用",
     "设定增量生命周期幂等键已被其他内容占用",
     "设定增量不存在或不属于当前 Worldline",
+    "已删除的设定增量不能恢复",
     "设定增量 Artifact 写入失败",
     "设定增量生命周期 Artifact 写入失败",
   ];

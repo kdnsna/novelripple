@@ -2835,6 +2835,17 @@ input:focus-visible,
   line-height: 1.5;
 }
 
+.canon-warning-list {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.6rem 0.5rem 1.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
 .path-setting-delta-form {
   display: grid;
   padding-top: 0.65rem;

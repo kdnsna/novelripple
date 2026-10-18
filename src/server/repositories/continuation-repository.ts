@@ -17,7 +17,12 @@ import {
   SettingDeltaLifecycleV1Schema,
   SettingDeltaSubjectSchema,
   SettingDeltaV1Schema,
+  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+  SETTING_DELTA_STATEMENT_MAX_CHARS,
+  normalizeSettingDeltaText,
+  settingDeltaTextHasControlChars,
   type ContinuationArtifact,
+  type ContinuationCanonWarning,
   type ContinuationDirectionsArtifact,
   type ContinuationDirectionsModelOutput,
   type ContinuationSceneArtifact,
@@ -32,24 +37,11 @@ import {
   type SettingDeltaV1,
   type Worldline,
 } from "@/domain/schemas";
+import { SETTING_DELTA_MAX_ROWS_PER_WORLDLINE } from "@/domain/continuation/setting-delta-limits";
+import { buildSceneTree, type SceneTree } from "@/domain/continuation/scene-tree";
 import {
-  SETTING_DELTA_CONTEXT_MAX_CHARS,
-  SETTING_DELTA_MAX_ACTIVE,
-  SETTING_DELTA_MAX_PER_WORLDLINE,
-} from "@/domain/continuation/setting-delta-limits";
-import {
-  buildSceneTree,
-  getScenePath,
-  type SceneTree,
-} from "@/domain/continuation/scene-tree";
-import {
-  buildSettingDeltaContextItems,
-  derivePathSettingDeltas,
-  normalizedContextChars,
-  serializeSettingDeltasForContext,
+  assertSettingDeltaPathsFit,
   settingDeltaLifecycleStatuses,
-  subjectKey,
-  type ActiveSettingDelta,
 } from "@/domain/continuation/setting-deltas";
 import { getDatabase } from "@/server/db/client";
 import { artifacts } from "@/server/db/schema";
@@ -131,6 +123,10 @@ export function createContinuationDirectionsArtifactV2(input: {
   batchIndex: number;
   output: ContinuationDirectionsModelOutput;
   generationRunId: string;
+  /** 组装上下文时生效集合的指纹；新批次必须记录，旧行可缺省。 */
+  settingDeltaFingerprint?: string;
+  /** 低置信 Canon 提示；不阻断保存，随批次一起可见。 */
+  canonWarnings?: ContinuationCanonWarning[];
 }): ContinuationDirectionsArtifact {
   const output = ContinuationDirectionsModelOutputSchema.parse(input.output);
   assertActiveBindings(input);
@@ -169,6 +165,12 @@ export function createContinuationDirectionsArtifactV2(input: {
       ...direction,
     })),
     createdAt,
+    ...(input.settingDeltaFingerprint === undefined
+      ? {}
+      : { settingDeltaFingerprint: input.settingDeltaFingerprint }),
+    ...(input.canonWarnings && input.canonWarnings.length > 0
+      ? { canonWarnings: input.canonWarnings }
+      : {}),
   });
   const artifact = ContinuationDirectionsArtifactSchema.parse({
     id,
@@ -289,6 +291,8 @@ export function createContinuationSceneArtifactV2(input: {
   contextManifest: ContextManifest;
   output: ContinuationSceneModelOutput;
   generationRunId: string;
+  /** 低置信 Canon 提示；不阻断保存，随场景一起可见。 */
+  canonWarnings?: ContinuationCanonWarning[];
 }): ContinuationSceneArtifact {
   const output = ContinuationSceneModelOutputV3Schema.parse({
     ...input.output,
@@ -360,6 +364,9 @@ export function createContinuationSceneArtifactV2(input: {
     contextManifest: input.contextManifest,
     contentKind: "generated",
     createdAt,
+    ...(input.canonWarnings && input.canonWarnings.length > 0
+      ? { canonWarnings: input.canonWarnings }
+      : {}),
   });
   const artifact = ContinuationSceneArtifactSchema.parse({
     id,
@@ -405,11 +412,25 @@ export function createSettingDeltaArtifact(input: {
   statement: string;
   idempotencyKey: string;
 }): SettingDeltaArtifact {
+  if (
+    input.subject.kind === "term" &&
+    settingDeltaTextHasControlChars(input.subject.name)
+  ) {
+    throw new Error(SETTING_DELTA_CONTROL_CHAR_MESSAGE);
+  }
   const subject = SettingDeltaSubjectSchema.parse(input.subject);
-  const statement = input.statement.trim();
+  if (settingDeltaTextHasControlChars(input.statement)) {
+    throw new Error(SETTING_DELTA_CONTROL_CHAR_MESSAGE);
+  }
+  const statement = normalizeSettingDeltaText(input.statement);
   const idempotencyKey = input.idempotencyKey.trim();
-  if (statement.length === 0 || statement.length > 200) {
-    throw new Error("设定增量说明必须为 1–200 个字符");
+  if (
+    statement.length === 0 ||
+    statement.length > SETTING_DELTA_STATEMENT_MAX_CHARS
+  ) {
+    throw new Error(
+      `设定增量说明必须为 1–${SETTING_DELTA_STATEMENT_MAX_CHARS} 个字符`,
+    );
   }
   if (idempotencyKey.length === 0 || idempotencyKey.length > 200) {
     throw new Error("设定增量幂等键必须为 1–200 个字符");
@@ -468,17 +489,11 @@ export function createSettingDeltaArtifact(input: {
   }
 
   const state = loadSettingDeltaState(worldline.id);
-  const path =
-    input.anchorSceneId === null
-      ? []
-      : getScenePath(state.tree, input.anchorSceneId);
-  const statuses = settingDeltaLifecycleStatuses(state.lifecycles);
-  const nonDeletedCount = state.deltas.filter(
-    (delta) => statuses.get(delta.id) !== "deleted",
-  ).length;
-  if (nonDeletedCount >= SETTING_DELTA_MAX_PER_WORLDLINE) {
+  // 行数上限包含软删除行：软删除只释放 active 名额，不释放存储行，否则
+  // “新增 → 删除”循环会让世界线的行数无上界。
+  if (state.deltas.length >= SETTING_DELTA_MAX_ROWS_PER_WORLDLINE) {
     throw new Error(
-      `设定增量已达到每条世界线的上限（${SETTING_DELTA_MAX_PER_WORLDLINE} 条）`,
+      `设定增量已达到每条世界线的上限（${SETTING_DELTA_MAX_ROWS_PER_WORLDLINE} 条，含已删除规则）`,
     );
   }
 
@@ -493,33 +508,14 @@ export function createSettingDeltaArtifact(input: {
     createdAt,
   });
 
-  // 写时按新规则所在的锚点路径检查：同一主体的替换不增加 active 数，
-  // 新主体在已有 20 个生效主体时直接拒绝，而不是靠派生时静默截断。
-  const activeBefore = derivePathSettingDeltas({
-    tree: state.tree,
-    deltas: state.deltas,
-    lifecycles: state.lifecycles,
-    path,
-  }).filter((entry) => entry.status === "active");
-  const replacesActiveSubject = activeBefore.some(
-    (entry) => entry.subjectKey === subjectKey(subject),
-  );
-  const proposedActive = derivePathSettingDeltas({
+  // 祖先规则对整棵子树生效：对锚点子树里的每条根→节点路径分别检查
+  // post-write 的 active 数与真实渲染长度，而不是只看锚点自己的路径。
+  // 同一主体的替换会被 post-write 集合自然抵消，不需要额外特判。
+  assertSettingDeltaPathsFit({
     tree: state.tree,
     deltas: [...state.deltas, settingDelta],
     lifecycles: state.lifecycles,
-    path,
-  }).filter((entry) => entry.status === "active");
-  if (
-    proposedActive.length > SETTING_DELTA_MAX_ACTIVE &&
-    !replacesActiveSubject
-  ) {
-    throw new Error(
-      `当前路径最多保留 ${SETTING_DELTA_MAX_ACTIVE} 条生效设定增量：请先停用或删除本路径上的已有规则，或为已有主体改写说明`,
-    );
-  }
-  assertSettingDeltaContextFits({
-    active: proposedActive,
+    anchorSceneId: input.anchorSceneId,
     characters: storyMapArtifact.storyMap.characters,
   });
 
@@ -622,29 +618,31 @@ export function createSettingDeltaLifecycleArtifact(input: {
     createdAt,
   });
 
+  const state = loadSettingDeltaState(worldline.id);
+  const targetDelta = state.deltas.find((delta) => delta.id === target.id);
+  if (!targetDelta) {
+    throw new Error("设定增量不存在或不属于当前 Worldline");
+  }
+  const latestStatus = settingDeltaLifecycleStatuses(state.lifecycles).get(
+    target.id,
+  );
+  // 软删除是终态：不能再恢复，也不能在“已删除”上追加停用。只允许继续追加
+  // deleted（仍只追加、不 UPDATE），保证旧行可追溯。
+  if (
+    latestStatus === "deleted" &&
+    (status === "reactivated" || status === "deactivated")
+  ) {
+    throw new Error("已删除的设定增量不能恢复");
+  }
+
   if (status === "reactivated") {
-    const state = loadSettingDeltaState(worldline.id);
-    const targetDelta = state.deltas.find((delta) => delta.id === target.id);
-    if (!targetDelta) {
-      throw new Error("设定增量不存在或不属于当前 Worldline");
-    }
-    const path =
-      targetDelta.anchorSceneId === null
-        ? []
-        : getScenePath(state.tree, targetDelta.anchorSceneId);
-    const active = derivePathSettingDeltas({
+    // 重新启用会把规则放回整棵锚点子树；每条根→节点路径都必须重新通过
+    // active 数与真实渲染长度检查，不能只检查锚点自己的路径。
+    assertSettingDeltaPathsFit({
       tree: state.tree,
       deltas: state.deltas,
       lifecycles: [...state.lifecycles, lifecycle],
-      path,
-    }).filter((entry) => entry.status === "active");
-    if (active.length > SETTING_DELTA_MAX_ACTIVE) {
-      throw new Error(
-        `当前路径最多保留 ${SETTING_DELTA_MAX_ACTIVE} 条生效设定增量：请先停用或删除本路径上的其他规则后重试`,
-      );
-    }
-    assertSettingDeltaContextFits({
-      active,
+      anchorSceneId: targetDelta.anchorSceneId,
       characters: storyMapArtifact.storyMap.characters,
     });
   }
@@ -692,24 +690,6 @@ function loadSettingDeltaState(worldlineId: string): SettingDeltaState {
       (artifact) => artifact.lifecycle,
     ),
   };
-}
-
-function assertSettingDeltaContextFits(input: {
-  active: readonly ActiveSettingDelta[];
-  characters: readonly { id: string; name: string }[];
-}): void {
-  const items = buildSettingDeltaContextItems({
-    active: input.active,
-    characters: input.characters,
-  });
-  const length = normalizedContextChars(
-    serializeSettingDeltasForContext(items),
-  );
-  if (length > SETTING_DELTA_CONTEXT_MAX_CHARS) {
-    throw new Error(
-      `设定增量上下文最多 ${SETTING_DELTA_CONTEXT_MAX_CHARS} 字（当前约 ${length} 字）：请缩短规则说明，或停用/删除本路径上的其他规则`,
-    );
-  }
 }
 
 export function getContinuationArtifact(

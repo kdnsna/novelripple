@@ -10,7 +10,10 @@ import type {
   SettingDeltaV1,
 } from "@/domain/schemas";
 
-import { SETTING_DELTA_MAX_ACTIVE } from "./setting-delta-limits";
+import {
+  SETTING_DELTA_CONTEXT_MAX_CHARS,
+  SETTING_DELTA_MAX_ACTIVE,
+} from "./setting-delta-limits";
 
 /**
  * 某个设定主体在当前路径上的生效结果。
@@ -129,32 +132,110 @@ export function buildSettingDeltaContextItems(input: {
   }));
 }
 
-/** 写时上限与组装器共用同一种紧凑文本，而不是 JSON。 */
-export function serializeSettingDeltasForContext(
+/**
+ * `setting_deltas` 段标签内部的实际文本。
+ *
+ * 组装器渲染 Prompt 与写入时的 2k 上限检查都调用这一个函数，因此
+ * “写时测量”与“真正进入 Prompt 的文本”逐字节一致，不会再出现
+ * 去控制字符/NFKC 后的测量值与原始渲染值脱节。
+ */
+export function renderSettingDeltaContextText(
   items: readonly Pick<SettingDeltaContextItem, "text">[],
 ): string {
   return items.map((item) => item.text).join("\n");
 }
 
+/** 锚点子树里的每一条根→节点路径；锚点为 null 时额外包含空根路径。 */
+export type SettingDeltaAffectedPath = {
+  path: SceneNode[];
+  /** 面向读者的路径名，例如「第 3 幕 · 灯塔熄灭」。 */
+  label: string;
+};
+
 /**
- * 上下文长度按规范化后的 UTF-16 字符数计算。
+ * 列出写入/重新启用会影响的全部路径。
  *
- * NFKC 统一全角/兼容字符；换行折叠为空格，其余 C0/C1 控制字符直接移除，
- * 连续空格合并。这样 `\u0000` 之类的填充既不能绕过上限，也不会被算成
- * 实际内容。
+ * `anchorSceneId === null` 的规则整条世界线生效：空根路径加上树中每个节点；
+ * 场景锚点的规则只在该场景及其后代生效。遍历 `childrenByParent`，顺序确定。
  */
-export function normalizedContextChars(text: string): number {
-  return normalizeContextText(text).length;
+export function settingDeltaAffectedPaths(
+  tree: SceneTree,
+  anchorSceneId: string | null,
+): SettingDeltaAffectedPath[] {
+  const paths: SettingDeltaAffectedPath[] = [];
+  const appendSubtree = (node: SceneNode): void => {
+    paths.push({
+      path: getScenePath(tree, node.id),
+      label: settingDeltaPathLabel(node),
+    });
+    for (const child of tree.childrenByParent.get(node.id) ?? []) {
+      appendSubtree(child);
+    }
+  };
+
+  if (anchorSceneId === null) {
+    paths.push({ path: [], label: "分歧点" });
+    for (const root of tree.childrenByParent.get(null) ?? []) {
+      appendSubtree(root);
+    }
+    return paths;
+  }
+
+  const anchor = tree.nodes.get(anchorSceneId);
+  if (!anchor) {
+    throw new Error(`设定增量引用了场景树中不存在的锚点：${anchorSceneId}`);
+  }
+  appendSubtree(anchor);
+  return paths;
 }
 
-export function normalizeContextText(text: string): string {
-  return text
-    .normalize("NFKC")
-    .replace(/\r\n?/gu, "\n")
-    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/gu, "")
-    .replace(/\n/gu, " ")
-    .replace(/ {2,}/gu, " ")
-    .trim();
+function settingDeltaPathLabel(node: SceneNode): string {
+  return `第 ${node.depth} 幕 · ${node.title}`;
+}
+
+/**
+ * 写时上限：检查 anchor 子树里每条路径的 post-write 生效集合。
+ *
+ * 祖先规则对整棵子树生效，只检查锚点自身路径会让深层路径悄悄超过 20 条或
+ * 2k，再在生成时被静默截断。这里对每条受影响路径分别派生 active 集合并用
+ * 与 Prompt 完全相同的渲染函数测量；任一路径超限即 fail closed，错误信息
+ * 指出具体路径。检查与插入之间没有 await（由仓储层保证同步）。
+ */
+export function assertSettingDeltaPathsFit(input: {
+  tree: SceneTree;
+  deltas: readonly SettingDeltaV1[];
+  lifecycles?: readonly SettingDeltaLifecycleV1[];
+  anchorSceneId: string | null;
+  characters: readonly { id: string; name: string }[];
+}): void {
+  for (const affected of settingDeltaAffectedPaths(
+    input.tree,
+    input.anchorSceneId,
+  )) {
+    const active = derivePathSettingDeltas({
+      tree: input.tree,
+      deltas: input.deltas,
+      lifecycles: input.lifecycles,
+      path: affected.path,
+    }).filter((entry) => entry.status === "active");
+
+    if (active.length > SETTING_DELTA_MAX_ACTIVE) {
+      throw new Error(
+        `会使「${affected.label}」所在路径的生效设定增量超过 ${SETTING_DELTA_MAX_ACTIVE} 条：请先停用或删除该路径上的已有规则，或为已有主体改写说明`,
+      );
+    }
+
+    const items = buildSettingDeltaContextItems({
+      active,
+      characters: input.characters,
+    });
+    const length = renderSettingDeltaContextText(items).length;
+    if (length > SETTING_DELTA_CONTEXT_MAX_CHARS) {
+      throw new Error(
+        `会使「${affected.label}」所在路径的设定增量超过 ${SETTING_DELTA_CONTEXT_MAX_CHARS} 字（当前 ${length} 字）：请缩短规则说明，或停用/删除该路径上的其他规则`,
+      );
+    }
+  }
 }
 
 type VisibleDelta = {
@@ -409,7 +490,13 @@ export const SETTING_DELTA_STALE_BATCH_MESSAGE = "设定已更新，请换一批
  * 不自动重新生成：stale 只阻止继续选择/重试方向，用户必须显式「换一批」。
  */
 export function isDirectionBatchStale(input: {
-  batch: { id: string; parentSceneId: string | null; createdAt: string };
+  batch: {
+    id: string;
+    parentSceneId: string | null;
+    createdAt: string;
+    /** 新批次在生成开始时记录的 active 集合指纹；旧批次没有。 */
+    settingDeltaFingerprint?: string;
+  };
   tree: SceneTree;
   /** root→父节点；根批次为空数组。 */
   pathToParent: readonly SceneNode[];
@@ -425,6 +512,12 @@ export function isDirectionBatchStale(input: {
       path: input.pathToParent,
     }),
   );
+  // 新批次以“组装上下文时”的指纹为准：生成期间新增规则会让当前指纹不同，
+  // 即使该规则 createdAt 晚于批次落库时间也能识别。旧批次没有指纹时退回
+  // 按 createdAt 回放，保持历史行为。
+  if (input.batch.settingDeltaFingerprint !== undefined) {
+    return current !== input.batch.settingDeltaFingerprint;
+  }
   const asOf = settingDeltaActiveFingerprint(
     deriveActiveSettingDeltasAsOf({
       tree: input.tree,

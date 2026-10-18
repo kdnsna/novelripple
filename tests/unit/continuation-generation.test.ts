@@ -14,6 +14,13 @@ import {
   buildRelatedEvidenceItems,
   selectRelatedCanon,
 } from "@/domain/continuation/canon-context";
+import {
+  buildSettingDeltaContextItems,
+  deriveActiveSettingDeltas,
+  renderSettingDeltaContextText,
+  settingDeltaActiveFingerprint,
+} from "@/domain/continuation/setting-deltas";
+import { buildSceneTree } from "@/domain/continuation/scene-tree";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import type {
   AIProvider,
@@ -42,6 +49,7 @@ import {
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
   listScenesForDirection,
+  listSettingDeltasForWorldline,
 } from "@/server/repositories/continuation-repository";
 import {
   createGenerationRun,
@@ -1207,7 +1215,7 @@ describe("Continuation scene tree generation", () => {
       worldlineId: context.worldline.id,
       anchorSceneId: null,
       subject: { kind: "term", name: "旧灯塔" },
-      statement: "旧灯塔已被封锁，任何人不得进入。",
+      statement: "旧灯塔已被封锁,任何人不得进入。",
       idempotencyKey: "generation-delta-root",
     });
     createSettingDeltaArtifact({
@@ -1238,9 +1246,9 @@ describe("Continuation scene tree generation", () => {
     const rootPrompt = rootProvider.requests[0]?.prompt ?? "";
     const rootSetup = promptSection(rootPrompt, "worldline_setup");
     expect(rootSetup).not.toContain("settingDeltas");
-    expect(rootSetup).not.toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(rootSetup).not.toContain("旧灯塔已被封锁,任何人不得进入。");
     const rootSettingDeltas = promptSection(rootPrompt, "setting_deltas");
-    expect(rootSettingDeltas).toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(rootSettingDeltas).toContain("旧灯塔已被封锁,任何人不得进入。");
     expect(rootSettingDeltas).toContain("自分歧点起");
     expect(rootPrompt).not.toContain("夜班渡船已经停航。");
     expect(rootPrompt).not.toContain("北侧石阶已经塌方，不能通行。");
@@ -1265,7 +1273,7 @@ describe("Continuation scene tree generation", () => {
       childDirectionsPrompt,
       "setting_deltas",
     );
-    expect(childSettingDeltas).toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(childSettingDeltas).toContain("旧灯塔已被封锁,任何人不得进入。");
     expect(childSettingDeltas).toContain("夜班渡船已经停航。");
     expect(childSettingDeltas).toContain("自第 1 幕起");
     expect(childDirectionsPrompt).not.toContain(
@@ -1330,7 +1338,7 @@ describe("Continuation scene tree generation", () => {
       modelConfig,
     });
     const deactivatedPrompt = deactivatedProvider.requests[0]?.prompt ?? "";
-    expect(deactivatedPrompt).not.toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(deactivatedPrompt).not.toContain("旧灯塔已被封锁,任何人不得进入。");
 
     createSettingDeltaLifecycleArtifact({
       projectId: context.project.id,
@@ -1350,8 +1358,70 @@ describe("Continuation scene tree generation", () => {
       modelConfig,
     });
     expect(reactivatedProvider.requests[0]?.prompt ?? "").toContain(
-      "旧灯塔已被封锁，任何人不得进入。",
+      "旧灯塔已被封锁,任何人不得进入。",
     );
+  });
+
+  it("attaches non-blocking canon warnings to the saved directions artifact", async () => {
+    const context = await createAcceptedWorldline();
+    const warningDirections: ContinuationDirectionsModelOutput = {
+      directions: directionOutput.directions.map((direction, index) =>
+        index === 0
+          ? {
+              ...direction,
+              premise: "她想起铜门被打开那晚，从此不再靠近海岸。",
+            }
+          : direction,
+      ),
+    };
+    const result = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(warningDirections)]),
+      modelConfig,
+    });
+    const continuation = result.artifact.continuation;
+    expect(continuation.schemaVersion).toBe(2);
+    if (continuation.schemaVersion !== 2) return;
+    expect(continuation.canonWarnings).toEqual([
+      expect.objectContaining({
+        eventId: "event_02",
+        field: "directions.0.premise",
+      }),
+    ]);
+  });
+
+  it("turns a hard canon rejection into a warning under the warn policy", async () => {
+    const context = await createAcceptedWorldline();
+    const violatingDirections: ContinuationDirectionsModelOutput = {
+      directions: directionOutput.directions.map((direction, index) =>
+        index === 0
+          ? { ...direction, premise: "铜门被打开并未发生，许澄仍被挡在门外。" }
+          : direction,
+      ),
+    };
+    const previous = process.env.CONTINUATION_CANON_GUARD;
+    process.env.CONTINUATION_CANON_GUARD = "warn";
+    try {
+      const result = await generateContinuationDirections({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        provider: new MockAIProvider([JSON.stringify(violatingDirections)]),
+        modelConfig,
+      });
+      const continuation = result.artifact.continuation;
+      expect(continuation.schemaVersion).toBe(2);
+      if (continuation.schemaVersion !== 2) return;
+      expect(continuation.canonWarnings).toEqual([
+        expect.objectContaining({
+          eventId: "event_02",
+          field: "directions.0.premise",
+        }),
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.CONTINUATION_CANON_GUARD;
+      else process.env.CONTINUATION_CANON_GUARD = previous;
+    }
   });
 
   it("rejects directions that rewrite a locked pre-divergence event", async () => {
@@ -1378,7 +1448,9 @@ describe("Continuation scene tree generation", () => {
         provider,
         modelConfig,
       }),
-    ).rejects.toThrow("Structured generation failed schema validation");
+    ).rejects.toThrow(
+      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」",
+    );
 
     expect(provider.requests).toHaveLength(2);
     expect(provider.requests[1]?.repair?.validationIssues.join(" ")).toContain(
@@ -1421,7 +1493,9 @@ describe("Continuation scene tree generation", () => {
         provider,
         modelConfig,
       }),
-    ).rejects.toThrow("Structured generation failed schema validation");
+    ).rejects.toThrow(
+      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」",
+    );
 
     expect(provider.requests).toHaveLength(2);
     expect(provider.requests[1]?.repair?.validationIssues.join(" ")).toContain(
@@ -1435,6 +1509,99 @@ describe("Continuation scene tree generation", () => {
         (run) => run.kind === "continuation_scene",
       ),
     ).toMatchObject({ status: "failed" });
+  });
+
+  it("measures the exact rendered setting_deltas text that enters the prompt", async () => {
+    const context = await createAcceptedWorldline();
+    const jamo = "\u1100\u1161\u11a8";
+    createSettingDeltaArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      anchorSceneId: null,
+      subject: { kind: "term", name: jamo.repeat(10) },
+      statement: jamo.repeat(60),
+      idempotencyKey: "prompt-measured-nfkc",
+    });
+    const provider = new MockAIProvider([JSON.stringify(directionOutput)]);
+    await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider,
+      modelConfig,
+    });
+    const prompt = provider.requests[0]?.prompt ?? "";
+    const section = promptSection(prompt, "setting_deltas");
+    const tree = buildSceneTree([]);
+    const active = deriveActiveSettingDeltas({
+      tree,
+      deltas: listSettingDeltasForWorldline(context.worldline.id),
+      path: [],
+    });
+    const rendered = renderSettingDeltaContextText(
+      buildSettingDeltaContextItems({
+        active,
+        characters: context.storyMapArtifact.storyMap.characters,
+      }),
+    );
+    // 写时测量 == 实际渲染；NFKC 组合字符在两侧一致。
+    expect(section).toBe(rendered);
+    expect(section.length).toBe(rendered.length);
+    expect(section).toContain("\uAC01");
+  });
+
+  it("records the generation-start fingerprint and marks a rule added mid-call stale", async () => {
+    const context = await createAcceptedWorldline();
+    let added = false;
+    const provider: AIProvider = {
+      providerName: "mock",
+      async generate(): Promise<AIProviderResponse> {
+        // 模拟模型调用进行中读者新增规则：批次落库晚于规则 createdAt，
+        // 但指纹是在组装上下文时冻结的，因此必须仍被判为 stale。
+        createSettingDeltaArtifact({
+          projectId: context.project.id,
+          worldlineId: context.worldline.id,
+          anchorSceneId: null,
+          subject: { kind: "term", name: "生成期间新增" },
+          statement: "生成期间新增的规则。",
+          idempotencyKey: "race-added-during-generation",
+        });
+        added = true;
+        return { rawOutput: JSON.stringify(directionOutput) };
+      },
+    };
+    const directions = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider,
+      modelConfig,
+    });
+    expect(added).toBe(true);
+    const continuation = directions.artifact.continuation;
+    expect(continuation.schemaVersion).toBe(2);
+    if (continuation.schemaVersion !== 2) return;
+    expect(continuation.settingDeltaFingerprint).toBeDefined();
+
+    const tree = buildSceneTree([]);
+    const currentFingerprint = settingDeltaActiveFingerprint(
+      deriveActiveSettingDeltas({
+        tree,
+        deltas: listSettingDeltasForWorldline(context.worldline.id),
+        path: [],
+      }),
+    );
+    expect(currentFingerprint).not.toBe(continuation.settingDeltaFingerprint);
+
+    await expect(
+      generateContinuationScene({
+        projectId: context.project.id,
+        worldlineId: context.worldline.id,
+        directionsArtifactId: directions.artifact.id,
+        selectedDirectionId:
+          directions.artifact.continuation.directions[0]!.id,
+        provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+        modelConfig,
+      }),
+    ).rejects.toThrow("设定已更新，请换一批以生效");
   });
 
   it("rejects scene generation from a stale direction batch after a setting delta", async () => {
@@ -1452,7 +1619,7 @@ describe("Continuation scene tree generation", () => {
       worldlineId: context.worldline.id,
       anchorSceneId: null,
       subject: { kind: "term", name: "旧灯塔" },
-      statement: "旧灯塔已被封锁，任何人不得进入。",
+      statement: "旧灯塔已被封锁,任何人不得进入。",
       idempotencyKey: "stale-batch-delta",
     });
     const provider = new MockAIProvider([JSON.stringify(sceneOutput)]);

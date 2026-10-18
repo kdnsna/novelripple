@@ -175,6 +175,13 @@ function directionBatchView(
     batchIndex: continuation.schemaVersion === 1 ? 0 : continuation.batchIndex,
     createdAt: continuation.createdAt,
     directions: continuation.directions,
+    ...(continuation.schemaVersion === 2 &&
+    continuation.settingDeltaFingerprint !== undefined
+      ? { settingDeltaFingerprint: continuation.settingDeltaFingerprint }
+      : {}),
+    ...(continuation.schemaVersion === 2 && continuation.canonWarnings
+      ? { canonWarnings: continuation.canonWarnings }
+      : {}),
   };
 }
 

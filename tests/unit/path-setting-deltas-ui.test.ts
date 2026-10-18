@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildSceneTree } from "@/domain/continuation/scene-tree";
 import {
+  SETTING_DELTA_CONTROL_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
   SettingDeltaV1Schema,
@@ -21,7 +22,7 @@ import {
 } from "@/components/story-workspace/path-setting-deltas-ui";
 import {
   SETTING_DELTA_MAX_ACTIVE,
-  SETTING_DELTA_MAX_PER_WORLDLINE,
+  SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
 } from "@/domain/continuation/setting-delta-limits";
 import { v2SceneFixture } from "../helpers/continuation-scene-fixtures";
 
@@ -188,6 +189,44 @@ describe("path setting delta presentation helpers", () => {
     });
   });
 
+  it("rejects control characters and line breaks in both fields", () => {
+    for (const value of ["旧灯塔\n已被封锁", "旧灯塔\u0001已被封锁", "旧灯塔\u2028已被封锁"]) {
+      expect(
+        validateSettingDeltaDraft({
+          subjectKind: "term",
+          characterId: "",
+          termName: "旧灯塔",
+          statement: value,
+        }),
+      ).toEqual({ valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE });
+    }
+    expect(
+      validateSettingDeltaDraft({
+        subjectKind: "term",
+        characterId: "",
+        termName: "旧灯\u0001塔",
+        statement: "旧灯塔已被封锁。",
+      }),
+    ).toEqual({ valid: false, error: SETTING_DELTA_CONTROL_CHAR_MESSAGE });
+  });
+
+  it("stores NFKC-composed text and measures the normalized length", () => {
+    // U+1100 U+1161 U+11A8 经 NFKC 组合成 U+AC01（각）。
+    const composed = "\u1100\u1161\u11a8";
+    expect(
+      validateSettingDeltaDraft({
+        subjectKind: "term",
+        characterId: "",
+        termName: "  " + composed + "  ",
+        statement: "  " + composed + "  ",
+      }),
+    ).toEqual({
+      valid: true,
+      subject: { kind: "term", name: "\uAC01" },
+      statement: "\uAC01",
+    });
+  });
+
   it("warns and blocks adding when active rules on the current path reach the cap", () => {
     expect(
       settingDeltaActiveCount([
@@ -197,18 +236,18 @@ describe("path setting delta presentation helpers", () => {
       ]),
     ).toBe(2);
     expect(
-      settingDeltaAddBlockReason({ activeCount: 19, storedCount: 19 }),
+      settingDeltaAddBlockReason({ activeCount: 19, totalCount: 19 }),
     ).toBeNull();
     expect(
       settingDeltaAddBlockReason({
         activeCount: SETTING_DELTA_MAX_ACTIVE,
-        storedCount: SETTING_DELTA_MAX_ACTIVE,
+        totalCount: SETTING_DELTA_MAX_ACTIVE,
       }),
     ).toContain("停用或软删除已有规则");
     expect(
       settingDeltaAddBlockReason({
         activeCount: 1,
-        storedCount: SETTING_DELTA_MAX_PER_WORLDLINE,
+        totalCount: SETTING_DELTA_MAX_ROWS_PER_WORLDLINE,
       }),
     ).toContain("每条 Worldline 最多保存");
   });

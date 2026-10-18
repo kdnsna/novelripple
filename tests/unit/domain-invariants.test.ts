@@ -482,45 +482,73 @@ describe("deterministic domain validators", () => {
 });
 
 describe("post-generation pre-divergence canon validation", () => {
-  /** event_1 已被分歧删除，event_2 仍是锁定 Canon。 */
-  const baseDelta = WorldlineDeltaSchema.parse({
+  /** 分歧事件是 event_2（sequence 2）；event_1 是分歧前、event_2 是分歧点。 */
+  const pathState = WorldlineDeltaSchema.parse({
     factsAdded: [
       { key: "generated:branch_1", statement: "许澄暂时没有公开证据。" },
     ],
-    factsRemoved: ["event:event_1"],
+    factsRemoved: ["event:event_2"],
     characterChanges: [],
     threadsOpened: [],
     threadsClosed: [],
   });
 
-  function validate(textFields: string[]) {
+  function evaluate(textFields: string[]) {
     return validateAgainstPreDivergenceCanon({
-      textFields,
+      textFields: textFields.map((text, index) => ({
+        field: `textFields.${index}`,
+        text,
+      })),
       storyMap,
-      baseDelta,
+      divergenceEventId: "event_2",
+      pathState,
     });
   }
 
+  function validate(textFields: string[]) {
+    return evaluate(textFields).issues;
+  }
+
   it("flags prose that says a locked event did not happen", () => {
-    expect(validate(["许澄发现公开证据并未发生，公众始终不知道真相。"])).toEqual(
+    expect(validate(["许澄发现证据并未发生，公众始终不知道真相。"])).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          message: expect.stringContaining("公开证据"),
+          message: expect.stringContaining("发现证据"),
         }),
       ]),
     );
   });
 
-  it("allows rewriting an event that the divergence removed", () => {
-    expect(validate(["发现证据并未发生，许澄从一开始就保持沉默。"])).toEqual([]);
+  it("allows rewriting an event that the path removed", () => {
+    expect(validate(["公开证据并未发生，许澄从一开始就保持沉默。"])).toEqual([]);
+  });
+
+  it("never locks post-divergence events", () => {
+    const result = validateAgainstPreDivergenceCanon({
+      textFields: [
+        { field: "prose", text: "公开证据并未发生，许澄从一开始就保持沉默。" },
+      ],
+      storyMap,
+      divergenceEventId: "event_1",
+      pathState: WorldlineDeltaSchema.parse({
+        factsAdded: [],
+        factsRemoved: [],
+        characterChanges: [],
+        threadsOpened: [],
+        threadsClosed: [],
+      }),
+    });
+    expect(result.issues).toEqual([]);
   });
 
   it("allows clean prose that mentions a locked event without a cue", () => {
-    expect(validate(["许澄最终决定公开证据，让公众自行判断。"])).toEqual([]);
+    expect(validate(["许澄发现证据后选择沉默，把副本留在抽屉里。"])).toEqual(
+      [],
+    );
   });
 
   it("flags a locked event title immediately preceded by a negation", () => {
-    expect(validate(["没有公开证据，也没有留下任何记录。"])).toEqual(
+    expect(validate(["没有发现证据，也没有留下任何记录。"])).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           path: "textFields.0",
@@ -533,17 +561,27 @@ describe("post-generation pre-divergence canon validation", () => {
     expect(
       validate([
         "让周岚只做见证",
-        "公开证据其实并未发生，周岚只记录未公开的判断。",
+        "发现证据其实并未发生，周岚只记录未公开的判断。",
         "独立见证链得到补强。",
       ]),
     ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           path: "textFields.1",
-          message: expect.stringContaining("公开证据"),
+          message: expect.stringContaining("发现证据"),
         }),
       ]),
     );
+  });
+
+  it("does not hard-reject recollection or causal mentions", () => {
+    const result = evaluate([
+      "她想起发现证据那晚，从此不再靠近海岸。",
+      "他始终没有忘记发现证据时的那声钟响。",
+      "因为发现证据，许澄不再公开露面。",
+    ]);
+    expect(result.issues).toEqual([]);
+    expect(result.warnings.length).toBeGreaterThan(0);
   });
 
   it("skips empty and one-character fields", () => {

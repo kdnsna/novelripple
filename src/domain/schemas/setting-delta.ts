@@ -4,6 +4,48 @@ import { z } from "zod";
 export const SETTING_DELTA_TERM_NAME_MAX_CHARS = 40;
 export const SETTING_DELTA_STATEMENT_MAX_CHARS = 200;
 
+/** 输入里出现控制字符/换行时统一使用这条中文说明。 */
+export const SETTING_DELTA_CONTROL_CHAR_MESSAGE =
+  "设定说明/词条名不能包含控制字符或换行";
+
+/**
+ * C0（含 \n \r \t）、DEL、C1 与 U+2028/U+2029 都视为控制字符。
+ *
+ * 这些字符不会原样出现在读者可见的规则文本里；允许它们会让“写时测量”和
+ * Prompt 实际渲染长度脱节，也会把换行注入单行上下文。
+ */
+const SETTING_DELTA_CONTROL_CHARS =
+  /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
+
+export function settingDeltaTextHasControlChars(text: string): boolean {
+  return SETTING_DELTA_CONTROL_CHARS.test(text);
+}
+
+/** 写入前统一 NFKC + trim；存储与渲染使用同一份文本。 */
+export function normalizeSettingDeltaText(text: string): string {
+  return text.normalize("NFKC").trim();
+}
+
+function settingDeltaTextSchema(maxChars: number, label: string) {
+  return z
+    .string()
+    .superRefine((value, context) => {
+      if (settingDeltaTextHasControlChars(value)) {
+        context.addIssue({
+          code: "custom",
+          message: SETTING_DELTA_CONTROL_CHAR_MESSAGE,
+        });
+      }
+    })
+    .transform(normalizeSettingDeltaText)
+    .pipe(
+      z
+        .string()
+        .min(1, `${label}不能为空`)
+        .max(maxChars, `${label}不能超过 ${maxChars} 个字符`),
+    );
+}
+
 /**
  * 设定增量（setting delta）是读者在某个场景节点新增的短设定规则。
  *
@@ -21,11 +63,10 @@ export const SettingDeltaSubjectSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("term"),
-      name: z
-        .string()
-        .trim()
-        .min(1)
-        .max(SETTING_DELTA_TERM_NAME_MAX_CHARS),
+      name: settingDeltaTextSchema(
+        SETTING_DELTA_TERM_NAME_MAX_CHARS,
+        "设定词条名称",
+      ),
     })
     .strict(),
 ]);
@@ -37,11 +78,10 @@ export const SettingDeltaV1Schema = z
     /** null 表示从分歧点起整条世界线生效。 */
     anchorSceneId: z.string().min(1).nullable(),
     subject: SettingDeltaSubjectSchema,
-    statement: z
-      .string()
-      .trim()
-      .min(1)
-      .max(SETTING_DELTA_STATEMENT_MAX_CHARS),
+    statement: settingDeltaTextSchema(
+      SETTING_DELTA_STATEMENT_MAX_CHARS,
+      "设定说明",
+    ),
     contentKind: z.literal("user"),
     createdAt: z.iso.datetime(),
   })

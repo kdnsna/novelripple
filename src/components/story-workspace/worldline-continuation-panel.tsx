@@ -234,6 +234,12 @@ export function WorldlineContinuationPanel({
           id: activeBatch.id,
           parentSceneId: activeBatch.parentSceneId,
           createdAt: activeBatch.createdAt,
+          ...(activeBatch.settingDeltaFingerprint === undefined
+            ? {}
+            : {
+                settingDeltaFingerprint:
+                  activeBatch.settingDeltaFingerprint,
+              }),
         },
         tree,
         pathToParent: currentPath,
@@ -571,6 +577,20 @@ export function WorldlineContinuationPanel({
                     ))}
                 </div>
 
+                {scene.canonWarnings && scene.canonWarnings.length > 0 ? (
+                  <ul
+                    className="canon-warning-list"
+                    data-testid="canon-warnings"
+                    role="status"
+                  >
+                    {scene.canonWarnings.map((warning) => (
+                      <li key={`${warning.eventId}:${warning.field}`}>
+                        原著一致性提示：{warning.reason}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
                 {isSelected ? (
                   <>
                     <details className="state-patch-details">
@@ -677,6 +697,20 @@ export function WorldlineContinuationPanel({
             >
               {SETTING_DELTA_STALE_BATCH_MESSAGE}
             </p>
+          ) : null}
+          {activeBatch.canonWarnings &&
+          activeBatch.canonWarnings.length > 0 ? (
+            <ul
+              className="canon-warning-list"
+              data-testid="canon-warnings"
+              role="status"
+            >
+              {activeBatch.canonWarnings.map((warning) => (
+                <li key={`${warning.eventId}:${warning.field}`}>
+                  原著一致性提示：{warning.reason}
+                </li>
+              ))}
+            </ul>
           ) : null}
           <div className="direction-card-list">
             {activeBatchOption?.directions.map(({ direction, sceneIds }) => {
