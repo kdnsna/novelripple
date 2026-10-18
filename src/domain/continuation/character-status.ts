@@ -53,7 +53,9 @@ export type SourceBaselineStatus = {
  * 因为自由文本里的死亡词经常属于马、亲属、路人或外国名字的一部分。
  * 这里只放能直接跟在人物姓名后的短动词；`殉` 只以 `殉职/殉国/殉难` 出现，
  * 因而 `殉情未遂` 之类不会命中。主动语态的 `处死` 不收（参与者可能是
- * 行刑者），只保留 `被处死`；`被杀死/被害死` 同样表示参与者是死者。
+ * 行刑者），只保留完整被动式 `被处死/被处决` 等。`被` 本身**不是**连接词：
+ * 它只作为这些完整被动动词的首字出现，因此「姓名 + 被 + 牺牲/死亡/去世」
+ * 不会命中。
  */
 export const DEATH_VERBS = [
   "死亡",
@@ -77,7 +79,16 @@ export const DEATH_VERBS = [
   "被杀死",
   "被害死",
   "被斩",
+  "被斩首",
   "被处死",
+  "被处决",
+  "被毒杀",
+  "被毒死",
+  "被刺杀",
+  "被刺死",
+  "被缢死",
+  "被绞死",
+  "被射杀",
   "牺牲",
   "丧命",
   "毙命",
@@ -88,13 +99,15 @@ export const DEATH_VERBS = [
   "死去",
 ] as const;
 
-/** 姓名与动词之间允许的固定连接词；最多两个，匹配时优先最长词。 */
+/**
+ * 姓名与动词之间允许的固定连接词；最多两个，匹配时优先最长词。
+ * 不收「被」：被动死亡只能以 `DEATH_VERBS` 中的完整动词出现。
+ */
 export const DEATH_CONNECTORS = [
   "已经",
   "当场",
   "不幸",
   "最终",
-  "被",
   "已",
   "于",
   "因",
@@ -326,11 +339,14 @@ export const DEATH_REVIVAL_MARKERS = [
  *   stateChange 点名了其中一人。当前 Event Schema 没有结构化的「死者」
  *   字段（`stateChanges` 是自由文本），因此无法可靠地从多人事件中挑出
  *   被推断者；未来若新增该字段，可以在那一分支使用，而不是解析自由文本；
- * - 单一参与者事件中，stateChange 必须整行命中显式句型白名单
- *   （`matchesExplicitDeathShape`）：整行恰好是一个「姓名 + 有限连接词
- *   + 短死亡动词」的分句；整行没有点名参与者或还带有任何前/后分句时
- *   unknown，整行含否定/不确定/比喻/未来计划措辞，或出现不可见格式/
- *   控制符时 unknown；
+ * - 单一参与者事件中，stateChange 先经过唯一一次归一化：拒绝 `\p{Cf}`、
+ *   除 `\t`/`\n`/`\r` 外的 `\p{Cc}`、变体选择符（U+FE00–FE0F、
+ *   U+E0100–E01EF）与 CGJ（U+034F），再 NFKC 一次；这同一个字符串用于
+ *   歧义守卫、句型白名单、标记表与复活扫描。随后 stateChange 必须整行
+ *   命中显式句型白名单（`matchesExplicitDeathShape`）：整行恰好是一个
+ *   「姓名 + 有限连接词 + 短死亡动词」的分句；整行没有点名参与者或还带有
+ *   任何前/后分句时 unknown，整行含否定/不确定/比喻/未来计划措辞时
+ *   unknown；
  * - 若同一句还整词提到**其他**角色，死亡可能属于别人，跳过；
  * - 推断出 dead 后，若死亡事件之后、分歧点之前的事件再次把该人物列为
  *   参与者或整词点名，并出现复活/生还标记，则撤销推断（回到 unknown）。
@@ -356,12 +372,15 @@ export function deriveSourceBaselineStatuses(input: {
   const charactersById = new Map(
     storyMap.characters.map((character) => [character.id, character]),
   );
+  // 姓名/别名只在建表时 NFKC 一次；后续所有守卫、句型与复活扫描都复用
+  // 这份归一化表，避免同一条 stateChange 在不同检查里被不同方式归一化。
   const characterNames = storyMap.characters.map((character) => ({
     characterId: character.id,
-    names: [character.name, ...character.aliases].filter(
-      (name) => name.length > 0,
-    ),
+    names: normalizeNames([character.name, ...character.aliases]),
   }));
+  const namesById = new Map(
+    characterNames.map((entry) => [entry.characterId, entry.names]),
+  );
   const preDivergenceEvents = [...storyMap.events]
     .filter((event) => event.sequence < divergenceEvent.sequence)
     .sort((left, right) => left.sequence - right.sequence);
@@ -373,15 +392,16 @@ export function deriveSourceBaselineStatuses(input: {
     // 多人事件没有结构化归因；任何“谁死了”的猜测都可能把活人标死。
     if (event.participants.length !== 1) continue;
     const [participant] = event.participants;
-    const character = charactersById.get(participant);
-    if (!character) continue;
+    if (!charactersById.has(participant)) continue;
 
-    const names = [character.name, ...character.aliases].filter(
-      (name) => name.length > 0,
-    );
+    const names = namesById.get(participant) ?? [];
     for (const stateChange of event.stateChanges) {
-      if (mentionsOtherCharacter(stateChange, participant)) continue;
-      if (!matchesExplicitDeathShape(stateChange, names)) continue;
+      // 唯一归一化入口：先拒绝不可见字符，再 NFKC 一次。歧义守卫、句型、
+      // 标记表都只看这同一个字符串。
+      const normalized = normalizeStateChange(stateChange);
+      if (normalized === null) continue;
+      if (mentionsOtherCharacter(normalized, participant)) continue;
+      if (!matchesExplicitDeathShape(normalized, names)) continue;
       result.set(participant, {
         status: "dead",
         source: "source_inference",
@@ -397,9 +417,6 @@ export function deriveSourceBaselineStatuses(input: {
     const eventById = new Map(
       preDivergenceEvents.map((event) => [event.id, event]),
     );
-    const namesById = new Map(
-      characterNames.map((entry) => [entry.characterId, entry.names]),
-    );
     for (const [characterId, inference] of [...result.entries()]) {
       const deathEvent = eventById.get(inference.eventId);
       if (!deathEvent) continue;
@@ -409,16 +426,20 @@ export function deriveSourceBaselineStatuses(input: {
         .flatMap((entry) => entry.names);
       const cleared = preDivergenceEvents.some((event) => {
         if (event.sequence <= deathEvent.sequence) return false;
+        // 复活扫描同样只使用归一化后的 stateChange；不可见字符整条跳过。
+        const normalizedChanges = event.stateChanges
+          .map(normalizeStateChange)
+          .filter((value): value is string => value !== null);
         const targetsCharacter =
           event.participants.includes(characterId) ||
-          event.stateChanges.some((stateChange) =>
+          normalizedChanges.some((stateChange) =>
             names.some((name) =>
               mentionsWholeWord(stateChange, name, otherNames),
             ),
           );
         return (
           targetsCharacter &&
-          event.stateChanges.some((stateChange) =>
+          normalizedChanges.some((stateChange) =>
             hasAnyMarker(stateChange, DEATH_REVIVAL_MARKERS),
           )
         );
@@ -429,6 +450,7 @@ export function deriveSourceBaselineStatuses(input: {
 
   /**
    * 歧义守卫：stateChange 若整词提到其他角色，死亡可能不是单一参与者的。
+   * stateChange 与 `characterNames` 都已由外层归一化一次。
    * 对每个其他角色，用「其余角色」的姓名作为更长姓名边界，避免把
    * 「张三」误当成「张三丰」的命中。
    */
@@ -459,12 +481,10 @@ export function deriveSourceBaselineStatuses(input: {
  * + `DEATH_VERBS` 中的动词（或裸「死 / 死」+ 可选「了」）
  * + [可选一个「了」] + [可选的单个「。」/「！」/「!」] + 行尾。
  *
- * 匹配前先做两道规范化：
- * - 整行任意位置出现 Unicode 格式符（`\p{Cf}`：零宽、bidi、BOM、软连字符等）
- *   或除 `\t` / `\n` / `\r` 外的控制符（`\p{Cc}`）时直接 unknown，绝不去除
- *   后再匹配；
- * - 随后对整行（以及姓名/别名）做 NFKC 归一化，再做标记与句型匹配。全角
- *   「！」归一为 ASCII `!`，全角字母等兼容字符与 ASCII 姓名一致。
+ * 调用方必须已完成唯一一次归一化：先拒绝不可见字符，再 NFKC 一次；
+ * `stateChange` 与 `names` 都应是归一化后的字符串。本函数不再做第二次
+ * NFKC，只保留一个防御性不可见字符检查。全角「！」归一为 ASCII `!`，
+ * 全角字母等兼容字符与 ASCII 姓名一致，均由调用方那一次 NFKC 保证。
  *
  * 除末尾这一个终止符外，整行任何位置出现标点、引号、括号、省略号或
  * 空白都判 unknown；因此任何前置/后置分句或句子（「城破，林青战死」
@@ -478,31 +498,45 @@ export function matchesExplicitDeathShape(
   stateChange: string,
   names: readonly string[],
 ): boolean {
-  // 不可见字符必须最先拒绝：不能先 strip 再匹配，否则零宽字符会切断标记。
-  if (hasForbiddenControlChar(stateChange)) return false;
-  const normalized = stateChange.normalize("NFKC");
-  if (hasAnyMarker(normalized, DEATH_QUESTION_MARKERS)) return false;
-  if (hasAnyMarker(normalized, DEATH_HYPOTHETICAL_MARKERS)) return false;
-  if (hasAnyMarker(normalized, DEATH_NEGATION_MARKERS)) return false;
-  if (hasAnyMarker(normalized, DEATH_FUTURE_PLAN_MARKERS)) return false;
-  if (hasAnyMarker(normalized, DEATH_FIGURATIVE_MARKERS)) return false;
-  const usableNames = names
-    .map((name) => name.normalize("NFKC"))
-    .filter((name) => Array.from(name).length >= 2);
+  // 防御直接调用：不可见字符必须最先拒绝。归一化只在调用方做一次。
+  if (hasForbiddenChar(stateChange)) return false;
+  if (hasAnyMarker(stateChange, DEATH_QUESTION_MARKERS)) return false;
+  if (hasAnyMarker(stateChange, DEATH_HYPOTHETICAL_MARKERS)) return false;
+  if (hasAnyMarker(stateChange, DEATH_NEGATION_MARKERS)) return false;
+  if (hasAnyMarker(stateChange, DEATH_FUTURE_PLAN_MARKERS)) return false;
+  if (hasAnyMarker(stateChange, DEATH_FIGURATIVE_MARKERS)) return false;
+  const usableNames = names.filter(
+    (name) => Array.from(name).length >= 2,
+  );
   if (usableNames.length === 0) return false;
-  const line = toSingleDeathLine(normalized);
+  const line = toSingleDeathLine(stateChange);
   if (line === null) return false;
   return usableNames.some((name) => matchesDeathLine(line, name));
 }
 
 /**
- * `\p{Cf}` 全部拒收；`\p{Cc}` 只放过制表、换行与回车。
- * 只用于拒绝，命中不会放宽任何规则。
+ * 不可见字符：`\p{Cf}` 全部拒收；`\p{Cc}` 只放过制表、换行与回车；
+ * 变体选择符（U+FE00–FE0F、U+E0100–E01EF）与组合用字形连接符
+ * （CGJ，U+034F）也一律拒收。只用于拒绝，命中不会放宽任何规则。
  */
-const FORBIDDEN_CONTROL_CHAR = /(?:(?![\t\n\r])\p{Cc}|\p{Cf})/u;
+const FORBIDDEN_CHAR =
+  /(?:(?![\t\n\r])\p{Cc}|\p{Cf}|[\u034F\uFE00-\uFE0F\u{E0100}-\u{E01EF}])/u;
 
-function hasForbiddenControlChar(value: string): boolean {
-  return FORBIDDEN_CONTROL_CHAR.test(value);
+function hasForbiddenChar(value: string): boolean {
+  return FORBIDDEN_CHAR.test(value);
+}
+
+/** 单一归一化入口：拒绝不可见字符后 NFKC 一次；null 表示按 unknown 跳过。 */
+function normalizeStateChange(value: string): string | null {
+  if (hasForbiddenChar(value)) return null;
+  return value.normalize("NFKC");
+}
+
+/** 姓名/别名只在此处 NFKC 一次；空串丢弃。 */
+function normalizeNames(names: readonly string[]): string[] {
+  return names
+    .map((name) => name.normalize("NFKC"))
+    .filter((name) => name.length > 0);
 }
 
 /** 末尾允许的唯一终止符；出现两个或出现在其它位置都算标点。 */
@@ -543,11 +577,10 @@ function matchesDeathLine(line: string, name: string): boolean {
 
   let tail = rest.slice(name.length);
   for (let count = 0; count < 2; count += 1) {
-    // 连接词与动词/原因短语可能重叠（被杀 = 被 + 杀；因伤 = 连接词「因」
-    // + 原因「伤」）；若剩余部分已经以死亡动词、裸「死/死了」或合法原因
-    // 短语开头，就不要把它的第一个字当连接词吃掉。
+    // 原因短语「因伤」与连接词「因」共享首字；剩余部分若已是合法原因
+    // 短语，就不要再把「因」当连接词吃掉。被只以完整被动动词出现，
+    // 不再是连接词，因此没有连接词/动词重叠的特例。
     if (tail === "死" || tail === "死了") break;
-    if (DEATH_VERBS.some((verb) => tail.startsWith(verb))) break;
     if (longestMatchingPrefix(tail, DEATH_CAUSE_PHRASES)) break;
     const connector = longestMatchingPrefix(tail, DEATH_CONNECTORS);
     if (!connector) break;
@@ -603,6 +636,9 @@ function hasAnyMarker(
  * - 命中不得落在 `otherCharacterNames` 中某个更长姓名/别名的内部：
  *   「张三」不算命中「张三丰」（当「张三丰」属于另一个角色时）；
  * - ASCII 姓名要求两侧不是字母/数字：`Li` 不算命中 `Lily`。
+ *
+ * `text`、`name` 与 `otherCharacterNames` 都应已由调用方 NFKC 归一化一次；
+ * 本函数不做第二次归一化。
  */
 export function mentionsWholeWord(
   text: string,

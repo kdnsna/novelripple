@@ -22,6 +22,12 @@ const CHARACTERS = [
   { id: "character_alan", name: "艾伦", aliases: ["AF"] },
   { id: "character_han_single", name: "韩", aliases: [] },
   { id: "character_shenmo", name: "沈墨", aliases: [] },
+  // 共享别名：任一角色单独出现时都要被另一角色同名的守卫拦下。
+  { id: "character_ace_a", name: "阿周", aliases: ["Ace"] },
+  { id: "character_ace_b", name: "阿周乙", aliases: ["Ace", "阿周"] },
+  // 姓名存储形式与行内写法不同：归一化后必须一致。
+  { id: "character_zz_full", name: "ＺＺ", aliases: [] },
+  { id: "character_yy_ascii", name: "YY", aliases: [] },
 ] as const;
 
 type ProbeEvent = {
@@ -867,6 +873,62 @@ const negativeProbes: NegativeProbe[] = [
   },
 ];
 
+// K. 「被」只能作为完整被动动词的一部分，不能单独作连接词：
+// 「姓名 + (已/也)? + 被 + 不及物死亡动词 + 了?」必须保持 unknown。
+const PASSIVE_AS_CONNECTOR_VERBS = [
+  "牺牲",
+  "死亡",
+  "去世",
+  "身亡",
+  "病故",
+  "自尽",
+  "阵亡",
+  "遇害",
+  "丧命",
+] as const;
+for (const verb of PASSIVE_AS_CONNECTOR_VERBS) {
+  for (const connector of ["", "已", "也"] as const) {
+    for (const suffix of ["", "了"] as const) {
+      negativeProbes.push({
+        label: `被 as connector: ${connector}被${verb}${suffix}`,
+        baseline: () => single(`林青${connector}被${verb}${suffix}`),
+      });
+    }
+  }
+}
+
+// L. 一条归一化管道：共享别名用全角字母或兼容表意文字写出、姓名/动词
+// 夹带变体选择符或 CGJ，都不能绕过同名守卫或整行白名单。
+negativeProbes.push(
+  {
+    label: "shared alias plain",
+    baseline: () => single("Ace身亡", { participants: ["character_ace_a"] }),
+  },
+  {
+    label: "shared alias full-width letters",
+    baseline: () =>
+      single("Ａｃｅ身亡", { participants: ["character_ace_a"] }),
+  },
+  {
+    // U+2F83F 是 CJK 兼容表意文字，NFKC 映射为「周」。
+    label: "shared alias compatibility ideograph",
+    baseline: () =>
+      single("阿\u{2F83F}身亡", { participants: ["character_ace_a"] }),
+  },
+  {
+    label: "variation selector after name",
+    baseline: () => single("林青\uFE0F被杀"),
+  },
+  {
+    label: "CGJ inside name",
+    baseline: () => single("林\u034F青被杀"),
+  },
+  {
+    label: "variation selector supplement after verb",
+    baseline: () => single("林青被杀\u{E0100}"),
+  },
+);
+
 /**
  * 已知漏报：语义上确实是死亡，但显式白名单有意不支持这些写法。
  * 它们必须保持 unknown，但不算 false positive；优先漏报而不是误报。
@@ -1130,6 +1192,44 @@ const positiveProbes: PositiveProbe[] = [
     characterId: "character_shenmo",
     baseline: () =>
       single("沈墨病逝!", { participants: ["character_shenmo"] }),
+  },
+  // 完整被动动词：被只能作为动词的一部分。
+  {
+    label: "poisoned to death",
+    characterId: "character_lin",
+    baseline: () => single("林青被毒杀"),
+  },
+  {
+    label: "assassinated",
+    characterId: "character_han",
+    baseline: () => single("韩松被刺杀", { participants: ["character_han"] }),
+  },
+  {
+    label: "executed",
+    characterId: "character_shenmo",
+    baseline: () => single("沈墨被处决", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "beheaded",
+    characterId: "character_lin",
+    baseline: () => single("林青被斩首"),
+  },
+  {
+    label: "shot dead",
+    characterId: "character_han",
+    baseline: () => single("韩松被射杀", { participants: ["character_han"] }),
+  },
+  // 姓名存储形式与行内写法不同，但归一化后必须一致。
+  {
+    label: "full-width stored name matched by ascii line",
+    characterId: "character_zz_full",
+    baseline: () => single("ZZ被杀", { participants: ["character_zz_full"] }),
+  },
+  {
+    label: "ascii stored name matched by full-width line",
+    characterId: "character_yy_ascii",
+    baseline: () =>
+      single("ＹＹ被杀", { participants: ["character_yy_ascii"] }),
   },
 ];
 
