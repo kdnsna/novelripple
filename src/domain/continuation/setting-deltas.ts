@@ -3,11 +3,12 @@ import {
   type SceneNode,
   type SceneTree,
 } from "@/domain/continuation/scene-tree";
-import type {
-  SettingDeltaLifecycleStatus,
-  SettingDeltaLifecycleV1,
-  SettingDeltaSubject,
-  SettingDeltaV1,
+import {
+  sanitizeSettingDeltaText,
+  type SettingDeltaLifecycleStatus,
+  type SettingDeltaLifecycleV1,
+  type SettingDeltaSubject,
+  type SettingDeltaV1,
 } from "@/domain/schemas";
 
 import { SettingDeltaError } from "./setting-delta-error";
@@ -73,13 +74,18 @@ export function settingDeltaContextText(input: {
   anchorDepth: number;
   characterNames: ReadonlyMap<string, string>;
 }): string {
-  return `- ${settingDeltaSubjectLabel(
-    input.delta.subject,
-    input.characterNames,
-  )}（${settingDeltaAnchorLabel(
-    input.delta.anchorSceneId,
-    input.anchorDepth,
-  )}）：${input.delta.statement}`;
+  // 历史行可能包含规则收紧前写入的不可见字符。读取/停用/重新启用必须容忍
+  // 这些行，但进入 Prompt 的文本在这里统一按同一份 forbidden-char 扫描器
+  // 移除非法码位，并保留合法 emoji 序列。
+  return sanitizeSettingDeltaText(
+    `- ${settingDeltaSubjectLabel(
+      input.delta.subject,
+      input.characterNames,
+    )}（${settingDeltaAnchorLabel(
+      input.delta.anchorSceneId,
+      input.anchorDepth,
+    )}）：${input.delta.statement}`,
+  );
 }
 
 export function settingDeltaSubjectLabel(
@@ -143,7 +149,9 @@ export function buildSettingDeltaContextItems(input: {
 export function renderSettingDeltaContextText(
   items: readonly Pick<SettingDeltaContextItem, "text">[],
 ): string {
-  return items.map((item) => item.text).join("\n");
+  return items
+    .map((item) => sanitizeSettingDeltaText(item.text))
+    .join("\n");
 }
 
 /** 锚点子树里的每一条根→节点路径；锚点为 null 时额外包含空根路径。 */

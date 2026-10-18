@@ -559,14 +559,22 @@ describe("setting delta repository and action", () => {
       idempotencyKey: "legacy-forbidden-reactivate",
     });
     expect(reactivated.lifecycle.status).toBe("reactivated");
-    expect(
-      deriveActiveSettingDeltas({
-        tree: emptyTree,
-        deltas: listed,
-        lifecycles: [deactivated.lifecycle, reactivated.lifecycle],
-        path: [],
-      }).map((item) => item.active.id),
-    ).toEqual([id]);
+    const reactivatedActive = deriveActiveSettingDeltas({
+      tree: emptyTree,
+      deltas: listed,
+      lifecycles: [deactivated.lifecycle, reactivated.lifecycle],
+      path: [],
+    });
+    expect(reactivatedActive.map((item) => item.active.id)).toEqual([id]);
+    // 重新启用的历史行可以进入上下文，但渲染时必须先移除 U+200B。
+    const rendered = renderSettingDeltaContextText(
+      buildSettingDeltaContextItems({
+        active: reactivatedActive,
+        characters: [],
+      }),
+    );
+    expect(rendered).not.toContain("\u200B");
+    expect(rendered).toContain("旧灯塔（自分歧点起）：旧灯塔已被封锁。");
 
     const deleted = createSettingDeltaLifecycleArtifact({
       projectId: context.project.id,

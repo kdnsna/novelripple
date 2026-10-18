@@ -261,7 +261,9 @@ export type PreDivergenceCanonEvaluation = {
  * 谓词直接绑定（否定词后必须跟“发生/存在”类谓词，或标题后跟“是假的”类
  * 谓词；中间只允许少量助词），且落在同一句内。裸 `没有<title>`、回忆、因果、
  * 反事实（如果/要不是/若是/假如/倘若）与失去义（没有了/再也没有）只会产生
- * warning，不阻断保存。改写同义句、隐含矛盾与设定矛盾不在本护栏的召回范围内。
+ * warning，不阻断保存；角色对白/转述（引号内、言语动词 + 逗号、冒号直接引语、
+ * 后置引述）同样只 warning。改写同义句、隐含矛盾与设定矛盾不在本护栏的召回
+ * 范围内。
  *
  * 命中硬拒绝时返回 issue，由调用方走既有 fail-closed 路径；绝不静默裁剪、
  * 修补或改写模型输出。
@@ -519,15 +521,185 @@ const CANON_WISH_CUES = [
   "祈祷",
 ] as const;
 
+/**
+ * 统一的言语/断言动词族。
+ *
+ * 这些动词出现在“短分句 + 逗号”的末尾时，与冒号一样引出角色话语：后面到
+ * 句末（或叙述者转折词）的否定属于被转述的内容，只警告。列表本身不参与
+ * “同分句包含”判断，以免把 `知道`、`小说` 之类的普通词当成引述。
+ */
+const CANON_SPEECH_VERBS = [
+  "一口咬定",
+  "矢口否认",
+  "坚持说",
+  "低声道",
+  "轻声道",
+  "冷笑道",
+  "说道",
+  "问道",
+  "答道",
+  "喊道",
+  "叫道",
+  "嚷道",
+  "吼道",
+  "笑道",
+  "叹道",
+  "回答",
+  "告诉",
+  "询问",
+  "发问",
+  "提问",
+  "质问",
+  "盘问",
+  "责问",
+  "借问",
+  "解说",
+  "诉说",
+  "演说",
+  "叙说",
+  "胡说",
+  "瞎说",
+  "强调",
+  "嘀咕",
+  "念叨",
+  "喃喃",
+  "嘟囔",
+  "咕哝",
+  "低语",
+  "耳语",
+  "插话",
+  "补充",
+  "反问",
+  "追问",
+  "回应",
+  "感叹",
+  "感慨",
+  "嚷嚷",
+  "坚称",
+  "声称",
+  "宣称",
+  "辩称",
+  "咬定",
+  "断言",
+  "发誓",
+  "否认",
+  "说",
+  "道",
+  "问",
+  "答",
+  "喊",
+  "叫",
+  "嚷",
+] as const;
+
+/** 长动词优先，保证 `低声道` 不会被拆成 `道`、`坚持说` 不会被拆成 `说`。 */
+const CANON_SPEECH_VERBS_BY_LENGTH = [...CANON_SPEECH_VERBS].sort(
+  (left, right) => right.length - left.length,
+);
+
+/**
+ * 单字言语动词的常见复合词前缀黑名单。
+ *
+ * 只用于“动词位于分句末尾/引出话语”的判断：`知道`、`味道`、`小说`、`学问`
+ * 不是引述，不能把叙述者的否定降级为 warning；`老人道`、`他问` 仍按引述处理。
+ */
+const CANON_SPEECH_VERB_BLOCKED_BEFORE: Readonly<
+  Record<string, ReadonlySet<string>>
+> = {
+  道: new Set([
+    "知",
+    "难",
+    "味",
+    "街",
+    "通",
+    "报",
+    "轨",
+    "频",
+    "一",
+    "公",
+    "霸",
+    "天",
+    "地",
+    "渠",
+    "隧",
+    "赤",
+    "厚",
+    "精",
+    "门",
+    "水",
+    "管",
+    "航",
+    "跑",
+    "车",
+    "铁",
+    "大",
+    "小",
+    "正",
+    "邪",
+    "外",
+    "内",
+    "王",
+    "说",
+    "古",
+    "山",
+    "河",
+    "甬",
+    "索",
+    "栈",
+    "弯",
+    "赛",
+    "楼",
+  ]),
+  说: new Set([
+    "小",
+    "传",
+    "学",
+    "解",
+    "游",
+    "诉",
+    "演",
+    "叙",
+    "胡",
+    "瞎",
+    "虽",
+    "照",
+    "按",
+    "再",
+    "是",
+  ]),
+  问: new Set([
+    "学",
+    "疑",
+    "访",
+    "询",
+    "过",
+    "慰",
+    "拷",
+    "审",
+    "提",
+    "发",
+    "责",
+    "质",
+    "顾",
+    "借",
+    "设",
+  ]),
+  答: new Set(["解", "报", "作", "应"]),
+  喊: new Set(["尖", "呐", "高", "大"]),
+  叫: new Set(["尖", "喊", "哭", "鸣", "大", "小", "狗", "鸡", "猫", "嗷", "嚎"]),
+};
+
 /** `说` 只有作为引述动词时才豁免；这些后续字说明它是“说完/说明/起来”等。 */
 const CANON_SAY_BLOCKED_FOLLOWERS = new Set(["完", "明", "起", "来", "法", "服"]);
 
 /**
- * 叙述者切换连接词：框架线索与否定谓词之间出现转折时，前面的框架不再
- * 治理后面的否定。例如「他以为没人知道，但灯塔熄灭从未发生过。」中的
- * “但”把叙述者拉回直接断言。
+ * 叙述者切换连接词。
+ *
+ * 多字连接词出现在任意位置都算切换；单字 `但/可/却` 由
+ * `hasNarratorSwitchCue` 结合分句起点与复合词黑名单判断，避免
+ * “可能/可以/可怜/却步/冷却/但愿/不但”把角色话语误判成叙述者断言。
  */
-const CANON_NARRATOR_SWITCH_CUES = [
+const CANON_NARRATOR_SWITCH_PHRASES = [
   "事实上",
   "实际上",
   "但是",
@@ -535,9 +707,6 @@ const CANON_NARRATOR_SWITCH_CUES = [
   "然而",
   "不过",
   "其实",
-  "但",
-  "可",
-  "却",
 ] as const;
 
 /**
@@ -563,7 +732,12 @@ const CANON_QUOTE_PAIRS: Readonly<Record<string, string>> = {
   '"': '"',
 };
 
-type CanonQuotedSpan = { start: number; end: number };
+type CanonQuotedSpan = {
+  start: number;
+  /** 排他下标：成对引号包含闭引号，未闭合引号到换行（不含换行）。 */
+  end: number;
+  closed: boolean;
+};
 
 function detectEventRewriteSignals(
   text: string,
@@ -571,28 +745,38 @@ function detectEventRewriteSignals(
 ): { hard: boolean; weak: boolean } {
   if (title.length < 2) return { hard: false, weak: false };
   const sentencePattern = /[。！？!?；;\n\r]+/u;
+  // 先在整段文本上配对引号，再切句：多句引语里的第二句以后仍属于引号内容。
+  // 未闭合的开引号只遮蔽到换行（段落边界），不会吞掉后文。
+  const { masked, quotedSpans } = maskQuotedSpans(text);
   let weak = false;
+
+  // 弱线索仍在原文句子上判断：即使引号里的否定没有直接绑定标题（例如
+  // 「灯塔熄灭之后，他说『从来没有发生过』」），也要给出 warning。硬拒绝
+  // 只看遮蔽后的句子，因此引号内容永远不会升级为硬拒绝。
   for (const sentence of text.split(sentencePattern)) {
     if (!sentence.includes(title)) continue;
     const withoutTitle = sentence.split(title).join("");
     if (CANON_WEAK_CUES.some((cue) => withoutTitle.includes(cue))) {
       weak = true;
     }
-    const { masked, quotedSpans } = maskQuotedSpans(sentence);
-    // 引号内的否定只警告，不参与硬拒绝；但引号内容若单独看足以命中，
-    // 仍要产生 warning，不能静默丢掉信号。
-    if (
-      quotedSpans.some(
-        (span) =>
-          hasExplicitOccurrenceNegation(
-            sentence.slice(span.start + 1, span.end),
-            title,
-          ) !== null,
-      )
-    ) {
+  }
+
+  // 标题只在引号内出现时，masked 段里已经没有标题；引号内容单独检查是否
+  // 足以命中，但只产生 warning。
+  for (const span of quotedSpans) {
+    const inner = text.slice(
+      span.start + 1,
+      span.closed ? span.end - 1 : span.end,
+    );
+    if (!inner.includes(title)) continue;
+    if (hasExplicitOccurrenceNegation(inner, title) !== null) {
       weak = true;
     }
-    const signal = hasExplicitOccurrenceNegation(masked, title);
+  }
+
+  for (const sentence of masked.split(sentencePattern)) {
+    if (!sentence.includes(title)) continue;
+    const signal = hasExplicitOccurrenceNegation(sentence, title);
     if (signal === "hard") return { hard: true, weak: false };
     if (signal === "nonAssertive") weak = true;
   }
@@ -692,6 +876,15 @@ function isNonAssertionMatch(
     start,
     CANON_GOVERNANCE_CLAUSE_DELIMITER,
   );
+  // 1) 言语动词 + 逗号等价于冒号引出的直接引语：被转述的否定只警告。
+  // 2) 后置引述（「…，他说。」）治理同一句前面所有分句。
+  if (
+    speechCommaGoverns(sentence, start) ||
+    speechColonGoverns(sentence, start) ||
+    trailingAttributionGoverns(sentence, end)
+  ) {
+    return true;
+  }
   return (
     hasGoverningFrameCue(
       sentence,
@@ -767,10 +960,105 @@ function frameCueGoverns(
   if (colonIndex !== null && colonIndex < matchStart) return true;
   // (a) 同一分句、位于匹配之前，且中间没有叙述者切换。
   if (cueStart < clauseStart) return false;
-  const between = sentence.slice(cueEnd, matchStart);
-  return !CANON_NARRATOR_SWITCH_CUES.some((cue) =>
-    between.includes(cue),
+  return !hasNarratorSwitchCue(sentence, cueEnd, matchStart);
+}
+
+/**
+ * 判断 `[start, end)` 内是否出现叙述者切换连接词。
+ *
+ * 多字连接词（但是/可是/然而/不过/其实/事实上/实际上）出现在任意位置都算；
+ * 单字连接词按词法收紧：
+ * - `但` 只有在不是“但愿/但凡/不但”时才算转折；
+ * - `可` 必须位于分句起点，且不是“可能/可以/可怜/可惜/可爱/可见/可靠/
+ *   可怕/可笑/可疑”等复合词；
+ * - `却` 必须位于分句起点，或前面只有一个 ≤4 字的短主语（如「他却」），
+ *   且不是“却步/冷却/推却/退却”。
+ *
+ * 这样「他可能记错了，…」里的“可”不会被当成转折，而「…，可灯塔熄灭从未
+ * 发生过。」里的“可”仍然把前面的框架线索截断。
+ */
+export function hasNarratorSwitchCue(
+  sentence: string,
+  start = 0,
+  end = sentence.length,
+): boolean {
+  const segment = sentence.slice(start, end);
+  if (
+    CANON_NARRATOR_SWITCH_PHRASES.some((phrase) => segment.includes(phrase))
+  ) {
+    return true;
+  }
+  for (let index = start; index < end; index += 1) {
+    const char = sentence[index];
+    if (char === "但") {
+      if (isButCompound(sentence, index)) continue;
+      return true;
+    }
+    if (char === "可") {
+      if (isKeCompound(sentence, index)) continue;
+      if (!isClauseStartAt(sentence, index)) continue;
+      return true;
+    }
+    if (char === "却") {
+      if (isQueCompound(sentence, index)) continue;
+      if (!isQueClauseStart(sentence, index)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+function isButCompound(sentence: string, index: number): boolean {
+  const previous = sentence[index - 1];
+  const next = sentence[index + 1];
+  return previous === "不" || next === "愿" || next === "凡";
+}
+
+function isKeCompound(sentence: string, index: number): boolean {
+  return KE_COMPOUND_FOLLOWERS.has(sentence[index + 1] ?? "");
+}
+
+const KE_COMPOUND_FOLLOWERS = new Set([
+  "能",
+  "以",
+  "是",
+  "怜",
+  "惜",
+  "爱",
+  "见",
+  "靠",
+  "怕",
+  "笑",
+  "疑",
+]);
+
+function isQueCompound(sentence: string, index: number): boolean {
+  const previous = sentence[index - 1];
+  const next = sentence[index + 1];
+  return (
+    previous === "冷" ||
+    previous === "推" ||
+    previous === "退" ||
+    next === "步"
   );
+}
+
+/** 单字转折词是否位于分句起点（允许 0 个字符，即标点/文本开头之后）。 */
+function isClauseStartAt(sentence: string, index: number): boolean {
+  if (index === 0) return true;
+  return CANON_GOVERNANCE_CLAUSE_DELIMITER.test(sentence[index - 1]!);
+}
+
+/** `却` 额外允许一个 ≤4 字的短主语（「他却」「老人却」）。 */
+function isQueClauseStart(sentence: string, index: number): boolean {
+  if (isClauseStartAt(sentence, index)) return true;
+  const clauseStart = clauseStartBefore(
+    sentence,
+    index,
+    CANON_GOVERNANCE_CLAUSE_DELIMITER,
+  );
+  const subject = sentence.slice(clauseStart, index);
+  return subject.length > 0 && subject.length <= 4;
 }
 
 /** 框架结尾后（允许普通/全角空格）是否紧跟冒号；返回冒号下标。 */
@@ -791,13 +1079,174 @@ function colonDirectlyAfter(
 }
 
 /**
- * `说` 仅在治理匹配时豁免：
+ * 言语动词 + 逗号等价于冒号：框架所在分句只有短主语和言语动词时，逗号后的
+ * 否定属于被转述的内容。例：
+ *
+ * - 「老渔夫坚称，灯塔熄灭从未发生过。」
+ * - 「他低声道，交出钥匙根本没有发生过。」
+ * - 「老人道，灯塔熄灭从来没有发生过。」
+ *
+ * 分句必须以言语动词结尾（可带 道/着/了），前面的主语部分 ≤10 字且不再含
+ * 其它框架动词；「少年发誓要离开小岛，…」这类分句不以动词结尾，仍是叙述者
+ * 的直接断言。言语之后一旦出现词法意义上的叙述者转折，治理立即结束。
+ */
+function speechCommaGoverns(sentence: string, matchStart: number): boolean {
+  for (let index = 0; index < matchStart; index += 1) {
+    if (sentence[index] !== "，" && sentence[index] !== ",") continue;
+    const clauseStart = clauseStartBefore(
+      sentence,
+      index,
+      CANON_GOVERNANCE_CLAUSE_DELIMITER,
+    );
+    if (!isSpeechIntroClause(sentence.slice(clauseStart, index))) continue;
+    if (hasNarratorSwitchCue(sentence, index + 1, matchStart)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** 言语动词 + 冒号：冒号后的直接引语到句末都受该话语治理。 */
+function speechColonGoverns(sentence: string, matchStart: number): boolean {
+  for (let index = 0; index < matchStart; index += 1) {
+    if (sentence[index] !== "：" && sentence[index] !== ":") continue;
+    const clauseStart = clauseStartBefore(
+      sentence,
+      index,
+      CANON_GOVERNANCE_CLAUSE_DELIMITER,
+    );
+    if (isSpeechIntroClause(sentence.slice(clauseStart, index))) return true;
+  }
+  return false;
+}
+
+/**
+ * 后置引述（「…从未发生过，他说。」「…，老人低声道。」）治理同一句前面所有
+ * 分句。引述分句必须位于否定之后且足够短；中间若出现叙述者转折，则不再回溯
+ * 治理。
+ */
+function trailingAttributionGoverns(
+  sentence: string,
+  matchEnd: number,
+): boolean {
+  const contentEnd = trailingContentEnd(sentence);
+  if (contentEnd <= matchEnd) return false;
+  const lastClauseStart = clauseStartBefore(
+    sentence,
+    contentEnd,
+    CANON_GOVERNANCE_CLAUSE_DELIMITER,
+  );
+  if (lastClauseStart <= matchEnd) return false;
+  const clause = sentence.slice(lastClauseStart, contentEnd).trim();
+  if (!isSpeechIntroClause(clause)) return false;
+  return !hasNarratorSwitchCue(sentence, matchEnd, lastClauseStart);
+}
+
+function trailingContentEnd(sentence: string): number {
+  let end = sentence.length;
+  while (end > 0 && (sentence[end - 1] === " " || sentence[end - 1] === "\u3000")) {
+    end -= 1;
+  }
+  return end;
+}
+
+/** 该分句是否以言语动词（可带短宾语，如「告诉我」）结束并引出话语。 */
+function isSpeechIntroClause(clause: string): boolean {
+  const trimmed = clause.replace(/[ \u3000]+$/u, "");
+  if (trimmed.length === 0) return false;
+  const verbStart = speechVerbStartAtClauseEnd(trimmed);
+  if (verbStart !== null && speechPrefixIsShortAndClean(trimmed, verbStart)) {
+    return true;
+  }
+  return isTellingClause(trimmed);
+}
+
+/**
+ * `告诉` 后面允许一个 ≤4 字的短宾语再接逗号（「他告诉我，…」）；这是该动词
+ * 常见的转述结构。宾语更长或含标点时仍按普通叙述处理，避免把「他告诉我
+ * 风暴要来，灯塔熄灭从未发生过。」降级。
+ */
+function isTellingClause(clause: string): boolean {
+  const index = clause.lastIndexOf("告诉");
+  if (index < 0) return false;
+  const object = clause.slice(index + 2);
+  if (object.length === 0 || object.length > 4) return false;
+  if (/[。！？!?；;，,、：:\n\r]/u.test(object)) return false;
+  if (!speechPrefixIsShortAndClean(clause, index)) return false;
+  return !prefixContainsFrameCue(object);
+}
+
+/** 分句末尾的言语动词起始下标（相对分句）；没有则返回 null。 */
+function speechVerbStartAtClauseEnd(clause: string): number | null {
+  const candidates = [clause];
+  const last = clause.at(-1);
+  if (last === "道" || last === "着" || last === "了") {
+    candidates.push(clause.slice(0, -1));
+  }
+  for (const candidate of candidates) {
+    for (const verb of CANON_SPEECH_VERBS_BY_LENGTH) {
+      if (!candidate.endsWith(verb)) continue;
+      const start = candidate.length - verb.length;
+      if (!isSpeechVerbAllowedInContext(candidate, start, verb)) continue;
+      return start;
+    }
+  }
+  return null;
+}
+
+/** 单字言语动词必须排除常见复合词（知道/小说/问题/解答…）。 */
+function isSpeechVerbAllowedInContext(
+  clause: string,
+  start: number,
+  verb: string,
+): boolean {
+  if (verb.length !== 1) return true;
+  const blocked = CANON_SPEECH_VERB_BLOCKED_BEFORE[verb];
+  const previous = clause[start - 1];
+  return !(blocked && previous !== undefined && blocked.has(previous));
+}
+
+/**
+ * 言语动词前只允许短主语，且不能再嵌套另一个框架动词。
+ *
+ * 「他撒谎说」、「她坚持说」里的 撒谎/坚持 紧贴言语动词，视为同一个转述
+ * 短语；更早出现的 以为/希望/说 等则说明这不是单纯的主语，不能降级。
+ */
+function speechPrefixIsShortAndClean(
+  clause: string,
+  verbStart: number,
+): boolean {
+  const prefix = clause.slice(0, verbStart);
+  if (prefix.length > 10) return false;
+  if (/[。！？!?；;\n\r]/u.test(prefix)) return false;
+  return !prefixContainsFrameCue(prefix);
+}
+
+function prefixContainsFrameCue(prefix: string): boolean {
+  const cues: readonly string[] = [
+    ...CANON_DIALOGUE_CUES,
+    ...CANON_CHARACTER_ASSERTION_CUES,
+    ...CANON_WISH_CUES,
+    ...CANON_SPEECH_VERBS,
+  ];
+  for (const cue of cues) {
+    let index = prefix.indexOf(cue);
+    while (index >= 0) {
+      if (index + cue.length !== prefix.length) return true;
+      index = prefix.indexOf(cue, index + 1);
+    }
+  }
+  return false;
+}
+
+/**
+ * 裸 `说` 的同一分句/冒号治理（逗号引出的言语与后置引述由上方
+ * `speechCommaGoverns` / `trailingAttributionGoverns` 处理）：
  * - 与匹配处于同一分句（`他说了…`、`他转述说…`）；或
  * - 紧跟 `：` / `:`（`他说：…`）。
  *
- * 逗号是真实分句边界，因此「她坚称，交出钥匙从来没有发生过。」不再豁免。
  * “说完/说明/说起/说来/说法/说服/说过了”不是引述动词，因此像
- * 「众人说完后便散了，灯塔熄灭从未发生过。」「这么说来，……」仍会硬拒绝。
+ * 「众人说完后便散了，灯塔熄灭从未发生过。」「这么说来，……」仍会硬拒绝；
+ * 「她坚称，交出钥匙从来没有发生过。」则由言语动词 + 逗号规则降级为 warning。
  */
 function hasReportingSayCue(
   sentence: string,
@@ -883,22 +1332,24 @@ function clauseEndAfter(
 /**
  * 把成对引号（含嵌套）内的内容替换为空格，保留长度与下标。
  *
- * 未闭合的开引号一直遮蔽到句末：宁可少抓一条对白，也不把角色台词当成
- * 叙述者的直接断言。引号本身也一并遮蔽，避免跨引号拼出假匹配。
+ * 在整段文本上配对，因此 `「…。…。」` 这类跨句引语整段都受遮蔽；之后才切句。
+ * 未闭合的开引号一直遮蔽到换行（段落边界）或文本末尾：宁可少抓一条对白，
+ * 也不把角色台词当成叙述者的直接断言。引号本身也一并遮蔽，避免跨引号拼出
+ * 假匹配。
  */
-function maskQuotedSpans(sentence: string): {
+function maskQuotedSpans(text: string): {
   masked: string;
   quotedSpans: CanonQuotedSpan[];
 } {
   const stack: Array<{ close: string; start: number }> = [];
   const spans: CanonQuotedSpan[] = [];
   // 引号都是 BMP 字符，按 UTF-16 下标扫描即可与正则 match.index 对齐。
-  for (let index = 0; index < sentence.length; index += 1) {
-    const char = sentence[index]!;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
     const top = stack.at(-1);
     if (top && top.close === char) {
       stack.pop();
-      spans.push({ start: top.start, end: index });
+      spans.push({ start: top.start, end: index + 1, closed: true });
       continue;
     }
     if (Object.hasOwn(CANON_QUOTE_PAIRS, char)) {
@@ -907,16 +1358,28 @@ function maskQuotedSpans(sentence: string): {
   }
   while (stack.length > 0) {
     const open = stack.pop()!;
-    spans.push({ start: open.start, end: sentence.length - 1 });
+    spans.push({
+      start: open.start,
+      end: lineEndAfter(text, open.start),
+      closed: false,
+    });
   }
   let masked = "";
-  for (let index = 0; index < sentence.length; index += 1) {
+  for (let index = 0; index < text.length; index += 1) {
     const inside = spans.some(
-      (span) => index >= span.start && index <= span.end,
+      (span) => index >= span.start && index < span.end,
     );
-    masked += inside ? " " : sentence[index]!;
+    masked += inside ? " " : text[index]!;
   }
   return { masked, quotedSpans: spans };
+}
+
+function lineEndAfter(text: string, from: number): number {
+  for (let index = from; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n" || char === "\r") return index;
+  }
+  return text.length;
 }
 
 function escapeRegExp(text: string): string {

@@ -75,6 +75,23 @@ export function settingDeltaHistoryLabel(
   return `此前：${history.map((delta) => delta.statement).join("；")}`;
 }
 
+/**
+ * 历史行是否包含规则收紧前的禁用字符。
+ *
+ * 读取与展示保留原样（读者可以自行改写），但进入续写上下文前渲染函数会
+ * 移除这些码位；界面据此给出一条非阻断说明。
+ */
+export function settingDeltaSanitizedNote(
+  delta: Pick<SettingDeltaV1, "subject" | "statement">,
+): string | null {
+  const forbidden =
+    findForbiddenSettingDeltaChar(delta.statement) ??
+    (delta.subject.kind === "term"
+      ? findForbiddenSettingDeltaChar(delta.subject.name)
+      : null);
+  return forbidden === null ? null : "包含不可见字符，进入续写前已移除";
+}
+
 export function settingDeltaStatementRemaining(statement: string): number {
   return Math.max(
     0,

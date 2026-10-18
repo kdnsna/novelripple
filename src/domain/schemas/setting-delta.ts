@@ -76,6 +76,44 @@ export function findForbiddenSettingDeltaChar(text: string): number | null {
 }
 
 /**
+ * 移除所有不允许的码位，保留合法 emoji 序列。
+ *
+ * 历史行在规则收紧前可能已写入 U+200B / U+200D 等字符；读取与派生必须继续
+ * 容忍它们，但进入 Prompt 的文本不能原样携带。扫描顺序与
+ * `findForbiddenSettingDeltaChar` 完全一致：先整体放行合法 emoji 序列，再逐字
+ * 丢弃不允许的码位，因此合法家庭 emoji、变体选择符、肤色、键帽、国旗与细分
+ * 旗帜不会被拆坏。普通中文、全角标点与空格原样保留。
+ */
+export function sanitizeSettingDeltaText(text: string): string {
+  const codePoints = Array.from(text, (char) => char.codePointAt(0)!);
+  let sanitized = "";
+  let index = 0;
+  while (index < codePoints.length) {
+    const consumed = consumeAllowedEmojiSequence(codePoints, index);
+    if (consumed > 0) {
+      for (let offset = 0; offset < consumed; offset += 1) {
+        sanitized += String.fromCodePoint(codePoints[index + offset]!);
+      }
+      index += consumed;
+      continue;
+    }
+    const codePoint = codePoints[index]!;
+    if (
+      !isLoneSurrogateCodePoint(codePoint) &&
+      !isForbiddenSettingDeltaCodePoint(codePoint)
+    ) {
+      sanitized += String.fromCodePoint(codePoint);
+    }
+    index += 1;
+  }
+  return sanitized;
+}
+
+function isLoneSurrogateCodePoint(codePoint: number): boolean {
+  return codePoint >= 0xd800 && codePoint <= 0xdfff;
+}
+
+/**
  * 面向读者的具体错误文案，例如
  * 「词条名包含不允许的字符 U+200B（零宽空格）」。
  */

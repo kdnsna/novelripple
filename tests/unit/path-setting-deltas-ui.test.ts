@@ -17,6 +17,7 @@ import {
   settingDeltaAnchorHint,
   settingDeltaHistoryLabel,
   settingDeltaNonDeletedRowCount,
+  settingDeltaSanitizedNote,
   settingDeltaScopeLabel,
   settingDeltaStatementRemaining,
   settingDeltaSubjectLabel,
@@ -107,6 +108,27 @@ describe("path setting delta presentation helpers", () => {
         }),
       ]),
     ).toBe("此前：旧灯塔还能通行。；旧灯塔只在退潮时开放。");
+  });
+
+  it("notes legacy rows whose text will be sanitized before continuation", () => {
+    expect(
+      settingDeltaSanitizedNote({
+        subject: { kind: "term", name: "旧灯塔" },
+        statement: "旧灯塔已被封锁。",
+      }),
+    ).toBeNull();
+    expect(
+      settingDeltaSanitizedNote({
+        subject: { kind: "term", name: "旧灯\u200B塔" },
+        statement: "旧灯塔已被封锁。",
+      }),
+    ).toBe("包含不可见字符，进入续写前已移除");
+    expect(
+      settingDeltaSanitizedNote({
+        subject: { kind: "term", name: "旧灯塔" },
+        statement: "旧灯\u200D塔已被封锁。",
+      }),
+    ).toBe("包含不可见字符，进入续写前已移除");
   });
 
   it("counts remaining statement characters without going negative", () => {

@@ -2810,6 +2810,13 @@ input:focus-visible,
   white-space: nowrap;
 }
 
+.path-setting-delta-sanitized-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
 .path-setting-delta-empty,
 .path-setting-delta-cap,
 .path-setting-delta-counter,

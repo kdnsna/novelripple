@@ -59,8 +59,8 @@ describe("canon guard labeled probe", () => {
         {
           "caught": 14,
           "dialogueHardRejects": 0,
-          "dialogueWarnings": 17,
-          "frameThenNarratorCaught": 20,
+          "dialogueWarnings": 31,
+          "frameThenNarratorCaught": 24,
           "hardFalseRejects": 0,
           "neutralHardRejects": 0,
           "reviewerDialogueHardRejects": 0,
@@ -98,8 +98,8 @@ describe("canon guard labeled probe", () => {
   it("records the expected probe sizes", () => {
     expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(20);
     expect(CANON_GUARD_LEGITIMATE).toHaveLength(19);
-    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(17);
-    expect(CANON_GUARD_FRAME_THEN_NARRATOR).toHaveLength(20);
+    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(31);
+    expect(CANON_GUARD_FRAME_THEN_NARRATOR).toHaveLength(24);
     expect(CANON_GUARD_REVIEWER_DIALOGUE).toHaveLength(8);
     expect(CANON_GUARD_NEUTRAL_PROSE.length).toBeGreaterThan(200);
   });

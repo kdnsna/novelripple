@@ -36,6 +36,7 @@ import {
   settingDeltaNonDeletedRowCount,
   settingDeltaAnchorHint,
   settingDeltaHistoryLabel,
+  settingDeltaSanitizedNote,
   settingDeltaScopeLabel,
   settingDeltaStatementRemaining,
   settingDeltaSubjectLabel,
@@ -254,6 +255,7 @@ export function PathSettingDeltas({
         <ul className="path-setting-delta-list">
           {derivation.items.map((item) => {
             const historyLabel = settingDeltaHistoryLabel(item.history);
+            const sanitizedNote = settingDeltaSanitizedNote(item.active);
             return (
               <li
                 className={
@@ -280,6 +282,11 @@ export function PathSettingDeltas({
                 <p className="path-setting-delta-statement">
                   {item.active.statement}
                 </p>
+                {sanitizedNote ? (
+                  <p className="path-setting-delta-sanitized-note">
+                    {sanitizedNote}
+                  </p>
+                ) : null}
                 {historyLabel ? (
                   <p
                     className="path-setting-delta-history"
