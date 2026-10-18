@@ -33,7 +33,6 @@ import {
   type NameCandidate,
 } from "@/domain/source/name-candidates";
 import { resolveStoryMapContentCandidate } from "@/domain/source/resolve-story-map-evidence";
-import { computeEventBudget } from "@/domain/story-map/event-budget";
 import {
   applyEndingPass,
   applyMerge,
@@ -86,7 +85,7 @@ export const STORY_MAP_PROMPT_VERSIONS = {
   glean: "story-map-glean.v5",
   names: "story-map-names.v2",
   endings: "story-map-endings.v2",
-  merge: "story-map-merge.v7",
+  merge: "story-map-merge.v5",
 } as const;
 
 /** 结局轮次读取的全书末尾比例（按自然段数）。 */
@@ -489,7 +488,7 @@ export async function generateStoryMap(input: {
     },
     [
       templates.merge,
-      formatEventBudgetHint(totalCoreChars, withEndings.pool.events.length),
+      formatGranularityHint(totalCoreChars),
       "<events>",
       JSON.stringify(compactEvents(withEndings.pool)),
       "</events>",
@@ -614,11 +613,13 @@ function formatNameHints(tag: string, hints: NameCandidate[]): string {
   return `<${tag}>${JSON.stringify(hints.map(({ name, count }) => ({ name, count })))}</${tag}>`;
 }
 
-/** 最终合并轮的事件预算提示：核心文本字符数与合并前事件池的事件数。 */
-function formatEventBudgetHint(coreTextChars: number, eventCount: number): string {
+/** 最终合并轮的事件预算提示：按核心文本字符数给出目标事件范围（下限 3）。 */
+function formatGranularityHint(coreTextChars: number): string {
+  const lower = Math.max(3, Math.round(coreTextChars / 1000));
+  const upper = Math.max(lower, Math.round(coreTextChars / 600));
   return [
     "<granularity_hint>",
-    JSON.stringify(computeEventBudget(coreTextChars, eventCount)),
+    JSON.stringify({ coreTextChars, targetEventRange: [lower, upper] }),
     "</granularity_hint>",
   ].join("\n");
 }
