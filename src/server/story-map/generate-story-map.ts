@@ -82,8 +82,8 @@ import {
  * 不写入 Artifact；Source 只读。
  */
 export const STORY_MAP_PROMPT_VERSIONS = {
-  extract: "story-map-chunk.v4",
-  glean: "story-map-glean.v4",
+  extract: "story-map-chunk.v5",
+  glean: "story-map-glean.v5",
   names: "story-map-names.v2",
   endings: "story-map-endings.v2",
   merge: "story-map-merge.v4",
