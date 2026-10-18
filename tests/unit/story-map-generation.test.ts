@@ -104,6 +104,16 @@ const modelConfig = {
 };
 
 describe("chunked Story Map recall pipeline", () => {
+  it("pins the v3 event prompts while names and endings stay v2", () => {
+    expect(STORY_MAP_PROMPT_VERSIONS).toEqual({
+      extract: "story-map-chunk.v3",
+      glean: "story-map-glean.v3",
+      names: "story-map-names.v2",
+      endings: "story-map-endings.v2",
+      merge: "story-map-merge.v3",
+    });
+  });
+
   it("runs the explicit deterministic Mock configuration without a real model", async () => {
     const { project, source, chunks } = await createContext();
     const previousProvider = process.env.AI_PROVIDER_NAME;
