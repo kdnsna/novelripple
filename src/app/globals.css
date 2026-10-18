@@ -2572,7 +2572,115 @@ input:focus-visible,
   font-size: 0.82rem;
 }
 
+.worldline-tree-nav {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.worldline-tree-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.worldline-tree-count {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.worldline-tree {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.worldline-tree-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.32rem 0.4rem 0.32rem
+    calc(0.3rem + var(--tree-level, 0) * 0.85rem);
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+}
+
+.worldline-tree-item.on-path > .worldline-tree-row {
+  background: var(--sage-wash);
+}
+
+.worldline-tree-item.current > .worldline-tree-row {
+  border-color: var(--rust);
+  background: var(--paper-blush);
+}
+
+.worldline-tree-row-button {
+  min-width: 0;
+  flex: 1 1 8rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.worldline-tree-row-button:hover {
+  color: var(--rust-dark);
+}
+
+.worldline-tree-badges {
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.2rem;
+}
+
+.worldline-tree-badge {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.worldline-tree-toggle {
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.worldline-tree-hint {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
 .worldline-delta,
+.path-character-states,
 .continuation-empty,
 .continuation-directions,
 .continuation-path {
@@ -2585,6 +2693,7 @@ input:focus-visible,
 }
 
 .worldline-delta h3,
+.path-character-states h3,
 .continuation-empty h3,
 .continuation-directions h3,
 .path-scene h3,
@@ -2604,6 +2713,51 @@ input:focus-visible,
   padding-left: 1.1rem;
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.path-character-state-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path-character-state-list > li {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--surface);
+}
+
+.path-character-state-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+
+.path-character-state-heading span {
+  color: var(--ink-soft);
+}
+
+.path-character-history,
+.path-character-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.direction-generated-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 .continuation-empty p,
