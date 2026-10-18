@@ -12,6 +12,7 @@ import {
   getScenePath,
   type SceneNode,
 } from "@/domain/continuation/scene-tree";
+import { latestBatchForParent } from "@/domain/continuation/worldline-tree";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import type {
   ContextManifest,
@@ -549,24 +550,4 @@ function ContextViewer({ manifest }: { manifest: ContextManifest }) {
       </div>
     </details>
   );
-}
-
-function latestBatchForParent(
-  batches: readonly ContinuationDirectionBatchView[],
-  parentSceneId: string | null,
-): ContinuationDirectionBatchView | null {
-  let latest: ContinuationDirectionBatchView | null = null;
-  for (const batch of batches) {
-    if (batch.parentSceneId !== parentSceneId) continue;
-    if (
-      !latest ||
-      latest.batchIndex < batch.batchIndex ||
-      (latest.batchIndex === batch.batchIndex &&
-        (latest.createdAt < batch.createdAt ||
-          (latest.createdAt === batch.createdAt && latest.id < batch.id)))
-    ) {
-      latest = batch;
-    }
-  }
-  return latest;
 }

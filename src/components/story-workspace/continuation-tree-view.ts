@@ -2,10 +2,8 @@ import {
   buildSceneTree,
   type ScenePayload,
 } from "@/domain/continuation/scene-tree";
-import type {
-  ContinuationArtifact,
-  ContinuationDirection,
-} from "@/domain/schemas";
+import type { ContinuationDirectionBatchView } from "@/domain/continuation/worldline-tree";
+import type { ContinuationArtifact } from "@/domain/schemas";
 
 /**
  * 续写面板的序列化视图模型。
@@ -13,13 +11,7 @@ import type {
  * 只保存面板真正需要展示的不可变内容：场景正文各保存一次，方向批次只保存
  * 三个方向。世界线、ImpactPlan 等绑定信息已经由外层面板持有，不在这里重复。
  */
-export type ContinuationDirectionBatchView = {
-  id: string;
-  parentSceneId: string | null;
-  batchIndex: number;
-  createdAt: string;
-  directions: ContinuationDirection[];
-};
+export type { ContinuationDirectionBatchView };
 
 export type ContinuationTreeView = {
   worldlineId: string;

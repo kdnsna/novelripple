@@ -1,3 +1,12 @@
+import type { ContinuationDirectionBatchView } from "@/domain/continuation/worldline-tree";
+import {
+  ContextManifestSchema,
+  ContinuationSceneV2Schema,
+  type ContinuationDirection,
+  type ContinuationSceneV2,
+  type StatePatch,
+} from "@/domain/schemas";
+
 /**
  * M1-06 Scene 长度契约测试共享夹具。
  *
@@ -22,3 +31,107 @@ export const M1_06_LONG_SCENE_PROSE = `许澄没有把红账带去报社。雨�
 “先别回灯塔。”许澄说，“你走北侧的石阶。天亮前，我把备份和原件分开放。”沈砚点点头，把系好的航标绳又打了一个结。周岚在电话那头说，明早六点的轮渡还有一张站票，售票窗口认她的记者证。三人约定，风暴最凶的那一小时过去之后，在旧灯塔的灯室里再对一次封条。没有谁再说话，只有雨点敲在铁皮屋顶上，一声比一声沉。
 
 许澄最后看了一眼铁柜。柜门没有反光，只有潮气在漆面上凝成细小的水珠。她忽然明白，最危险的从来不是把证据藏在哪里，而是接下来每一次带它走动的人。她把门合上，听见锁舌弹进卡槽的声音，很轻，像潮汐钟在某个遥远的凌晨，终于响了一下。`;
+
+export function emptyStatePatch(): StatePatch {
+  return {
+    factsAdded: [],
+    factsRemoved: [],
+    characterChanges: [],
+    threadsOpened: [],
+    threadsClosed: [],
+  };
+}
+
+export function testContextManifest() {
+  return ContextManifestSchema.parse({
+    budget: { totalChars: 120, maxChars: 6_000, percentageUsed: 2 },
+    sections: [
+      {
+        kind: "worldline_setup",
+        included: true,
+        chars: 80,
+        trimmed: false,
+        droppedItemIds: [],
+      },
+      {
+        kind: "selected_direction",
+        included: true,
+        chars: 40,
+        trimmed: false,
+        droppedItemIds: ["direction_1"],
+      },
+    ],
+  });
+}
+
+export function v2SceneFixture(input: {
+  id: string;
+  parentSceneId: string | null;
+  depth: number;
+  createdAt: string;
+  worldlineId?: string;
+  acceptedImpactPlanId?: string;
+  directionsArtifactId?: string;
+  selectedDirectionId?: string;
+  origin?: "generated" | "retry";
+  attemptIndex?: number;
+  title?: string;
+  summary?: string;
+  statePatch?: StatePatch;
+}): ContinuationSceneV2 {
+  return ContinuationSceneV2Schema.parse({
+    schemaVersion: 2,
+    id: input.id,
+    worldlineId: input.worldlineId ?? "wl_1",
+    acceptedImpactPlanId: input.acceptedImpactPlanId ?? "impact_1",
+    directionsArtifactId: input.directionsArtifactId ?? "directions_1",
+    selectedDirectionId: input.selectedDirectionId ?? "direction_1",
+    parentSceneId: input.parentSceneId,
+    depth: input.depth,
+    origin: input.origin ?? "generated",
+    attemptIndex: input.attemptIndex ?? 0,
+    summary: input.summary ?? "许澄在钟楼核对记录。",
+    contextManifest: testContextManifest(),
+    title: input.title ?? "钟楼里的第二份记录",
+    prose: M1_06_LONG_SCENE_PROSE,
+    statePatch: input.statePatch ?? emptyStatePatch(),
+    contentKind: "generated",
+    createdAt: input.createdAt,
+  });
+}
+
+export function continuationDirectionFixture(
+  index: number,
+  overrides: Partial<ContinuationDirection> = {},
+): ContinuationDirection {
+  return {
+    id: `direction_${index}`,
+    title: `方向 ${index}`,
+    premise: "许澄在钟楼与沈砚核对记录。",
+    affectedCharacterIds: ["char_xucheng"],
+    expectedConsequence: "顾闻舟提前抵达。",
+    ...overrides,
+  };
+}
+
+export function directionBatchFixture(input: {
+  id: string;
+  parentSceneId: string | null;
+  batchIndex: number;
+  createdAt: string;
+  directions?: ContinuationDirection[];
+}): ContinuationDirectionBatchView {
+  return {
+    id: input.id,
+    parentSceneId: input.parentSceneId,
+    batchIndex: input.batchIndex,
+    createdAt: input.createdAt,
+    directions:
+      input.directions ??
+      [1, 2, 3].map((index) =>
+        continuationDirectionFixture(index, {
+          id: `${input.id}_direction_${index}`,
+        }),
+      ),
+  };
+}
