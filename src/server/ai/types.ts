@@ -62,7 +62,7 @@ export type StructuredGenerationInput<T> = {
   validate?: (value: T) => StructuredValidationIssue[];
   /** 可选中止信号，透传给 provider。 */
   signal?: AbortSignal;
-  /** 每次真正发起 provider 调用前触发（含 repair），用于调用预算计数。 */
+  /** 每次真正发起 provider 调用前触发（含 repair 与瞬时网络重试），在调用计数落库前执行。 */
   onAttempt?: () => void;
   /** 瞬时网络错误重试前的等待函数；测试可注入以跳过真实定时器。 */
   sleep?: (milliseconds: number) => Promise<void>;

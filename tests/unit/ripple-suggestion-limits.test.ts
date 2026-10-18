@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION,
   MAX_RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION,
-  RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH,
+  RIPPLE_SUGGESTION_MAX_MODEL_CALLS_PER_BATCH,
   RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION_ENV,
   resolveRippleSuggestionMaxBatches,
-  rippleSuggestionAttemptLimit,
+  rippleSuggestionModelCallLimit,
 } from "@/server/ripple/ripple-suggestion-limits";
 
 const previousValue =
@@ -88,10 +88,12 @@ describe("Ripple Suggestion batch limit env", () => {
     );
   });
 
-  it("derives the attempt limit from the batch cap", () => {
-    expect(RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH).toBe(2);
-    expect(rippleSuggestionAttemptLimit(1)).toBe(2);
-    expect(rippleSuggestionAttemptLimit(5)).toBe(10);
-    expect(rippleSuggestionAttemptLimit(20)).toBe(40);
+  it("derives the model-call ceiling from the batch cap", () => {
+    // 每批最坏 initial 4 次（1 首调 + 2 空响应 + 1 瞬时网络）
+    // + repair 2 次（1 修复 + 0 空响应 + 1 瞬时网络）= 6。
+    expect(RIPPLE_SUGGESTION_MAX_MODEL_CALLS_PER_BATCH).toBe(6);
+    expect(rippleSuggestionModelCallLimit(1)).toBe(6);
+    expect(rippleSuggestionModelCallLimit(5)).toBe(30);
+    expect(rippleSuggestionModelCallLimit(20)).toBe(120);
   });
 });

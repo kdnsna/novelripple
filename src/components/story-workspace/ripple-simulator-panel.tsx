@@ -132,6 +132,31 @@ export function mapAnchorEvaluationRows(
   return rows;
 }
 
+/**
+ * 「换一批」的可用状态与提示：批次上限与模型调用上限是两条独立限制。
+ * 批次上限按已保存批次判断；模型调用上限由服务端在每次真实调用前检查，
+ * 触顶后服务端返回含“模型调用上限”的友好错误，这里据此展示对应提示。
+ */
+export function suggestionsRefreshState(input: {
+  batchCount: number;
+  batchLimit: number;
+  error: string | null;
+}): { canRefresh: boolean; hint: string | null } {
+  if (input.batchCount >= input.batchLimit) {
+    return {
+      canRefresh: false,
+      hint: `已达到本 revision 的换一批上限（${input.batchLimit} 批）`,
+    };
+  }
+  if (input.error?.includes("模型调用上限")) {
+    return {
+      canRefresh: false,
+      hint: "本 revision 的模型调用次数已达上限，可继续使用已有建议",
+    };
+  }
+  return { canRefresh: true, hint: null };
+}
+
 export function RippleSimulatorPanel({
   projectId,
   artifact,
@@ -197,8 +222,12 @@ export function RippleSimulatorPanel({
         (batch) => batch.id === activeSuggestionBatch.id,
       )
     : -1;
-  const canRefreshSuggestions =
-    suggestionBatches.length < suggestionBatchLimit;
+  const suggestionRefresh = suggestionsRefreshState({
+    batchCount: suggestionBatches.length,
+    batchLimit: suggestionBatchLimit,
+    error: suggestionsError,
+  });
+  const canRefreshSuggestions = suggestionRefresh.canRefresh;
   const incompatible =
     plan?.anchorEvaluations.some(
       (evaluation) => evaluation.status === "incompatible",
@@ -357,7 +386,7 @@ export function RippleSimulatorPanel({
                 <p>{suggestionsError}</p>
                 <button
                   className="secondary-button compact-button"
-                  disabled={suggestionsLoading}
+                  disabled={suggestionsLoading || !canRefreshSuggestions}
                   onClick={() => {
                     // 换批失败时沿用同一幂等键重试；首次加载失败才走无键复用路径。
                     if (
@@ -455,10 +484,8 @@ export function RippleSimulatorPanel({
                     >
                       {refreshingSuggestions ? "正在换一批…" : "换一批"}
                     </button>
-                    {!canRefreshSuggestions ? (
-                      <small>
-                        已达到本 revision 的换一批上限（{suggestionBatchLimit} 批）
-                      </small>
+                    {suggestionRefresh.hint ? (
+                      <small>{suggestionRefresh.hint}</small>
                     ) : null}
                   </div>
                 </div>

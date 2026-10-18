@@ -93,11 +93,12 @@ confirmed 之后的下游检查一行未改：Ripple Suggestions 生成器、Imp
 - 自动加载继续复用最新批次；只有用户显式点击「换一批」才创建新批次。客户端在点击时生成幂等键，服务端用 `(storyMapArtifactId, batchIndex, idempotencyKey)` 派生目标 Artifact id，并按该 id 使用 in-flight 锁合并并发请求；相同键的重试返回同一行且不调用模型。
 - 不同键的并发换批必须按真实行为理解：同一 revision 的 in-flight 锁只执行第一个生成任务，其他并发请求（即使幂等键不同）await 同一个 Promise 并收到该批次；一次突发只产生一个 `batchIndex`、一次模型调用。锁释放后到达的新键请求才会重新读取已持久化批次并串行分配下一个 `batchIndex`。不会为每个不同键并发写入独立批次。
 - 每个 revision 的批次数上限由 `RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION`（默认 5）控制，按已持久化批次在模型调用前检查；达到上限时 fail closed 并禁用按钮。环境变量 trim 后只接受 `/^[1-9][0-9]*$/` 的纯十进制数字，且不超过 20；`"0x2"`、`"1e0"`、`"+3"`、`" 2.0"` 与超过上限的值都在任何 Prompt 读取与模型调用前 fail closed。
-- 失败调用也计入上限：每个 revision 的 `ripple_suggestions` Generation Run（pending / succeeded / failed）合计最多 `批次数上限 × 2` 次（`RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH = 2`），在任何 Prompt 读取与模型调用前检查，超过后 fail closed 并返回友好错误；成功批次仍受批次数上限约束，失败与成功共享这 2 倍预算。
+- 失败调用也计入上限：`generation_runs.model_calls` 在每次真实 provider 调用前自增并落库（迁移 `0011_generation_run_model_calls`；旧行为 `null`，按 1 次兜底），覆盖 initial、repair 与瞬时网络重试。每个 revision 的硬上限为 `批次数上限 × RIPPLE_SUGGESTION_MAX_MODEL_CALLS_PER_BATCH`（6 = initial 最坏 4 次 + repair 最坏 2 次；默认 5 批 → 30 次），在任何 Prompt 读取与模型调用前检查；运行中下一次 repair / 重试会超限时也在发出调用前 fail closed。失败与成功的真实调用同等计入，但不再有独立的“尝试次数”上限，因此失败不会提前挡住正常换批；成功批次仍受批次数上限约束。界面错误文案与换批提示区分“换一批上限”和“模型调用上限”。
 - `generation_runs` 新增可空 `story_map_artifact_id` 绑定（迁移 `0010_generation_run_story_map_binding`），换批的 Generation Run 写入当前 Story Map revision；计数按该绑定与 `kind = "ripple_suggestions"` 过滤。旧行或其它 kind 的 run 没有该绑定，解析为 `null`。
 - 换批 Prompt（`ripple-suggestions.v4`）携带之前批次的建议 Event id 与标题；模型重复推荐已建议事件时仍保存该批次，不静默重试。
 - 界面提供 `‹ 1/2 ›` 批次切换与「换一批」；切回旧批次只读已有 Artifact，关闭/重开面板不会自动生成新批次。
 - 本轮未新增数据库表或依赖；批次元数据保存在既有 `artifacts.data_json` 中，Generation Run 只增加可空绑定列。
+- 调用计数加固新增迁移 `0011_generation_run_model_calls`（可空 `model_calls`）；仍未新增表或依赖。
 
 ### Open-source preflight（W4）
 

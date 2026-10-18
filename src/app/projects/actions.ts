@@ -505,6 +505,7 @@ function rippleErrorMessage(error: unknown): string {
     "Mock AI 找不到匹配",
     "Mock AI 的 Anchor 选择不匹配",
     "换一批上限",
+    "模型调用上限",
     "还没有首批",
   ];
   return safeFragments.some((fragment) => error.message.includes(fragment))

@@ -78,6 +78,9 @@ describe("structured generation", () => {
     expect(columns).toContainEqual(
       expect.objectContaining({ name: "worldline_id", notnull: 0 }),
     );
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "model_calls", notnull: 0 }),
+    );
   });
 
   it("validates a successful first response and records a succeeded run", async () => {
@@ -186,6 +189,7 @@ describe("structured generation", () => {
     });
     expect(provider.requests[1]?.repair?.validationIssues).not.toHaveLength(0);
     expect(run?.status).toBe("succeeded");
+    expect(run?.modelCalls).toBe(2);
     expect(JSON.parse(run?.rawOutput ?? "").attempts).toHaveLength(2);
   });
 
@@ -448,6 +452,7 @@ describe("structured generation", () => {
 
     expect(provider.requests).toHaveLength(2);
     expect(attempts).toEqual([1, 2]);
+    expect(listProjectGenerationRuns(project.id)[0]?.modelCalls).toBe(2);
   });
 
   it("fails after two transient network errors without a third call", async () => {

@@ -78,6 +78,13 @@
       "when": 1786486400000,
       "tag": "0010_generation_run_story_map_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786490000000,
+      "tag": "0011_generation_run_model_calls",
+      "breakpoints": true
     }
   ]
 }
