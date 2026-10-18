@@ -19,7 +19,7 @@ const reference = {
 const CHARACTERS = [
   { id: "character_lin", name: "林青", aliases: ["青儿"] },
   { id: "character_han", name: "韩松", aliases: [] },
-  { id: "character_alan", name: "艾伦", aliases: [] },
+  { id: "character_alan", name: "艾伦", aliases: ["AF"] },
   { id: "character_han_single", name: "韩", aliases: [] },
   { id: "character_shenmo", name: "沈墨", aliases: [] },
 ] as const;
@@ -685,6 +685,186 @@ const negativeProbes: NegativeProbe[] = [
     baseline: () =>
       single("占卜结果：艾伦遇害", { participants: ["character_alan"] }),
   },
+  // J. 第八轮评审：未来时间、计划/扮演/推演、幻觉名词与不可见字符。
+  // J-1. 死亡动词后的未来时间短语（于/在 尾槽已整体移除）。
+  {
+    label: "future time tail next year",
+    baseline: () => single("林青身亡于明年"),
+  },
+  {
+    label: "future time tail three years later",
+    baseline: () => single("韩松死于三年后", { participants: ["character_han"] }),
+  },
+  {
+    label: "future time tail tomorrow",
+    baseline: () =>
+      single("沈墨病故于明日", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "future time tail a later day",
+    baseline: () =>
+      single("艾伦战死于日后", { participants: ["character_alan"] }),
+  },
+  // J-2. 死在某人的计划/谎言/剧本/戏台/说书/推演里，不是真实死亡。
+  {
+    label: "death inside an enemy plan",
+    baseline: () => single("林青死在敌人的计划之中"),
+  },
+  {
+    label: "death inside a lie",
+    baseline: () => single("韩松死在谎言之里", { participants: ["character_han"] }),
+  },
+  {
+    label: "death inside a script",
+    baseline: () =>
+      single("沈墨死在剧本之中", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "death on a stage",
+    baseline: () => single("艾伦死在戏里", { participants: ["character_alan"] }),
+  },
+  {
+    label: "death inside storytelling",
+    baseline: () => single("林青死在说书之中"),
+  },
+  {
+    label: "death inside a simulation",
+    baseline: () =>
+      single("韩松死在推演之中", { participants: ["character_han"] }),
+  },
+  // J-3. 幻觉/幻境名词即使不在标记表里，也不能靠尾槽蒙混过关。
+  {
+    label: "illusion dream tail",
+    baseline: () => single("林青死在幻梦里"),
+  },
+  {
+    label: "mirror-flower illusion tail",
+    baseline: () =>
+      single("韩松亡故于镜花水月之间", { participants: ["character_han"] }),
+  },
+  {
+    label: "mirage tail",
+    baseline: () =>
+      single("沈墨身亡于蜃楼之中", { participants: ["character_shenmo"] }),
+  },
+  // J-4. 零宽、bidi、BOM 等格式符出现在姓名内、姓名与动词之间、标记内部
+  // 或行尾时：一律 unknown，绝不 strip 后再匹配。
+  {
+    label: "zero width space inside name",
+    baseline: () => single("林\u200B青被杀"),
+  },
+  {
+    label: "zero width non-joiner inside name",
+    baseline: () =>
+      single("韩\u200C松阵亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "zero width joiner inside name",
+    baseline: () =>
+      single("艾\u200D伦遇害", { participants: ["character_alan"] }),
+  },
+  {
+    label: "zero width space before death verb",
+    baseline: () => single("林青\u200B被杀"),
+  },
+  {
+    label: "left-to-right mark before death verb",
+    baseline: () =>
+      single("韩松\u200E阵亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "bidi override before death verb",
+    baseline: () =>
+      single("沈墨\u202E病故", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "zero width space inside dream marker in tail",
+    baseline: () => single("林青身亡于梦\u200B中"),
+  },
+  {
+    label: "zero width joiner inside illusion marker in tail",
+    baseline: () =>
+      single("韩松病故于幻\u200D觉", { participants: ["character_han"] }),
+  },
+  {
+    label: "zero width space at end",
+    baseline: () => single("林青被杀\u200B"),
+  },
+  {
+    label: "word joiner at end",
+    baseline: () => single("韩松阵亡\u2060", { participants: ["character_han"] }),
+  },
+  {
+    label: "BOM at end",
+    baseline: () => single("沈墨病逝\uFEFF", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "bidi override at end",
+    baseline: () =>
+      single("艾伦遇害\u202E", { participants: ["character_alan"] }),
+  },
+  {
+    label: "bell control char inside name",
+    baseline: () => single("林\u0007青被杀"),
+  },
+  // J-5. 未来/计划标记出现在单分句里；去掉标记后原本是合法死亡句型。
+  {
+    label: "will be executed",
+    baseline: () => single("林青将被处死"),
+  },
+  {
+    label: "about to die",
+    baseline: () => single("韩松即将身亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "tomorrow beheaded",
+    baseline: () =>
+      single("沈墨明日被斩", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "attempts suicide",
+    baseline: () =>
+      single("艾伦企图自尽", { participants: ["character_alan"] }),
+  },
+  {
+    label: "plans suicide",
+    baseline: () => single("林青打算自尽"),
+  },
+  {
+    label: "wants to die",
+    baseline: () => single("沈墨想自尽", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "will soon die",
+    baseline: () => single("林青将要自尽"),
+  },
+  {
+    label: "expected to die",
+    baseline: () => single("韩松预计身亡", { participants: ["character_han"] }),
+  },
+  {
+    label: "prepares suicide",
+    baseline: () =>
+      single("艾伦准备自尽", { participants: ["character_alan"] }),
+  },
+  {
+    label: "desires death",
+    baseline: () => single("林青欲自尽"),
+  },
+  // J-6. NFKC 兼容形式：归一化后仍必须命中同一套保守规则。
+  {
+    label: "full-width digit in future time tail",
+    baseline: () => single("韩松死于３年后", { participants: ["character_han"] }),
+  },
+  {
+    label: "double full-width exclamation",
+    baseline: () =>
+      single("沈墨身亡！！", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "full-width comma before death clause",
+    baseline: () => single("城破，林青被杀"),
+  },
 ];
 
 /**
@@ -755,6 +935,36 @@ const knownMisses: NegativeProbe[] = [
     baseline: () =>
       single("艾伦遇害.", { participants: ["character_alan"] }),
   },
+  // 第八轮评审：整行死亡句型不再接受「于/在」尾槽，`死于/死在` 也从动词表
+  // 移除；以下是语义明确、但按新白名单必须保持 unknown 的已知漏报。
+  {
+    label: "died in the army (yu tail removed)",
+    baseline: () => single("林青死于乱军之中"),
+  },
+  {
+    label: "executed in the market (yu tail removed)",
+    baseline: () => single("林青被斩于市"),
+  },
+  {
+    label: "died of illness outside the city (yu tail removed)",
+    baseline: () =>
+      single("沈墨病故于城外", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "died in prison (yu tail removed)",
+    baseline: () =>
+      single("沈墨身亡于狱中", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "died of poison (si yu removed)",
+    baseline: () =>
+      single("沈墨死于毒酒", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "died of illness in the capital (yu tail removed)",
+    baseline: () =>
+      single("艾伦因病逝世于京城", { participants: ["character_alan"] }),
+  },
 ];
 
 const positiveProbes: PositiveProbe[] = [
@@ -767,11 +977,6 @@ const positiveProbes: PositiveProbe[] = [
     label: "already died of illness",
     characterId: "character_lin",
     baseline: () => single("林青已病故"),
-  },
-  {
-    label: "died in the army",
-    characterId: "character_lin",
-    baseline: () => single("林青死于乱军之中"),
   },
   {
     label: "battle death",
@@ -825,11 +1030,6 @@ const positiveProbes: PositiveProbe[] = [
     baseline: () => single("林青已经身亡"),
   },
   {
-    label: "executed in the market",
-    characterId: "character_lin",
-    baseline: () => single("林青被斩于市"),
-  },
-  {
     label: "illness death",
     characterId: "character_lin",
     baseline: () => single("林青病逝"),
@@ -846,18 +1046,6 @@ const positiveProbes: PositiveProbe[] = [
       single("沈墨被杀了", { participants: ["character_shenmo"] }),
   },
   {
-    label: "died of illness outside the city",
-    characterId: "character_shenmo",
-    baseline: () =>
-      single("沈墨病故于城外", { participants: ["character_shenmo"] }),
-  },
-  {
-    label: "died in prison",
-    characterId: "character_shenmo",
-    baseline: () =>
-      single("沈墨身亡于狱中", { participants: ["character_shenmo"] }),
-  },
-  {
     label: "killed by someone",
     characterId: "character_shenmo",
     baseline: () =>
@@ -868,12 +1056,6 @@ const positiveProbes: PositiveProbe[] = [
     characterId: "character_shenmo",
     baseline: () =>
       single("沈墨被害死", { participants: ["character_shenmo"] }),
-  },
-  {
-    label: "died of poison",
-    characterId: "character_shenmo",
-    baseline: () =>
-      single("沈墨死于毒酒", { participants: ["character_shenmo"] }),
   },
   {
     label: "died of injuries",
@@ -903,12 +1085,6 @@ const positiveProbes: PositiveProbe[] = [
       single("沈墨已因病病逝", { participants: ["character_shenmo"] }),
   },
   {
-    label: "died of illness in the capital",
-    characterId: "character_alan",
-    baseline: () =>
-      single("艾伦因病逝世于京城", { participants: ["character_alan"] }),
-  },
-  {
     label: "alias died of illness",
     characterId: "character_lin",
     baseline: () => single("青儿因病亡故"),
@@ -918,6 +1094,24 @@ const positiveProbes: PositiveProbe[] = [
     characterId: "character_shenmo",
     baseline: () =>
       single("随后沈墨因重伤阵亡", { participants: ["character_shenmo"] }),
+  },
+  // NFKC：全角感叹号归一为 ASCII `!`，全角字母与 ASCII 别名一致。
+  {
+    label: "full-width exclamation terminal",
+    characterId: "character_lin",
+    baseline: () => single("林青被杀！"),
+  },
+  {
+    label: "full-width letters in ascii alias",
+    characterId: "character_alan",
+    baseline: () =>
+      single("ＡＦ被杀", { participants: ["character_alan"] }),
+  },
+  {
+    label: "trailing tab",
+    characterId: "character_shenmo",
+    baseline: () =>
+      single("沈墨被杀\t", { participants: ["character_shenmo"] }),
   },
   // 边界：行尾空白/换行在匹配前被裁掉，仍是合法单行句型。
   {

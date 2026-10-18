@@ -86,8 +86,6 @@ export const DEATH_VERBS = [
   "溺亡",
   "溺死",
   "死去",
-  "死于",
-  "死在",
 ] as const;
 
 /** 姓名与动词之间允许的固定连接词；最多两个，匹配时优先最长词。 */
@@ -241,6 +239,45 @@ export const DEATH_HYPOTHETICAL_MARKERS = [
   "诅咒",
 ] as const;
 
+/**
+ * 未来/计划/扮演/推演等「死亡尚未发生」的标记。
+ * 这里是子串匹配，命中只会让推断更保守：姓名里带这些字的角色会永远
+ * 保持 unknown（优先漏报，也不把活人标死）。
+ */
+export const DEATH_FUTURE_PLAN_MARKERS = [
+  "将",
+  "将要",
+  "即将",
+  "要",
+  "想",
+  "打算",
+  "计划",
+  "准备",
+  "预定",
+  "预计",
+  "明日",
+  "明天",
+  "来年",
+  "明年",
+  "日后",
+  "他日",
+  "年后",
+  "之后",
+  "欲",
+  "企图",
+  "密谋",
+  "图谋",
+  "剧本",
+  "戏",
+  "扮演",
+  "演",
+  "推演",
+  "模拟",
+  "说书",
+  "谎",
+  "骗",
+] as const;
+
 /** 夸张/比喻用法；命中即 unknown。 */
 export const DEATH_FIGURATIVE_MARKERS = [
   "笑死",
@@ -292,7 +329,8 @@ export const DEATH_REVIVAL_MARKERS = [
  * - 单一参与者事件中，stateChange 必须整行命中显式句型白名单
  *   （`matchesExplicitDeathShape`）：整行恰好是一个「姓名 + 有限连接词
  *   + 短死亡动词」的分句；整行没有点名参与者或还带有任何前/后分句时
- *   unknown，整行含否定/不确定/比喻措辞时 unknown；
+ *   unknown，整行含否定/不确定/比喻/未来计划措辞，或出现不可见格式/
+ *   控制符时 unknown；
  * - 若同一句还整词提到**其他**角色，死亡可能属于别人，跳过；
  * - 推断出 dead 后，若死亡事件之后、分歧点之前的事件再次把该人物列为
  *   参与者或整词点名，并出现复活/生还标记，则撤销推断（回到 unknown）。
@@ -418,31 +456,53 @@ export function deriveSourceBaselineStatuses(input: {
  * 去掉首尾空白后，整个 stateChange 必须**恰好**是一个分句：
  * [可选一个 `DEATH_LEADING_ADVERBS` 时间副词] + 人物姓名/别名（≥2 个码点）
  * + [至多两个 `DEATH_CONNECTORS`] + [可选一个 `DEATH_CAUSE_PHRASES`]
- * + `DEATH_VERBS` 中的动词（或裸「死 / 死了」）
- * + [「了」或一个由「于 / 在」引出的纯短语] + [可选的单个「。」/「！」/「!」]
- * + 行尾。
+ * + `DEATH_VERBS` 中的动词（或裸「死 / 死」+ 可选「了」）
+ * + [可选一个「了」] + [可选的单个「。」/「！」/「!」] + 行尾。
+ *
+ * 匹配前先做两道规范化：
+ * - 整行任意位置出现 Unicode 格式符（`\p{Cf}`：零宽、bidi、BOM、软连字符等）
+ *   或除 `\t` / `\n` / `\r` 外的控制符（`\p{Cc}`）时直接 unknown，绝不去除
+ *   后再匹配；
+ * - 随后对整行（以及姓名/别名）做 NFKC 归一化，再做标记与句型匹配。全角
+ *   「！」归一为 ASCII `!`，全角字母等兼容字符与 ASCII 姓名一致。
  *
  * 除末尾这一个终止符外，整行任何位置出现标点、引号、括号、省略号或
  * 空白都判 unknown；因此任何前置/后置分句或句子（「城破，林青战死」
  * 「林青身亡，众人悲痛」「众人不信。林青阵亡」）都不会命中。姓名左边界
  * 是行首（或那个时间副词之后），右边界是连接词/动词，因此「张三丰」
  * 不会命中「张三」，地点名「韩松岭」也不会命中「韩松」。
- * 整行任意位置出现问号、否定/不确定措辞、假设/梦境/预感标记或笑死/
- * 气死等比喻时也一律不匹配。
+ * 整行任意位置出现问号、否定/不确定措辞、假设/梦境/预感标记、未来/计划
+ * 标记或笑死/气死等比喻时也一律不匹配。
  */
 export function matchesExplicitDeathShape(
   stateChange: string,
   names: readonly string[],
 ): boolean {
-  if (hasAnyMarker(stateChange, DEATH_QUESTION_MARKERS)) return false;
-  if (hasAnyMarker(stateChange, DEATH_HYPOTHETICAL_MARKERS)) return false;
-  if (hasAnyMarker(stateChange, DEATH_NEGATION_MARKERS)) return false;
-  if (hasAnyMarker(stateChange, DEATH_FIGURATIVE_MARKERS)) return false;
-  const usableNames = names.filter((name) => Array.from(name).length >= 2);
+  // 不可见字符必须最先拒绝：不能先 strip 再匹配，否则零宽字符会切断标记。
+  if (hasForbiddenControlChar(stateChange)) return false;
+  const normalized = stateChange.normalize("NFKC");
+  if (hasAnyMarker(normalized, DEATH_QUESTION_MARKERS)) return false;
+  if (hasAnyMarker(normalized, DEATH_HYPOTHETICAL_MARKERS)) return false;
+  if (hasAnyMarker(normalized, DEATH_NEGATION_MARKERS)) return false;
+  if (hasAnyMarker(normalized, DEATH_FUTURE_PLAN_MARKERS)) return false;
+  if (hasAnyMarker(normalized, DEATH_FIGURATIVE_MARKERS)) return false;
+  const usableNames = names
+    .map((name) => name.normalize("NFKC"))
+    .filter((name) => Array.from(name).length >= 2);
   if (usableNames.length === 0) return false;
-  const line = toSingleDeathLine(stateChange);
+  const line = toSingleDeathLine(normalized);
   if (line === null) return false;
   return usableNames.some((name) => matchesDeathLine(line, name));
+}
+
+/**
+ * `\p{Cf}` 全部拒收；`\p{Cc}` 只放过制表、换行与回车。
+ * 只用于拒绝，命中不会放宽任何规则。
+ */
+const FORBIDDEN_CONTROL_CHAR = /(?:(?![\t\n\r])\p{Cc}|\p{Cf})/u;
+
+function hasForbiddenControlChar(value: string): boolean {
+  return FORBIDDEN_CONTROL_CHAR.test(value);
 }
 
 /** 末尾允许的唯一终止符；出现两个或出现在其它位置都算标点。 */
@@ -503,33 +563,18 @@ function matchesDeathLine(line: string, name: string): boolean {
 }
 
 /**
- * 动词之后的精确后缀规则：分句必须结束、只剩一个「了」，或由「于/在」
- * 引出地点/原因短语；`死于/死在` 自带介词，后面必须有地点/原因短语。
- * 这样 `被杀` 不会命中「被杀手追杀」，`病故` 不会命中「病故的消息」，
+ * 动词之后的精确后缀规则：分句必须结束，或只剩一个「了」。
+ * 不再接受「于/在」引出的地点/原因/时间短语，因此 `被杀` 不会命中
+ * 「被杀手追杀」，`病故` 不会命中「病故的消息」或「病故于城外」，
  * `牺牲` 不会命中「牺牲了休息时间」。
  */
 function matchesDeathTail(tail: string): boolean {
   for (const verb of DEATH_VERBS) {
     if (!tail.startsWith(verb)) continue;
     const rest = tail.slice(verb.length);
-    if (verb === "死于" || verb === "死在") {
-      return isBareVerbPhrase(rest);
-    }
     if (rest.length === 0 || rest === "了") return true;
-    if (rest.startsWith("于") || rest.startsWith("在")) {
-      return isBareVerbPhrase(rest.slice(1));
-    }
   }
   return false;
-}
-
-/**
- * 动词后的地点/原因短语必须是纯短语：不能含标点、符号或空白，否则
- * 「病故于城外：众人悲痛」「身亡——众人不信」等后续文本会被误当成
- * 同一个短语。这里只让推断更保守。
- */
-function isBareVerbPhrase(value: string): boolean {
-  return value.length > 0 && !/[\p{P}\p{S}\s]/u.test(value);
 }
 
 function longestMatchingPrefix(
