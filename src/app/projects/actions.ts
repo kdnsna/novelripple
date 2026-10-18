@@ -8,8 +8,6 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import {
-  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
-  SettingDeltaSubjectSchema,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
   StoryMapGenerationStartModeSchema,
@@ -23,6 +21,12 @@ import {
   type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
+import {
+  AddSettingDeltaInputSchema,
+  SETTING_DELTA_LIFECYCLE_INPUT_GENERIC_ERROR,
+  SettingDeltaLifecycleInputSchema,
+  settingDeltaInputErrorMessage,
+} from "@/app/projects/setting-delta-action-input";
 import { isSettingDeltaError } from "@/domain/continuation/setting-delta-error";
 import {
   generateConfiguredContinuationDirections,
@@ -429,28 +433,12 @@ export async function generateContinuationSceneAction(
   }
 }
 
-const AddSettingDeltaInputSchema = z
-  .object({
-    projectId: ProjectIdSchema,
-    worldlineId: z.string().min(1),
-    anchorSceneId: z.string().min(1).nullable(),
-    subject: SettingDeltaSubjectSchema,
-    // 长度/不可见字符/NFC 由仓储层在规范化后统一校验，避免 Action 的原始
-    // 长度上限抢先拒绝本应被规范化接受的文本。
-    statement: z.string(),
-    idempotencyKey: z.string().trim().min(1).max(200),
-  })
-  .strict();
-
 export async function addSettingDeltaAction(
   input: unknown,
 ): Promise<SettingDeltaActionResult> {
   const parsed = AddSettingDeltaInputSchema.safeParse(input);
   if (!parsed.success) {
-    return {
-      ok: false,
-      error: "设定增量参数无效：请检查主体、说明与锚点。",
-    };
+    return { ok: false, error: settingDeltaInputErrorMessage(parsed.error) };
   }
 
   try {
@@ -462,15 +450,6 @@ export async function addSettingDeltaAction(
   }
 }
 
-const SettingDeltaLifecycleInputSchema = z
-  .object({
-    projectId: ProjectIdSchema,
-    worldlineId: z.string().min(1),
-    targetDeltaId: z.string().min(1),
-    idempotencyKey: z.string().trim().min(1).max(200),
-  })
-  .strict();
-
 async function changeSettingDeltaLifecycleAction(
   status: SettingDeltaLifecycleStatus,
   input: unknown,
@@ -479,7 +458,10 @@ async function changeSettingDeltaLifecycleAction(
   if (!parsed.success) {
     return {
       ok: false,
-      error: "设定增量操作参数无效：请刷新后重试。",
+      error: settingDeltaInputErrorMessage(
+        parsed.error,
+        SETTING_DELTA_LIFECYCLE_INPUT_GENERIC_ERROR,
+      ),
     };
   }
 
@@ -516,14 +498,7 @@ export async function deleteSettingDeltaAction(
 function settingDeltaErrorMessage(error: unknown): string {
   // Zod 只可能来自主体/说明的 Schema 解析；错误文案本身就是面向读者的规则说明。
   if (error instanceof z.ZodError) {
-    if (
-      error.issues.some(
-        (issue) => issue.message === SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
-      )
-    ) {
-      return SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE;
-    }
-    return "设定增量参数无效：请检查主体、说明与锚点。";
+    return settingDeltaInputErrorMessage(error);
   }
   // 仓储/领域检查统一抛 SettingDeltaError：message 已包含路径等规则相关
   // 上下文，直接透传，不再维护一份易漂移的字符串白名单。

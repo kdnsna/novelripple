@@ -45,13 +45,16 @@ describe("readContinuationCanonGuardPolicy", () => {
 });
 
 describe("continuationErrorMessage", () => {
-  it("maps the typed budget error to plain Chinese with needed/max chars and next steps", () => {
+  it("maps the typed budget error to plain Chinese without raw character counts", () => {
     const message = continuationErrorMessage(budgetError(), "directions");
 
-    expect(message).toContain("超过了当前上限");
-    expect(message).toContain("24432");
-    expect(message).toContain("24000");
+    expect(message).toContain("续写所需的基础上下文过多");
+    expect(message).toContain("超出了单次生成能容纳的范围");
+    expect(message).not.toContain("24432");
+    expect(message).not.toContain("24000");
+    expect(message).not.toContain("需要约");
     expect(message).toContain("无法生成方向");
+    expect(message).toContain("请减少设定或换一个分歧点后重试");
     expect(message).toContain("换一个分歧瞬间");
     expect(message).toContain("让故事自由发展");
     expect(message).toContain("减少保留的结局 Anchor");
@@ -60,6 +63,7 @@ describe("continuationErrorMessage", () => {
     expect(message).toContain("CONTINUATION_CONTEXT_MAX_CHARS");
     // 不再把内部术语直接透给界面。
     expect(message).not.toContain("必需上下文段超过预算");
+    expect(message).not.toContain("maxChars");
   });
 
   it("also recognizes the stable code across a bundle boundary", () => {
@@ -74,8 +78,8 @@ describe("continuationErrorMessage", () => {
       "scene",
     );
 
-    expect(message).toContain("30000");
-    expect(message).toContain("20000");
+    expect(message).not.toContain("30000");
+    expect(message).not.toContain("20000");
     expect(message).toContain("无法生成场景");
   });
 
@@ -84,20 +88,54 @@ describe("continuationErrorMessage", () => {
       new Error("必需上下文段超过预算：需要 24432 字符，maxChars=24000"),
       "directions",
     );
-    expect(message).toContain("超过了当前上限");
-    expect(message).toContain("24432");
+    expect(message).toContain("超出了单次生成能容纳的范围");
+    expect(message).not.toContain("24432");
     expect(message).not.toContain("必需上下文段超过预算");
   });
 
-  it("maps a hard canon rejection to the specific Chinese message without prose", () => {
+  it("maps a hard canon rejection to the specific Chinese message with one short sentence", () => {
     const message = continuationErrorMessage(
-      new CanonGuardRejectionError(["铜门被打开"]),
+      new CanonGuardRejectionError([
+        {
+          title: "铜门被打开",
+          sentence: "铜门被打开从未发生过",
+          unpairedQuote: false,
+        },
+      ]),
       "scene",
     );
     expect(message).toBe(
-      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」，已拒绝且未保存；请重试或换一批。",
+      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」：「铜门被打开从未发生过」。已拒绝且未保存；请重试或换一批。",
     );
     expect(message).not.toContain("Structured generation failed");
+  });
+
+  it("appends the unpaired-quote fix hint only when the record says so", () => {
+    const withBrokenQuote = continuationErrorMessage(
+      new CanonGuardRejectionError([
+        {
+          title: "铜门被打开",
+          sentence: "夜色渐深，“铜门被打开从未发生过",
+          unpairedQuote: true,
+        },
+      ]),
+      "scene",
+    );
+    expect(withBrokenQuote).toContain(
+      "这句所在段落的引号没有闭合，系统按旁白处理；补全引号后重试即可。",
+    );
+    expect(withBrokenQuote).toContain(
+      "「铜门被打开」：「夜色渐深，“铜门被打开从未发生过」。",
+    );
+
+    const withoutSentence = continuationErrorMessage(
+      new CanonGuardRejectionError([{ title: "铜门被打开" }]),
+      "scene",
+    );
+    expect(withoutSentence).toBe(
+      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」，已拒绝且未保存；请重试或换一批。",
+    );
+    expect(withoutSentence).not.toContain("引号没有闭合");
   });
 
   it("only claims a canon rejection when the final failing issues are canon issues", async () => {
@@ -111,7 +149,13 @@ describe("continuationErrorMessage", () => {
             { path: "", message: "Response is not valid JSON" },
           ]);
         },
-        () => ["铜门被打开"],
+        () => [
+          {
+            title: "铜门被打开",
+            sentence: "铜门被打开从未发生过",
+            unpairedQuote: false,
+          },
+        ],
       );
     } catch (error) {
       nonCanonFailure = error;
@@ -134,7 +178,13 @@ describe("continuationErrorMessage", () => {
           },
         ]);
       },
-      () => ["铜门被打开"],
+      () => [
+        {
+          title: "铜门被打开",
+          sentence: "铜门被打开从未发生过",
+          unpairedQuote: false,
+        },
+      ],
     );
     await expect(canonFailure).rejects.toBeInstanceOf(CanonGuardRejectionError);
   });

@@ -25,6 +25,8 @@ export const ContextManifestSectionSchema = z
     droppedItemIds: z.array(z.string()),
     /** canon_evidence 中永不裁剪的 pinned 证据 id；只含 id。 */
     pinnedItemIds: z.array(z.string()).optional(),
+    /** 因 pinned 上限被降级为普通可裁剪证据的 id；仍留在 canon_evidence。 */
+    demotedItemIds: z.array(z.string()).optional(),
     /** 用自身摘要替换正文的条目 id（当前只会是最新场景）。 */
     summarizedItemIds: z.array(z.string()).optional(),
     /** 因没有可用摘要而被句末截断的条目 id（v1 场景）。 */

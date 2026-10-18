@@ -6,9 +6,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
-import type {
-  ContinuationSceneModelOutputV3,
-  ImpactPlan,
+import {
+  findForbiddenSettingDeltaChar,
+  settingDeltaForbiddenCharMessage,
+  type ContinuationSceneModelOutputV3,
+  type ImpactPlan,
 } from "@/domain/schemas";
 import {
   buildSettingDeltaContextItems,
@@ -32,6 +34,7 @@ import {
 } from "@/app/projects/actions";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
+import { artifacts } from "@/server/db/schema";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import {
@@ -42,6 +45,7 @@ import {
   getContinuationArtifact,
   listSettingDeltaLifecyclesForWorldline,
   listSettingDeltasForWorldline,
+  stableSettingDeltaArtifactId,
 } from "@/server/repositories/continuation-repository";
 import {
   createGenerationRun,
@@ -297,6 +301,36 @@ describe("setting delta repository and action", () => {
     expect(second.settingDelta).toEqual(first.settingDelta);
     expect(listSettingDeltasForWorldline(worldline.id)).toHaveLength(1);
 
+    // 同一幂等键重放完全相同的 payload 仍返回原行；换说明或主体则是冲突，
+    // 不能把旧行当成新内容返回。
+    expect(
+      createSettingDeltaArtifact({ ...input, statement: `  ${input.statement}  ` })
+        .id,
+    ).toBe(first.id);
+    expect(
+      createSettingDeltaArtifact({
+        ...input,
+        subject: { kind: "term", name: "  旧灯塔  " },
+      }).id,
+    ).toBe(first.id);
+    for (const changed of [
+      { ...input, statement: "旧灯塔已被封锁,只能从海侧靠近。" },
+      { ...input, subject: { kind: "term" as const, name: "新灯塔" } },
+    ]) {
+      let caught: unknown;
+      try {
+        createSettingDeltaArtifact(changed);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SettingDeltaError);
+      expect((caught as SettingDeltaError).code).toBe("idempotency_conflict");
+      expect((caught as SettingDeltaError).message).toBe(
+        "设定增量幂等键已被其他内容占用",
+      );
+    }
+    expect(listSettingDeltasForWorldline(worldline.id)).toHaveLength(1);
+
     const rewritten = createSettingDeltaArtifact({
       ...input,
       idempotencyKey: "setting-delta-root-2",
@@ -375,8 +409,22 @@ describe("setting delta repository and action", () => {
       "\uFE0F",
       "\u{E0100}",
       "\uE000",
+      "\u3164",
+      "\u115F",
+      "\u1160",
+      "\uFFA0",
+      "\u2800",
+      "\u034F",
+      "\u180E",
+      "\u17B4",
+      "\u17B5",
+      "\u{1D159}",
+      "\u{1D173}",
+      "\u{1D17A}",
     ];
     for (const [index, value] of forbidden.entries()) {
+      const codePoint = findForbiddenSettingDeltaChar(value);
+      expect(codePoint).not.toBeNull();
       let caught: unknown;
       try {
         createSettingDeltaArtifact({
@@ -391,17 +439,28 @@ describe("setting delta repository and action", () => {
       expect(caught).toBeInstanceOf(SettingDeltaError);
       expect((caught as SettingDeltaError).code).toBe("forbidden_char");
       expect((caught as SettingDeltaError).message).toBe(
-        "设定说明/词条名不能包含控制字符、不可见字符或换行",
+        settingDeltaForbiddenCharMessage(codePoint!, "设定说明"),
       );
 
-      expect(() =>
+      let caughtTerm: unknown;
+      try {
         createSettingDeltaArtifact({
           ...base,
           idempotencyKey: `forbidden-term-${index}`,
           subject: { kind: "term", name: `旧灯${value}塔` },
           statement: "旧灯塔已被封锁。",
-        }),
-      ).toThrow("不能包含控制字符");
+        });
+      } catch (error) {
+        caughtTerm = error;
+      }
+      expect(caughtTerm).toBeInstanceOf(SettingDeltaError);
+      expect((caughtTerm as SettingDeltaError).code).toBe("forbidden_char");
+      // 仓储路径同样必须同时指出字段（词条名）与具体码位。
+      expect((caughtTerm as SettingDeltaError).message).toBe(
+        settingDeltaForbiddenCharMessage(codePoint!, "词条名"),
+      );
+      expect((caughtTerm as SettingDeltaError).message).toContain("词条名");
+      expect((caughtTerm as SettingDeltaError).message).toMatch(/U\+[0-9A-F]{4,5}/u);
     }
     expect(listSettingDeltasForWorldline(accepted.worldline.id)).toHaveLength(0);
 
@@ -415,8 +474,175 @@ describe("setting delta repository and action", () => {
     });
     expect(action).toEqual({
       ok: false,
-      error: "设定说明/词条名不能包含控制字符、不可见字符或换行",
+      error: "设定说明包含不允许的字符 U+200B（零宽空格）",
     });
+  });
+
+  it("keeps legacy rows with now-forbidden characters readable, deactivatable and deletable", async () => {
+    const accepted = await createChildWorldline(context);
+    const { worldline } = accepted;
+    const createdAt = new Date().toISOString();
+    const id = stableSettingDeltaArtifactId(
+      worldline.id,
+      null,
+      "legacy-forbidden-char",
+    );
+    // 直接插入历史行，绕过 create 的字符校验：模拟规则收紧前已经存在的规则。
+    getDatabase()
+      .insert(artifacts)
+      .values({
+        id,
+        projectId: context.project.id,
+        sourceId: context.source.id,
+        worldlineId: worldline.id,
+        kind: "continuation",
+        schemaVersion: 1,
+        version: null,
+        dataJson: JSON.stringify({
+          artifactType: "setting_delta",
+          settingDelta: {
+            id,
+            worldlineId: worldline.id,
+            anchorSceneId: null,
+            subject: { kind: "term", name: "旧灯\u200B塔" },
+            statement: "旧灯\u200B塔已被封锁。",
+            contentKind: "user",
+            createdAt,
+          },
+        }),
+        basedOnArtifactId: null,
+        generationRunId: null,
+        createdAt,
+      })
+      .run();
+
+    // 读取与派生必须容忍历史行中的 U+200B。
+    const listed = listSettingDeltasForWorldline(worldline.id);
+    expect(listed).toEqual([
+      expect.objectContaining({
+        id,
+        subject: { kind: "term", name: "旧灯\u200B塔" },
+        statement: "旧灯\u200B塔已被封锁。",
+      }),
+    ]);
+    const emptyTree = buildSceneTree([]);
+    expect(
+      deriveActiveSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        path: [],
+      }).map((item) => item.active.id),
+    ).toEqual([id]);
+
+    const deactivated = createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: worldline.id,
+      targetDeltaId: id,
+      status: "deactivated",
+      idempotencyKey: "legacy-forbidden-deactivate",
+    });
+    expect(deactivated.lifecycle.status).toBe("deactivated");
+    expect(
+      deriveActiveSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        lifecycles: [deactivated.lifecycle],
+        path: [],
+      }),
+    ).toEqual([]);
+
+    const reactivated = createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: worldline.id,
+      targetDeltaId: id,
+      status: "reactivated",
+      idempotencyKey: "legacy-forbidden-reactivate",
+    });
+    expect(reactivated.lifecycle.status).toBe("reactivated");
+    const reactivatedActive = deriveActiveSettingDeltas({
+      tree: emptyTree,
+      deltas: listed,
+      lifecycles: [deactivated.lifecycle, reactivated.lifecycle],
+      path: [],
+    });
+    expect(reactivatedActive.map((item) => item.active.id)).toEqual([id]);
+    // 重新启用的历史行可以进入上下文，但渲染时必须先移除 U+200B。
+    const rendered = renderSettingDeltaContextText(
+      buildSettingDeltaContextItems({
+        active: reactivatedActive,
+        characters: [],
+      }),
+    );
+    expect(rendered).not.toContain("\u200B");
+    expect(rendered).toContain("旧灯塔（自分歧点起）：旧灯塔已被封锁。");
+
+    const deleted = createSettingDeltaLifecycleArtifact({
+      projectId: context.project.id,
+      worldlineId: worldline.id,
+      targetDeltaId: id,
+      status: "deleted",
+      idempotencyKey: "legacy-forbidden-delete",
+    });
+    expect(deleted.lifecycle.status).toBe("deleted");
+    expect(
+      derivePathSettingDeltas({
+        tree: emptyTree,
+        deltas: listed,
+        lifecycles: [
+          deactivated.lifecycle,
+          reactivated.lifecycle,
+          deleted.lifecycle,
+        ],
+        path: [],
+      }),
+    ).toEqual([]);
+  });
+
+  it("accepts legitimate emoji sequences while rejecting broken ones", async () => {
+    const acceptedWorldline = await createChildWorldline(context);
+    const emoji = ["👨‍👩‍👧", "❤️", "👍🏽", "1️⃣", "🇨🇳", "🏴󠁧󠁢󠁳󠁣󠁴󠁿"];
+    for (const [index, value] of emoji.entries()) {
+      expect(findForbiddenSettingDeltaChar(value)).toBeNull();
+      const artifact = createSettingDeltaArtifact({
+        projectId: context.project.id,
+        worldlineId: acceptedWorldline.worldline.id,
+        anchorSceneId: null,
+        subject: { kind: "term", name: `旧灯塔${value}` },
+        statement: `旧灯塔${value}已被封锁。`,
+        idempotencyKey: `emoji-${index}`,
+      });
+      expect(artifact.settingDelta.subject).toEqual({
+        kind: "term",
+        name: `旧灯塔${value}`,
+      });
+    }
+
+    for (const [index, value] of [
+      "a\u200Db",
+      "\u200D👍",
+      "字\uFE0F",
+      "\u202E",
+      "\u{E0041}",
+      "\u3164",
+      "🏽",
+      "字🏽",
+    ].entries()) {
+      let caught: unknown;
+      try {
+        createSettingDeltaArtifact({
+          projectId: context.project.id,
+          worldlineId: acceptedWorldline.worldline.id,
+          anchorSceneId: null,
+          subject: { kind: "term", name: "旧灯塔" },
+          statement: `旧灯塔${value}已被封锁。`,
+          idempotencyKey: `broken-emoji-${index}`,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SettingDeltaError);
+      expect((caught as SettingDeltaError).code).toBe("forbidden_char");
+    }
   });
 
   it("stores NFC-normalized text and validates length after normalization", async () => {
@@ -813,7 +1039,10 @@ describe("setting delta repository and action", () => {
     expect((caught as SettingDeltaError).code).toBe("path_text_limit");
     expect((caught as SettingDeltaError).message).toContain("第 3 幕");
     expect((caught as SettingDeltaError).message).toContain(
-      "所在路径的设定增量超过",
+      "所在路径的设定增量过长",
+    );
+    expect((caught as SettingDeltaError).message).not.toContain(
+      String(SETTING_DELTA_CONTEXT_MAX_CHARS),
     );
     const action = await addSettingDeltaAction({
       projectId: context.project.id,
@@ -908,8 +1137,8 @@ describe("setting delta repository and action", () => {
       }
     }
     expect(created.length).toBeGreaterThan(0);
-    expect(rejectedMessage).toContain("所在路径的设定增量超过");
-    expect(rejectedMessage).toContain(
+    expect(rejectedMessage).toContain("所在路径的设定增量过长");
+    expect(rejectedMessage).not.toContain(
       String(SETTING_DELTA_CONTEXT_MAX_CHARS),
     );
     expect(

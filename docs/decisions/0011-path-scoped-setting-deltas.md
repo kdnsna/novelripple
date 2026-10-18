@@ -22,7 +22,11 @@
 - `statement`：读者规则，1–200 字；
 - `contentKind: "user"`、`createdAt`。
 
-`statement` 与术语 `name` 在写入时做 NFC + trim，长度按存储的 NFC 文本检查（200 / 40）；存储与 Prompt 渲染使用同一份文本。NFC 保留读者输入的 `，！？：（）；…①` 等字符；NFKC 只用于术语主体匹配（`subjectKey`）。按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`，并单独拒绝变体选择符 U+FE00–FE0F / U+E0100–E01EF；这覆盖零宽 U+200B/U+200D/FEFF/00AD、bidi U+200E/202E/2066、孤立代理、标签字符与私用区。错误为「设定说明/词条名不能包含控制字符、不可见字符或换行」。Zod Schema、服务端与界面共用同一个 `findForbiddenSettingDeltaChar` 与 NFC helper，因此不存在“测量去不可见字符、渲染保留不可见字符”的双口径。
+`statement` 与术语 `name` 在写入时做 NFC + trim，长度按存储的 NFC 文本检查（200 / 40）；存储与 Prompt 渲染使用同一份文本。NFC 保留读者输入的 `，！？：（）；…①` 等字符；NFKC 只用于术语主体匹配（`subjectKey`）。
+
+不可见/畸形字符先放行合法 emoji 序列，再按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`。允许的 emoji 形式为：U+FE0E/U+FE0F 仅紧跟在 emoji 基字后；U+200D 仅连接两个 `Extended_Pictographic`（各自可带变体选择符和/或肤色 U+1F3FB–1F3FF）；肤色修饰符只跟在 `Emoji_Modifier_Base` 后，孤立肤色（如单独的 `🏽` 或 `字🏽`）与跟在非基字后的肤色一律拒绝；`[0-9#*] FE0F? U+20E3` 键帽；成对区域指示符国旗；以及 U+1F3F4 + U+E0020–E007E + U+E007F 的完整细分旗帜标签序列。其余一律拒绝：孤立/首尾/邻近非 emoji 的 ZWJ、非 emoji 基字后的 FE0E/FE0F、其它零宽/bidi/变体选择符、完整细分旗帜序列之外的标签字符，以及视觉空白码位 U+034F、U+115F、U+1160、U+17B4、U+17B5、U+180E、U+2800、U+3164、U+1D159、U+FFA0、U+1D173–U+1D17A、U+E0000–U+E007F（标签字符只在上述完整序列中放行）。普通空格与全角空格仍允许。
+
+错误文案直接指出具体码位，例如「词条名包含不允许的字符 U+200B（零宽空格）」；Schema、服务端、Server Action 与界面共用同一个 `findForbiddenSettingDeltaChar`（返回码位）和同一条文案 helper，不存在“测量去不可见字符、渲染保留不可见字符”的双口径。
 
 它不调用模型，因此没有 Generation Run，也没有 `basedOnArtifactId`。写入只追加，永不 UPDATE；修订规则等于追加一条更新的设定增量。
 
@@ -43,7 +47,7 @@ Artifact id 由 `(worldlineId, anchorSceneId ?? "root", idempotencyKey)` 的 SHA
 artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>") 前 24 位>
 ```
 
-同一世界线、同一锚点、同一幂等键的重复或并发写入返回同一行；不同键总是新行。生命周期事件的 id 由 `(worldlineId, targetDeltaId, idempotencyKey)` 的 SHA-256 派生为 `artifact_setting_delta_lifecycle_<24 位>`，同样幂等；它还必须校验目标存在、属于同一 Worldline 且确实是 `setting_delta`。客户端在每次打开表单或点击停用/删除/重新启用时生成新的 `crypto.randomUUID()`。服务端仍会校验项目、Worldline、confirmed Story Map 基线、锚点场景和人物引用，任一不成立都 fail closed。
+同一世界线、同一锚点、同一幂等键的重复或并发写入只有在 payload 完全一致时才返回同一行：服务端会比较归一化后的主体（人物 kind + characterId，或术语 kind + NFC/trim 后的名称）和 NFC 后的 `statement`；主体或说明不同则抛 `SettingDeltaError("idempotency_conflict", "设定增量幂等键已被其他内容占用")`，绝不把旧行当成新内容返回。不同键总是新行。生命周期事件的 id 由 `(worldlineId, targetDeltaId, idempotencyKey)` 的 SHA-256 派生为 `artifact_setting_delta_lifecycle_<24 位>`，同样幂等；它还必须校验目标存在、属于同一 Worldline 且确实是 `setting_delta`，重复事件按 `targetDeltaId` + `status` 比较，不同状态视为冲突。客户端在每次打开表单或点击停用/删除/重新启用时生成新的 `crypto.randomUUID()`。服务端仍会校验项目、Worldline、confirmed Story Map 基线、锚点场景和人物引用，任一不成立都 fail closed。
 
 ### 3. 可见性只沿当前路径
 
@@ -74,9 +78,9 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 新增与重新启用时，不只检查锚点自己的路径，而是检查锚点子树里的**每一条**根→节点路径：锚点为 `null` 时是空根路径加树中每个节点，锚点为场景 X 时是 X 及其全部后代。对每条路径派生 post-write active 集合（含生命周期），分别检查：
   - active 主体数 ≤ `SETTING_DELTA_MAX_ACTIVE = 20`；
   - 实际渲染进 Prompt 的 `setting_deltas` 文本长度 ≤ `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000`。
-- 渲染函数只有一个：`renderSettingDeltaContextText(items)` 返回 `<setting_deltas>` 标签内部逐条文本（`\n` 连接）的精确字符串。组装器与写时检查都调用它，写时 `.length` 就是 Prompt 实际长度；不再使用 `normalizedContextChars` 之类的第二套测量。NFC 组合字符（例如谚文 jamo）在存储、测量、渲染三处一致。
-- 任一路径或世界线上限超限即 fail closed，中文错误指出具体路径（如「会使「第 3 幕 · 标题」所在路径的生效设定增量超过 20 条」/「…的设定增量超过 2000 字」）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
-- 仓储与领域检查统一抛 `SettingDeltaError`，带稳定 `code`（`forbidden_char`、`path_active_limit`、`path_text_limit`、`worldline_active_rows_limit`、`worldline_total_rows_limit`、`deleted_terminal`、`invalid_anchor` 等）与已面向读者的中文 `message`。Server Action 对该类型直接返回 `error.message`，不再维护易漂移的字符串白名单。
+- 渲染函数只有一个：`renderSettingDeltaContextText(items)` 返回 `<setting_deltas>` 标签内部逐条文本（`\n` 连接）的精确字符串。组装器与写时检查都调用它，写时 `.length` 就是 Prompt 实际长度；不再使用 `normalizedContextChars` 之类的第二套测量。NFC 组合字符（例如谚文 jamo）在存储、测量、渲染三处一致。历史行在规则收紧前写入的不可见/畸形字符（例如 U+200B、孤立 ZWJ）在渲染时由 `sanitizeSettingDeltaText` 按同一份 `findForbiddenSettingDeltaChar` 扫描规则移除，合法 emoji 序列整体保留；读取、展示、停用、重新启用与删除仍容忍原文。因此写时测量与真正进入 Prompt 的文本都基于清洗后的渲染结果，历史行不会把禁用字符原样带进续写。界面在这些行旁显示「包含不可见字符，进入续写前已移除」。
+- 任一路径或世界线上限超限即 fail closed。`path_active_limit` 文案仍指出具体路径与 20 条上限；`path_text_limit` 的读者文案改为「会使「第 3 幕 · 标题」所在路径的设定增量过长：请缩短规则说明，或停用/删除该路径上的其他规则」，不显示 2000 / 当前长度等原始数字（数字只留在内部 `message` / 日志与稳定 `code` 中）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
+- 仓储与领域检查统一抛 `SettingDeltaError`，带稳定 `code`（`forbidden_char`、`path_active_limit`、`path_text_limit`、`worldline_active_rows_limit`、`worldline_total_rows_limit`、`deleted_terminal`、`invalid_anchor` 等）与已面向读者的中文 `message`。Server Action 对该类型直接返回 `error.message`，不再维护易漂移的字符串白名单。输入解析失败时，若任意 issue 来自同一条不可见字符文案，`settingDeltaInputErrorMessage` 也直接返回该具体码位信息（例如「词条名包含不允许的字符 U+200B（零宽空格）」）；其余字段仍只回复通用提示，不回显 Zod 内部结构或原始输入。
 - 检查与插入之间没有 `await`，并发写入只能有一个越过上限；重新启用同样对整棵锚点子树检查，不增加行数但必须尊重 50 条未删除行与 20 个 active 主体。
 - 界面在当前路径 active ≥ 20、世界线未删除行 ≥ 50 或全部行（含已删除）≥ 200 时提示并禁用添加。服务端仍独立校验，不依赖界面。
 
@@ -116,14 +120,20 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 生成后、保存 Artifact 前增加确定性校验 `validateAgainstPreDivergenceCanon`：
 
 - **锁定集合**与 `validateContinuationStatePatch` 的“分歧前”定义一致：Story Map 中 `sequence < 分歧事件.sequence` 且不在**当前路径状态** `factsRemoved`（`derivePathState(baseDelta, path)`）中的事件。分歧后事件永不锁定；路径上合法删除的事件也不锁定。
-- **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，且否定词后必须确实跟“发生/存在”类谓词（例如 `从来没有发生过<title>`、`<title>根本没有发生过`、`<title>是捏造的`），中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。裸 `没有<title>`、`没有忘记<title>`、反事实（如果/要不是/若是/假如/倘若）、失去义（没有了/再也没有）、回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、附近出现 `取消了`、提及其它否定词，都只产生 warning，不阻断保存。
+- **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，且否定词后必须确实跟“发生/存在”类谓词（例如 `从来没有发生过<title>`、`<title>根本没有发生过`、`<title>没发生过`、`<title>未曾发生`、`<title>是捏造的`），中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。发生/存在类否定词包括 从未/从来没有/根本没有/压根没有/其实没有/压根没/并没有/未曾/从没/并未/不曾/没有/未/没，但都只有后接发生/存在谓词时才硬拒绝。反事实线索（如果/要不是/若是/假如/倘若/要是）必须与否定谓词处于同一分句且位于其前面才豁免；失去义（没有了/再也没有）只在该线索本身紧邻标题时豁免，因此「灯塔熄灭从未发生过，如果有人问起就这么说。」与「假如你还记得，灯塔熄灭根本没有发生过。」仍硬拒绝。裸 `没有<title>`、`没有忘记<title>`、回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、附近出现 `取消了`、提及其它否定词，都只产生 warning。
+- **所有框架线索都必须“治理”否定才警告**：框架族包括对白/传闻/怀疑/maybe（说道/声称/坚称/告诉/撒谎/谎称/听说/据说/据传/传言/传闻/有人说/难道/也许/或许/可能/大概/怀疑/以为/假装/装作）、角色断言（一口咬定/咬定/咬死/坚持说/坚持认为/一再强调/矢口否认/否认/断言/发誓/嚷道/喊道/辩称/硬说/非说）、愿望（希望/多希望/但愿/宁愿/巴不得/恨不得/盼着/宁可相信/祈祷）以及裸 `说` / `骗`。一个框架只能在其所在分句内、位于否定之前时豁免；分句边界为逗号、顿号、句末标点与换行，且框架与否定之间出现词法意义上的叙述者切换连接词时不再治理：多字（但是/可是/然而/不过/其实/事实上/实际上）出现在任意位置都算；单字 `但` 排除 但愿/但凡/不但，`可` 只在分句起点且排除 可能/可以/可怜/可惜/可爱/可见/可靠/可怕/可笑/可疑，`却` 只在分句起点或 ≤4 字短主语之后（如「他却」）且排除 却步/冷却/推却/退却。跨分句另有三种治理结构：① 框架或言语动词后紧跟全角/半角冒号引入直接引语（`他说：…`、`据说：…`），冒号不切分句，引语直到下一个句末标点/换行都由该框架治理，引语内逗号不打断；② 言语动词 + 逗号等价于冒号——分句以统一 `SPEECH_VERBS` 族中的动词结尾（可带 道/着/了），动词前只有 ≤20 字且不含其它框架动词的短主语时，逗号后到句末（或词法转折词）都是被转述内容，例如「老渔夫坚称，灯塔熄灭从未发生过。」「他低声道，交出钥匙根本没有发生过。」；`告诉` 还允许一个 ≤4 字短宾语再接逗号（「他告诉我，…」）；③ 后置引述——句末最后一个分句 ≤20 字且以言语动词结尾时（「…从未发生过，他说。」「…，老人低声道。」「…，她坚持说。」），它治理同一句前面所有分句。分句不以动词结尾的「少年发誓要离开小岛，交出钥匙从未发生。」、言语逗号后出现转折的「他坚称，可灯塔熄灭从未发生过。」、非引语冒号「结论只有一个：灯塔熄灭从未发生过。」以及「他可能记错了，灯塔熄灭从未发生过。」都仍硬拒绝；`可能` 里的 `可` 既不是转折，也不是言语动词。硬检查前先用独立纯函数 `findQuotedSpans` 按 fail-closed 策略配对引号并遮蔽，再切句；引号内若单独看足以命中，仍只产生 warning。只有真正治理否定的框架、言语逗号、后置引述或成立的引号区间才会降级为 warning。
+- **角色主语与推测分句（PR #15 第 6 轮，产品决定 D）**：不再扩充言语动词表。引号遮蔽保持不变；对每个硬匹配，否定所在分句之前只要有一个带角色主语的分句，且主语后至少还有一个 CJK 字（不要求是言语动词），整句就按角色话语/间接引述只 warning。角色主语由导出的纯函数 `clauseHasCharacterSubject(clause, characterNames)` 判断：先去掉首尾空白与一个 ≤4 字的首状语（后来/那天/当时/忽然/突然/这时/随后/接着/于是/最后/此刻/那时/今天/昨天/夜里/清晨等），再匹配 ① Story Map 人物姓名/别名（最长优先）② 人称代词（他们/她们/它们/我们/你们/咱们/咱/他/她/它/我/你/您/老夫/本座/在下/老子/俺/人家/大家/众人，最长优先）③ 1–8 个 CJK 字、以人物后缀字（人/者/长/夫/婆/公/爷/娘/妇/女/孩/子/哥/姐/弟/妹/叔/婶/伯/姨/师/匠/工/手/员/官/王/客/生/翁/丁/童/兵/卒/们）结尾的短人物名词（老渔夫/船长/守塔人/掌柜的伙计们）。因此「老渔夫表示，灯塔熄灭从未发生过。」「船长嘱咐，交出钥匙根本没有发生过。」只 warning，不需要枚举 表示/嘱咐 等动词。推测框架（估计/大概/似乎/恐怕/以为/怀疑/猜想/猜测/兴许/也许/或许/可能/想必/多半/仿佛/好像/看来/据估计）出现在否定前的分句、且该分句以 `，` / `,` 结尾时同样只 warning，不要求主语；同一分句内的推测词仍按既有框架治理只 warning。叙述者转折连接词（但是/可是/然而/不过/其实/事实上/实际上，分句起点 但/可/却）出现在否定分句起点或角色分句与否定之间时取消这两种豁免，仍按叙述者断言硬拒绝；否定前没有任何角色主语或推测分句的场景/时间/天气/物品分句、非引语冒号与分号仍硬拒绝。因此「他发誓要回来，灯塔熄灭从未发生过。」「他点点头，但灯塔熄灭从未发生过。」分别只 warning 与硬拒绝。言语动词表保留，只作为既有冒号/逗号引语与后置引述的补充路径；角色话语的兜底判断改由角色主语/推测分句这一结构信号承担。
+- **言语动词复合词**：`SPEECH_VERBS` 增加 大叫/大喊/尖叫/高喊/高声道/大声说/大声道/怒吼/怒道/哭喊/哭道/惊叫/惊呼/呼喊/喊叫（匹配时长词优先），因此「船工大叫，灯塔熄灭根本没有发生过。」「她尖叫，交出钥匙从未发生过！」只 warning。单字动词的复合词黑名单只保留确实不构成引述的词（知道/味道/小说/学问/解答/报答/名叫…），移除 道 的“说”前缀、说 的“解/游/诉/演/叙/胡/瞎”、问 的“询/提/发/责/质/借”、答 的“作/应”、喊 的“尖/呐/高/大”以及 叫 的“尖/喊/哭/大/小”；`喊` 不再有黑名单。
+- **`道` 的结构性判定**：单字 `道` 只有在前面是言语类副词/动词字（说/问/答/笑/怒/低/高/大/忙/急…）或直接跟一个非空的短主语时才算言语动词；紧邻数字、量词或指示词（一/二/两/几/这/那/每/某/条…）时按名词处理，并保留知道/味道/街道/轨道/隧道/频道/通道/大道/小道/古道/难道/门道等名词黑名单。因此「老人道，灯塔熄灭从未发生过。」只 warning，「前面只有一条道，灯塔熄灭从未发生过。」仍硬拒绝。
+- **引号配对（fail-closed，产品决定，可整体调整但必须仍由这一个函数负责）**：段落按 `\n` / `\r\n` / `\r` 切分；引号只在同一段内配对、且只与同一种风格配对（`“ ”`、`「 」`、`『 』`、`‘ ’`、ASCII `" "`，ASCII 双引号在段内交替开/闭）。段内允许跨句配对，不同风格的嵌套（如 `“…『…』…”`）各自成立。关闭引号不匹配栈顶但匹配更深的同风格开引号时，关闭到那一层并丢弃中间未匹配的开引号（它们不覆盖任何文本）；否则忽略孤立关闭引号。段末仍未闭合的开引号覆盖**零**文本，因此风格混用（`“…」`）、跨段开/闭引号、段首未闭合引号都不会遮蔽后面的叙述者否定，只会被 `hasUnpairedQuote` 记为坏引号。单独的 `’` 按撇号忽略；未闭合的 `‘` 不覆盖任何文本。引号内内容仍只产生 warning；引号外的所有内容都走正常硬检查。中文多段对白“每段以开引号开头、只在最后一段闭合”会被按旁白处理，这是刻意的 fail-closed 选择，后续可由产品负责人重新评估。
 - **召回边界**：换一种说法的否定、隐含矛盾、与已确认设定的矛盾不会被这个字面护栏抓到。它是低召回护栏，不是语义判定。
 - **策略开关**：环境变量 `CONTINUATION_CANON_GUARD` 由服务端配置 helper 解析，缺省 `strict`；`warn` 把所有信号降级为 warning，`off` 关闭生成后检查（Prompt 护栏仍保留）。非法值在任何模型调用前 fail closed。
-- **硬拒绝**仍走既有 validation-issue → repair → fail-closed 路径：Generation Run 记为 failed、保留原始输出、不落 Artifact。服务端边界把可识别的 Canon 硬拒绝映射为「生成内容明确否定了分歧前已确认的原著事件「<title>」，已拒绝且未保存；请重试或换一批。」，不回显模型正文。
+- **硬拒绝**仍走既有 validation-issue → repair → fail-closed 路径：Generation Run 记为 failed、保留原始输出、不落 Artifact。服务端边界把可识别的 Canon 硬拒绝映射为「生成内容明确否定了分歧前已确认的原著事件「<title>」：「<sentence>」。已拒绝且未保存；请重试或换一批。」其中 `<sentence>` 是命中的那一句 trim 后 ≤60 字（超出以 … 截断）；若该句所在段落有未闭合/孤立/错配的引号（`unpairedQuote`，由同一 `hasUnpairedQuote` 计算），再追加「这句所在段落的引号没有闭合，系统按旁白处理；补全引号后重试即可。」绝不回显整段正文或更多模型文本。
 - **warning** 不阻断保存：作为可选 `canonWarnings: Array<{ eventId, field, reason }>` 附加在 v2 方向/场景 payload 上（旧行没有该字段仍可解析），界面显示一条非阻断的「原著一致性提示」。永不静默修补或删句。
 - 方向校验覆盖标题、前提与预期后果，场景校验覆盖标题、正文与摘要。
+- **旧 Impact Plan 读取**：`getImpactPlanArtifact` 在 Zod 解析后重新加载绑定 Story Map，并复用 `validateImpactPlanUncertainEdgeIds` 校验 `uncertainEdgeIds` / `usedUncertainEdgeIds`；悬空 Edge id 直接抛错，不把无效计划交给预览、接受或续写。
 
-标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**catch 5/11，hard false-reject 0/17，legit warnings 8/17，中性长文 hard reject 0**。11 条应拒绝样本包含可被字面规则抓住的直接否定、前缀否定与“是捏造的/根本不存在”，也包含明确抓不到的改写；17 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、反事实/失去义、分歧后事件、路径删除事件与中性提及。测试同时断言硬假阳性必须为 0。
+标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**自建 should-reject catch 13/19，frame-then-narrator 17/17，broken-quote narrator 7/7，hard false-reject 0/19，legit warnings 10/19，中性长文 hard reject 0，自建对白/谎言/角色断言/愿望 hard reject 0/37、warnings 37/37；另按评审方类别构造的 8 条 reviewer-modelled dialogue hard reject 0/8、warnings 8/8；表外语义动词 24 条 hard reject 0/24、warnings 24/24；推测框架 18 条 hard reject 0/18、warnings 18/18；第 6 轮重新归类 17 条 hard reject 0/17、warnings 17/17**。集合构成为：ours 的 should-reject 19 条、frame-then-narrator 17 条、broken-quote narrator 7 条、表外语义动词 24 条、推测框架 18 条、重新归类 17 条、legitimate 19 条、dialogue/lie 37 条、reviewer-category 8 条；评审方另有不进入仓库的私有 held-out 集，其数字不由本仓库探针代表。19 条应拒绝样本包含直接否定、前缀否定、“没发生过/未发生过/未曾发生”等变体、跨分句反事实、明确抓不到的改写，以及裸「说」叙述句（`这么说来…`）；17 条 frame-then-narrator 样本只保留否定前没有任何角色主语或推测分句的叙述者否定：无主语愿望词、传闻分句、分句起点转折词、非引语冒号、分号，以及场景/时间/天气/物品分句和角色分句后的转折词（「他点点头，但灯塔熄灭从未发生过。」）；17 条重新归类样本原属 should-reject / frame-then-narrator，因否定前存在角色主语或推测分句而改为只 warning（「她希望能早点回家，灯塔熄灭从未发生过。」「他可能记错了，灯塔熄灭从未发生过。」「众人说完后便散了，灯塔熄灭从未发生过。」）；24 条表外语义动词样本覆盖表示/称/透露/承认/警告/嘱咐/提醒/转告/坦言/补充/解释/回忆/强调/指出/抱怨/安慰/保证/宣布/通知/暗示/叮嘱/劝/写道/记得与 Story Map 姓名、人称代词、老渔夫/船长/守塔人/村里的孩子们/掌柜的伙计们等主语；18 条推测框架样本覆盖每个推测词 + 逗号 + 否定；7 条 broken-quote narrator 样本覆盖段中孤立开引号、中英引号混用、跨段孤立开/闭引号、段首未闭合、撇号 `’` 旁有坏引号、孤立 `‘` 与孤立关闭引号，整组必须硬拒绝；19 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、同分句反事实/失去义、分歧后事件、路径删除事件与中性提及；37 条对白样本覆盖引号、据说、难道、也许、撒谎、骗、坚称、角色咬定/坚持/矢口否认/愿望、五条冒号直接引语（`他说：…`、`据说：…`、`她喊道：别担心，…`、`他道：…`、`他问道：…`）、逗号引出言语（坚称/低声道/道/坚持说/一口咬定/告诉/大叫/尖叫/高声道）、20 字长定语主语、后置引述（他说/老人低声道/她坚持说）、整段配对的多句引语、`『』` 嵌套在 `“”` 内，以及从 frame-then-narrator 移入的「她坚称，…」；8 条 reviewer-modelled 样本覆盖谎言、引号对白、传闻、怀疑/疑问、maybe、角色咬定、愿望与被转述。测试同时断言合法、对白与 reviewer-modelled 样本的硬假阳性必须为 0，frame-then-narrator 与 broken-quote narrator 整组必须全部硬拒绝。**这些数字来自我们自建或按评审方类别自建的探针集，不是通用召回率承诺；评审方私有 held-out 集不在仓库内。**
 
 ### 10. 上下文阶梯与单调性
 
@@ -131,7 +141,13 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 
 完整内容 → 丢 `canon_evidence` 中的非 pinned 条目 → 丢 `setting_deltas` → 丢旧 `recent_scenes` → 裁 `path_summary` → compact `worldline_setup` → 最新场景摘要 → v1 句末截断 → fail closed。
 
-`canon_evidence` 中分歧事件自身及其直接依赖的分歧前事件证据是 pinned，与 `worldline_setup`、`canon_events`、`selected_direction`、`anchor_reminder` 同属必需下限，任何阶梯步骤都不裁剪；放不下时抛类型化预算错误。`setting_deltas` 每次整条丢弃最浅（`anchorDepth` 最小）再最旧（`createdAt`）再按 id 的规则，因此更深/更新的路径规则保留更久；被丢弃 id 写入 manifest 的 `droppedItemIds`。规则裁剪排在证据之后、最近场景之前，且释放的预算不回填证据；更大预算只会停留在更早（或相同）的阶梯状态。`tests/unit/context-assembler.test.ts` 的阶梯单调性、全预算扫描与“必需段单独放得下时 20 条规则必不导致失败”测试保持通过。
+`canon_evidence` 中分歧事件自身及其直接依赖的分歧前事件证据是 pinned，与 `worldline_setup`、`canon_events`、`selected_direction`、`anchor_reminder` 同属必需下限，任何阶梯步骤都不裁剪；放不下时抛类型化预算错误。
+
+pinned 集合本身也有确定性上限：`CONTEXT_PINNED_EVIDENCE_MAX_ITEMS = 24`、`CONTEXT_PINNED_EVIDENCE_MAX_CHARS = 6000`（按条目 trim 后文本长度求和）。选择规则与 `maxChars` 无关，因此阶梯仍单调：先按原顺序保留分歧事件自身的证据；再按直接依赖事件离分歧事件的 sequence 距离（越近越先，再按事件 id）轮转，每轮每个事件最多取一条。超出上限的条目不会被丢弃，而是把 `pinned` 降级为 false、作为普通可裁剪证据留在 `canon_evidence` 中；它们记入 manifest 的 `demotedItemIds`，`pinnedItemIds` 只含真正保留的条目，`droppedItemIds` 仍只记录被裁掉的普通证据。
+
+`setting_deltas` 每次整条丢弃最浅（`anchorDepth` 最小）再最旧（`createdAt`）再按 id 的规则，因此更深/更新的路径规则保留更久；被丢弃 id 写入 manifest 的 `droppedItemIds`。规则裁剪排在证据之后、最近场景之前，且释放的预算不回填证据；更大预算只会停留在更早（或相同）的阶梯状态。`tests/unit/context-assembler.test.ts` 的阶梯单调性、全预算扫描与“必需段单独放得下时 20 条规则必不导致失败”测试保持通过。
+
+预算 fail closed 时，`neededChars` 按阶梯真正能接受的最小 Prompt 计算：必需段（含 pinned）加最新场景的最小形式（可用摘要，或最短安全句末前缀 + `（后文已截断）`），而不是排除最新场景的 `renderMandatoryPrompt`，也不只是当前超预算 Prompt 的长度；用 `neededChars` 作为 `maxChars` 重试必须成功，`neededChars - 1` 必须失败。读者文案不显示 `neededChars` / `maxChars` 等原始数字，改为「续写所需的基础上下文过多……超出了单次生成能容纳的范围，无法生成方向/场景。请减少设定或换一个分歧点后重试。」并给出可执行出路；数字只留在类型化错误的 `message` / 日志与 `code` 中。
 
 ## 备选方案
 
@@ -163,6 +179,13 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 裁剪只按锚点深度/创建时间决定，不按规则对当前场景的重要性排序；更深/更新的规则保留更久，但同层规则可能被整条丢弃。
 - 没有把场景 `statePatch.characterChanges` 自动转成以场景为锚的 progression；人物变化仍只属于路径状态，设定增量由读者显式添加。
 - 生成后校验只覆盖高置信字面否定，召回率低：同义改写、隐含矛盾、与已确认设定的矛盾不会被硬拒绝；也不校验每条读者设定规则是否被遵守。warning 只是提示，不阻断保存。需要更强保证时应扩展同一拒绝路径，而不是静默修补或把规则伪装成 Canon。
+- 否定词表仍是有限枚举：`从来没`（没有“有”）以及其它未列出的否定拼写（例如“从未有过”“不曾出现过”）不会被硬拒绝；裸 `没有<title>` 按设计只 warning。改写/同义否定同样召回很低，评审方私有 held-out 集曾报告改写类 3/11 硬拒绝；这些数字只描述我们自建的探针集，不是通用召回承诺。
+- **角色主语/推测分句会降低后续叙述者否定的严重度**：同一句里否定之前只要出现带角色主语的分句（例如「他发誓要回来，灯塔熄灭从未发生过。」）或一个以逗号结尾的推测分句（例如「他可能记错了，灯塔熄灭从未发生过。」），后一个分句即使读起来是叙述者否定也只 warning。这是“停止扩张言语动词表、改用结构信号”的产品取舍：召回角色话语/不确定转述优先于抓住少数“角色先说话、叙述者随后直接否认”的混写句；叙述者转折词会取消该豁免。没有角色主语或推测分句的否定仍硬拒绝。
+- 短人物名词检测是后缀启发式：只要求 1–8 个 CJK 字以 人/者/长/夫/婆/公/爷/娘/妇/女/孩/子/哥/姐/弟/妹/叔/婶/伯/姨/师/匠/工/手/员/官/王/客/生/翁/丁/童/兵/卒/们 结尾且后面还有汉字，不做词性/句法分析；因此以这些字结尾的非人物词（如「发生」「人生」开头的分句）也可能被当成人称名词，把后面的否定降级为 warning。这是刻意偏 warning 的 fail-open 取舍，不会把角色话语升级成硬拒绝。
+- 言语动词仍是有限枚举：表外动词 + 逗号只有在否定前存在角色主语（或推测分句）时才按角色话语处理；若整句没有可识别的角色主语，表外动词仍按旁白处理。
+- 复杂或畸形引号按旁白处理（fail closed）：多段对白若每段只写开引号、最后才闭合，除最后一段外的内容都不会被当成引号内容；这是刻意的安全取舍，产品负责人后续可以调整，但必须继续由 `findQuotedSpans` 单点实现。
+- 言语动词前的长定语主语超过 20 字（含标点）时仍按叙述者处理，可能把很长的“某某说，”句误判为硬拒绝；该上限是固定的词法规则，不做句法分析。
+- 短人物名词的后缀启发式已排除含系动词/存在动词/介词（是/有/在/为/被/把/对/向/从/给）的候选短语，并要求指示/存在限定词（这/那/此/某/每/各/有）后紧跟量词（个/位/名/群/些/伙/帮/对/队）；因此「这是水手们的说法」不再被当成人物主语，「那个老人」「这位船长」「有人在敲门」仍按角色主语处理（「有人」是代词性主语）。后缀启发式的其他误判边界不变。
 - 新批次用生成开始时冻结的指纹判断 stale；只有缺字段的历史批次才使用毫秒 ISO `createdAt` 回放，同一毫秒内的历史顺序可能无法区分。
 
 ## 不变的部分
@@ -180,4 +203,4 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - [SillyTavern World Info](https://docs.sillytavern.app/usage/core-concepts/worldinfo/)：SillyTavern 采用 AGPL-3.0；只借鉴 `name ∪ aliases` 关键词触发的 lorebook 模式，未复制任何代码；因当前上限已让“全部注入”保持有界，本次不引入关键词触发。
 - 复用 NovelRipple 既有的 Zod Schema、Drizzle `artifacts` 存储、确定性派生函数、分段上下文组装与 fail-closed 测试设施；没有新增上下文框架、lorebook 库或 UI 组件库。
 
-新依赖：**none**。本次评审修正（stale 批次与生成后分歧前校验）同样不执行网络访问、不新增依赖，复用既有场景树 / 设定增量派生函数与 `generateStructured` 的 validate → repair → fail-closed 路径；stale 判断是纯函数，不引入调度器、缓存或后台自动生成。
+新依赖：**none**。本次评审修正（stale 批次与生成后分歧前校验）同样不执行网络访问、不新增依赖，复用既有场景树 / 设定增量派生函数与 `generateStructured` 的 validate → repair → fail-closed 路径；stale 判断是纯函数，不引入调度器、缓存或后台自动生成。本 T14 第四轮评审修正同样不执行网络访问、不新增依赖，只复用既有 Zod Schema、`findForbiddenSettingDeltaChar`、确定性纯函数护栏与 Vitest 探针；言语/引号规则是本地字符串与词法判断，不引入 NLP 库、分词器或模型调用。

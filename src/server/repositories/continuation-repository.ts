@@ -17,10 +17,10 @@ import {
   SettingDeltaLifecycleV1Schema,
   SettingDeltaSubjectSchema,
   SettingDeltaV1Schema,
-  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   findForbiddenSettingDeltaChar,
   normalizeSettingDeltaText,
+  settingDeltaForbiddenCharMessage,
   type ContinuationArtifact,
   type ContinuationCanonWarning,
   type ContinuationDirectionsArtifact,
@@ -416,20 +416,21 @@ export function createSettingDeltaArtifact(input: {
   statement: string;
   idempotencyKey: string;
 }): SettingDeltaArtifact {
-  if (
-    input.subject.kind === "term" &&
-    findForbiddenSettingDeltaChar(input.subject.name) !== null
-  ) {
-    throw new SettingDeltaError(
-      "forbidden_char",
-      SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
-    );
+  if (input.subject.kind === "term") {
+    const forbidden = findForbiddenSettingDeltaChar(input.subject.name);
+    if (forbidden !== null) {
+      throw new SettingDeltaError(
+        "forbidden_char",
+        settingDeltaForbiddenCharMessage(forbidden, "词条名"),
+      );
+    }
   }
   const subject = SettingDeltaSubjectSchema.parse(input.subject);
-  if (findForbiddenSettingDeltaChar(input.statement) !== null) {
+  const forbiddenStatement = findForbiddenSettingDeltaChar(input.statement);
+  if (forbiddenStatement !== null) {
     throw new SettingDeltaError(
       "forbidden_char",
-      SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
+      settingDeltaForbiddenCharMessage(forbiddenStatement, "设定说明"),
     );
   }
   const statement = normalizeSettingDeltaText(input.statement);
@@ -509,6 +510,22 @@ export function createSettingDeltaArtifact(input: {
       existing.worldlineId !== worldline.id ||
       existing.settingDelta.anchorSceneId !== input.anchorSceneId
     ) {
+      throw new SettingDeltaError(
+        "idempotency_conflict",
+        "设定增量幂等键已被其他内容占用",
+      );
+    }
+    const existingSubject = existing.settingDelta.subject;
+    const sameSubject =
+      existingSubject.kind === subject.kind &&
+      (subject.kind === "character"
+        ? existingSubject.kind === "character" &&
+          existingSubject.characterId === subject.characterId
+        : existingSubject.kind === "term" &&
+          existingSubject.name === subject.name);
+    // 幂等键只保证同一次提交可重放；换了主体或说明就是另一条规则，
+    // 不能把旧行当成新内容返回。
+    if (!sameSubject || existing.settingDelta.statement !== statement) {
       throw new SettingDeltaError(
         "idempotency_conflict",
         "设定增量幂等键已被其他内容占用",

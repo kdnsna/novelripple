@@ -22,9 +22,11 @@ export function continuationErrorMessage(
 ): string {
   if (isContinuationContextBudgetError(error)) {
     const target = stage === "scene" ? "场景" : "方向";
+    // 读者文案不显示 neededChars / maxChars 等内部计数；数字只留在
+    // 类型化错误的 message / 日志里。
     return [
-      `续写所需的基础上下文（世界线设定、相关原著事件、分歧事件及其直接依赖的原著证据、结局约束）超过了当前上限（需要约 ${error.neededChars} 字，上限 ${error.maxChars} 字），无法生成${target}。`,
-      "接下来可以：",
+      `续写所需的基础上下文过多（世界线设定、相关原著事件、分歧事件及其直接依赖的原著证据、结局约束），超出了单次生成能容纳的范围，无法生成${target}。`,
+      "请减少设定或换一个分歧点后重试。接下来可以：",
       "• 换一个分歧瞬间，或改用「让故事自由发展」（开放模式通常更短）；",
       "• 减少保留的结局 Anchor；",
       "• 设定增量会在预算不足时自动裁剪，不是本次失败的原因；",

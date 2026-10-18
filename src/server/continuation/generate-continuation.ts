@@ -12,6 +12,7 @@ import {
 import {
   buildCanonEventsSection,
   buildRelatedEvidenceItems,
+  capPinnedEvidence,
   divergenceDependencyEventIds,
 } from "@/domain/continuation/canon-context";
 import { buildPathSummary } from "@/domain/continuation/path-summary";
@@ -209,7 +210,7 @@ export async function generateContinuationDirections(input: {
         },
         input.provider,
       ),
-      () => hardRejections.map((rejection) => rejection.title),
+      () => hardRejections,
     );
     const artifact = createContinuationDirectionsArtifactV2({
       projectId: input.projectId,
@@ -371,7 +372,7 @@ export async function generateContinuationScene(input: {
         },
         input.provider,
       ),
-      () => hardRejections.map((rejection) => rejection.title),
+      () => hardRejections,
     );
     const artifact = createContinuationSceneArtifactV2({
       projectId: input.projectId,
@@ -598,8 +599,15 @@ function buildContextMaterial(input: {
         ? { pinned: true }
         : {}),
     }));
+  // pinned 证据也有确定性上限：超出的条目降级为普通可裁剪证据（仍保留在
+  // canon_evidence 候选中），避免少数依赖事件把必需下限撑到任何预算都放不下。
+  const cappedRelatedEvidence = capPinnedEvidence({
+    items: relatedEvidence,
+    storyMap,
+    divergenceEventId: plan.divergence.eventId,
+  }).items;
   const canonEvidence: ContextEvidenceItem[] = [
-    ...relatedEvidence,
+    ...cappedRelatedEvidence,
     ...selection.representativeExcerpts.map((excerpt) => ({
       id: `excerpt:${excerpt.kind}:${excerpt.start}:${excerpt.end}`,
       text: `[${excerpt.kind} ${excerpt.sectionId} ${excerpt.start}-${excerpt.end}]\n${excerpt.excerpt}`,

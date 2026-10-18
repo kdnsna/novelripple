@@ -9,11 +9,11 @@ import {
   type PathSettingDelta,
 } from "@/domain/continuation/setting-deltas";
 import {
-  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SETTING_DELTA_STATEMENT_MAX_CHARS,
   SETTING_DELTA_TERM_NAME_MAX_CHARS,
   findForbiddenSettingDeltaChar,
   normalizeSettingDeltaText,
+  settingDeltaForbiddenCharMessage,
   type SettingDeltaLifecycleV1,
   type SettingDeltaSubject,
   type SettingDeltaV1,
@@ -73,6 +73,23 @@ export function settingDeltaHistoryLabel(
 ): string | null {
   if (history.length === 0) return null;
   return `此前：${history.map((delta) => delta.statement).join("；")}`;
+}
+
+/**
+ * 历史行是否包含规则收紧前的禁用字符。
+ *
+ * 读取与展示保留原样（读者可以自行改写），但进入续写上下文前渲染函数会
+ * 移除这些码位；界面据此给出一条非阻断说明。
+ */
+export function settingDeltaSanitizedNote(
+  delta: Pick<SettingDeltaV1, "subject" | "statement">,
+): string | null {
+  const forbidden =
+    findForbiddenSettingDeltaChar(delta.statement) ??
+    (delta.subject.kind === "term"
+      ? findForbiddenSettingDeltaChar(delta.subject.name)
+      : null);
+  return forbidden === null ? null : "包含不可见字符，进入续写前已移除";
 }
 
 export function settingDeltaStatementRemaining(statement: string): number {
@@ -138,8 +155,12 @@ export function settingDeltaAnchorHint(currentNode: SceneNode | null): string {
 export function validateSettingDeltaDraft(
   draft: SettingDeltaDraft,
 ): SettingDeltaDraftValidation {
-  if (findForbiddenSettingDeltaChar(draft.statement) !== null) {
-    return { valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE };
+  const forbiddenStatement = findForbiddenSettingDeltaChar(draft.statement);
+  if (forbiddenStatement !== null) {
+    return {
+      valid: false,
+      error: settingDeltaForbiddenCharMessage(forbiddenStatement, "设定说明"),
+    };
   }
   const statement = normalizeSettingDeltaText(draft.statement);
   if (statement.length === 0) {
@@ -163,8 +184,12 @@ export function validateSettingDeltaDraft(
     };
   }
 
-  if (findForbiddenSettingDeltaChar(draft.termName) !== null) {
-    return { valid: false, error: SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE };
+  const forbiddenTermName = findForbiddenSettingDeltaChar(draft.termName);
+  if (forbiddenTermName !== null) {
+    return {
+      valid: false,
+      error: settingDeltaForbiddenCharMessage(forbiddenTermName, "词条名"),
+    };
   }
   const termName = normalizeSettingDeltaText(draft.termName);
   if (termName.length === 0) {

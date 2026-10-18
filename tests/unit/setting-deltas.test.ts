@@ -24,6 +24,8 @@ import {
 import {
   SettingDeltaLifecycleV1Schema,
   SettingDeltaV1Schema,
+  SettingDeltaV1StoredSchema,
+  sanitizeSettingDeltaText,
   type SettingDeltaLifecycleV1,
   type SettingDeltaSubject,
   type SettingDeltaV1,
@@ -555,6 +557,40 @@ describe("setting delta context serialization", () => {
     expect(smallRendered.length).toBeLessThanOrEqual(
       SETTING_DELTA_CONTEXT_MAX_CHARS,
     );
+  });
+
+  it("strips legacy forbidden characters from rendered rules and keeps emoji", () => {
+    // 模拟规则收紧前写入的历史行：存储 Schema 宽松读取，但渲染必须清洗。
+    const legacy = SettingDeltaV1StoredSchema.parse({
+      id: "delta_legacy",
+      worldlineId: "wl_1",
+      anchorSceneId: null,
+      subject: { kind: "term", name: "旧灯\u200B塔" },
+      statement: "旧灯\u200B塔已被封锁。",
+      contentKind: "user",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+    const rendered = renderSettingDeltaContextText(
+      buildSettingDeltaContextItems({
+        active: [
+          {
+            subjectKey: "term:旧灯\u200B塔",
+            active: legacy,
+            history: [],
+            anchorDepth: 0,
+          },
+        ],
+        characters: [],
+      }),
+    );
+    expect(rendered).not.toContain("\u200B");
+    expect(rendered).toBe("- 旧灯塔（自分歧点起）：旧灯塔已被封锁。");
+
+    // 合法 emoji 序列保持完整；孤立零宽字符被移除。
+    expect(sanitizeSettingDeltaText("👨‍👩‍👧❤️👍🏽1️⃣🇨🇳")).toBe(
+      "👨‍👩‍👧❤️👍🏽1️⃣🇨🇳",
+    );
+    expect(sanitizeSettingDeltaText("灯\u200B塔\u200D")).toBe("灯塔");
   });
 
   it("lists the anchor subtree paths that a write can affect", () => {
