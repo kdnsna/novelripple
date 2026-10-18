@@ -88,6 +88,10 @@ describe("worldline reading head constraints", () => {
       ["scene", ""],
       ["scene", " "],
       ["scene", "\t"],
+      ["scene", "\u3000"],
+      ["scene", "\u00A0"],
+      ["scene", "\u2003"],
+      ["scene", " \t\u3000\u00A0\u2003\n"],
       [null, "scene_1"],
       ["bogus", null],
     ] as const) {
@@ -160,6 +164,26 @@ describe("worldline reading head constraints", () => {
         "\t",
       ),
     ).toThrow(/CHECK constraint failed/);
+    for (const [index, nodeId] of [
+      "\u3000",
+      "\u00A0",
+      "\u2003",
+      " \t\u3000\u00A0\u2003\n",
+    ].entries()) {
+      expect(() =>
+        insert.run(
+          `wl_unicode_ws_head_${index}`,
+          "project_head",
+          "artifact_head",
+          "open",
+          "[]",
+          `unicode-ws-head-${index}`,
+          "active",
+          "scene",
+          nodeId,
+        ),
+      ).toThrow(/CHECK constraint failed/);
+    }
     expect(() =>
       insert.run(
         "wl_good_head",

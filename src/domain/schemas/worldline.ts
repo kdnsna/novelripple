@@ -14,7 +14,15 @@ import { findForbiddenSettingDeltaChar } from "./setting-delta";
 export const WorldlineHeadSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("root") }).strict(),
   z
-    .object({ kind: z.literal("scene"), sceneId: z.string().min(1) })
+    .object({
+      kind: z.literal("scene"),
+      sceneId: z
+        .string()
+        .min(1)
+        .refine((value) => value.trim().length > 0, {
+          message: "场景 id 不能只包含空白字符",
+        }),
+    })
     .strict(),
 ]);
 

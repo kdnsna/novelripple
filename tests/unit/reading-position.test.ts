@@ -17,6 +17,7 @@ import {
   WorldlineBookmarkNameSchema,
   WorldlineBookmarkSchema,
   WorldlineDeltaSchema,
+  WorldlineHeadSchema,
   WorldlineSchema,
 } from "@/domain/schemas";
 import { closeDatabase, getDatabase } from "@/server/db/client";
@@ -394,6 +395,37 @@ describe("reading position repository", () => {
       kind: "scene",
       sceneId,
     });
+  });
+
+  it("rejects scene heads that are empty after trim", () => {
+    createActiveWorldline("wl_reading_whitespace");
+    const whitespaceSceneIds = [
+      "\u3000",
+      "\u00A0",
+      "\u2003",
+      " \t\u3000\u00A0\u2003\n",
+    ];
+
+    for (const sceneId of whitespaceSceneIds) {
+      expect(() =>
+        WorldlineHeadSchema.parse({ kind: "scene", sceneId }),
+      ).toThrow();
+      try {
+        setWorldlineHeadNode({
+          projectId,
+          worldlineId: "wl_reading_whitespace",
+          head: { kind: "scene", sceneId },
+        });
+        throw new Error("expected whitespace-only scene head to be rejected");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ReadingPositionError);
+        expect((error as ReadingPositionError).code).toBe("invalid_head");
+      }
+    }
+
+    expect(
+      WorldlineHeadSchema.parse({ kind: "scene", sceneId: "scene_valid" }),
+    ).toEqual({ kind: "scene", sceneId: "scene_valid" });
   });
 
   it("rejects unknown scenes and heads on canonical worldlines", () => {

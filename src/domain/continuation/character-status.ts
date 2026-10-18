@@ -160,6 +160,18 @@ export const DEATH_NEGATION_MARKERS = [
   "似乎",
   "可能",
   "或许",
+  "听说",
+  "也许",
+  "好像",
+  "大概",
+  "兴许",
+  "似是",
+  "仿佛",
+  "好似",
+  "认错",
+  "误认",
+  "讹传",
+  "更正",
   "消息",
   "一说",
   "不可信",
@@ -409,8 +421,11 @@ export function deriveSourceBaselineStatuses(input: {
  *
  * 姓名左边界是分句开头、右边界是连接词/动词，因此「张三丰」不会命中
  * 「张三」，「艾伦·坡」不会命中「艾伦」，「林青的马」不会命中「林青」，
- * 地点名「韩松岭」也不会命中「韩松」。整句任意位置出现问号、否定/
- * 不确定措辞、假设/梦境/预感标记或笑死/气死等比喻时一律不匹配。
+ * 地点名「韩松岭」也不会命中「韩松」。死亡分句必须是整个 stateChange
+ * 的最后一个分句：其后只允许一个终止的「。」或「！」/「!」与空白；
+ * 任何后续分句/句子（即使只是「众人悲痛」「葬于城外」）都会改成 unknown。
+ * 整句任意位置出现问号、否定/不确定措辞、假设/梦境/预感标记或笑死/
+ * 气死等比喻时也一律不匹配。
  */
 export function matchesExplicitDeathShape(
   stateChange: string,
@@ -422,15 +437,27 @@ export function matchesExplicitDeathShape(
   if (hasAnyMarker(stateChange, DEATH_FIGURATIVE_MARKERS)) return false;
   const usableNames = names.filter((name) => Array.from(name).length >= 2);
   if (usableNames.length === 0) return false;
-  return splitClauses(stateChange).some((clause) =>
-    usableNames.some((name) => matchesDeathClause(clause, name)),
-  );
+  const clause = lastClauseOf(stateChange);
+  if (clause === null) return false;
+  return usableNames.some((name) => matchesDeathClause(clause, name));
 }
 
-const CLAUSE_SEPARATORS = /[\s，。；;！!？?、]+/u;
+const CLAUSE_SEPARATOR_RUN = /[\s，。；;！!？?、]+/u;
+const ALLOWED_TERMINAL_PUNCTUATION = /[。！!]$/u;
 
-function splitClauses(text: string): string[] {
-  return text.split(CLAUSE_SEPARATORS).filter((clause) => clause.length > 0);
+/**
+ * 取整个文本的最后一个分句；只允许末尾出现一个「。」或「！」/「!」，
+ * 以及其后的空白。若末尾是逗号/分号/问号/引号/括号等，或终止标点后
+ * 还跟着内容，返回 null，从而让死亡推断保持 unknown。
+ */
+function lastClauseOf(text: string): string | null {
+  const trimmed = text.trimEnd();
+  const withoutTerminal = ALLOWED_TERMINAL_PUNCTUATION.test(trimmed)
+    ? trimmed.slice(0, -1)
+    : trimmed;
+  const segments = withoutTerminal.split(CLAUSE_SEPARATOR_RUN);
+  const last = segments[segments.length - 1] ?? "";
+  return last.length > 0 ? last : null;
 }
 
 function matchesDeathClause(clause: string, name: string): boolean {
@@ -478,14 +505,23 @@ function matchesDeathTail(tail: string): boolean {
     if (!tail.startsWith(verb)) continue;
     const rest = tail.slice(verb.length);
     if (verb === "死于" || verb === "死在") {
-      return rest.length > 0;
+      return isBareVerbPhrase(rest);
     }
     if (rest.length === 0 || rest === "了") return true;
-    if ((rest.startsWith("于") || rest.startsWith("在")) && rest.length > 1) {
-      return true;
+    if (rest.startsWith("于") || rest.startsWith("在")) {
+      return isBareVerbPhrase(rest.slice(1));
     }
   }
   return false;
+}
+
+/**
+ * 动词后的地点/原因短语必须是纯短语：不能含标点、符号或空白，否则
+ * 「病故于城外：众人悲痛」「身亡——众人不信」等后续文本会被误当成
+ * 同一个短语。这里只让推断更保守。
+ */
+function isBareVerbPhrase(value: string): boolean {
+  return value.length > 0 && !/[\p{P}\p{S}\s]/u.test(value);
 }
 
 function longestMatchingPrefix(

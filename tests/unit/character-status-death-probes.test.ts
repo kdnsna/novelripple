@@ -521,6 +521,93 @@ const negativeProbes: NegativeProbe[] = [
         ],
       }),
   },
+  // H. 死亡分句必须是整个 stateChange 的最后一个分句。
+  {
+    label: "rhetorical tail without question mark",
+    baseline: () => single("林青身亡，是吗"),
+  },
+  {
+    label: "tag question tail",
+    baseline: () => single("韩松被杀，对吧", { participants: ["character_han"] }),
+  },
+  {
+    label: "negative tag tail",
+    baseline: () =>
+      single("沈墨病故，不是么", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "hearsay tail",
+    baseline: () => single("林青身亡，听说的"),
+  },
+  {
+    label: "heard-from-elsewhere tail",
+    baseline: () =>
+      single("沈墨遇害，这是听来的", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "doubt tail",
+    baseline: () => single("韩松阵亡，也许吧", { participants: ["character_han"] }),
+  },
+  {
+    label: "seems-so tail",
+    baseline: () => single("林青被杀，好像是"),
+  },
+  {
+    label: "roughly-so tail",
+    baseline: () => single("沈墨身亡，大概如此", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "disbelief tail",
+    baseline: () =>
+      single("艾伦遇害，倒是没人信", { participants: ["character_alan"] }),
+  },
+  {
+    label: "crowd does not believe it",
+    baseline: () => single("林青病故，众人不信"),
+  },
+  {
+    label: "later correction about identity",
+    baseline: () =>
+      single("韩松被杀，后来发现认错了人", { participants: ["character_han"] }),
+  },
+  {
+    label: "second sentence says another person died",
+    baseline: () =>
+      single("沈墨身亡。经查死者另有其人", {
+        participants: ["character_shenmo"],
+      }),
+  },
+  {
+    label: "second sentence hearsay doubt",
+    baseline: () => single("林青身亡。听说死者另有其人"),
+  },
+  {
+    label: "second sentence disbelief",
+    baseline: () =>
+      single("沈墨被杀。众人不信", { participants: ["character_shenmo"] }),
+  },
+  {
+    label: "colon disbelief tail",
+    baseline: () => single("林青身亡：众人不信"),
+  },
+  {
+    label: "dash disbelief tail",
+    baseline: () =>
+      single("韩松被杀——众人不信", { participants: ["character_han"] }),
+  },
+  {
+    label: "trailing quote after death verb",
+    baseline: () => single("林青身亡。」"),
+  },
+  {
+    label: "trailing bracket after death verb",
+    baseline: () => single("韩松被杀］", { participants: ["character_han"] }),
+  },
+  {
+    label: "trailing bracket after terminal punctuation",
+    baseline: () =>
+      single("沈墨病故。】", { participants: ["character_shenmo"] }),
+  },
 ];
 
 /**
@@ -551,6 +638,19 @@ const knownMisses: NegativeProbe[] = [
   {
     label: "supported cause plus unsupported not-cured phrase",
     baseline: () => single("林青因伤重不治身亡"),
+  },
+  {
+    label: "neutral mourning tail",
+    baseline: () => single("林青身亡，众人悲痛"),
+  },
+  {
+    label: "neutral burial tail in another clause",
+    baseline: () => single("韩松被杀，葬于城外", { participants: ["character_han"] }),
+  },
+  {
+    label: "neutral burial tail in a second sentence",
+    baseline: () =>
+      single("沈墨病故。三日后下葬", { participants: ["character_shenmo"] }),
   },
 ];
 
