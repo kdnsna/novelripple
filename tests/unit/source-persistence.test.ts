@@ -37,7 +37,7 @@ afterAll(async () => {
 });
 
 describe("SQLite Source persistence", () => {
-  it("migrates the eight-table schema and immutable Source trigger from empty", () => {
+  it("migrates the nine-table schema and immutable Source trigger from empty", () => {
     const sqlite = new Database(databasePath, { readonly: true });
     const tables = sqlite
       .prepare(
@@ -59,6 +59,7 @@ describe("SQLite Source persistence", () => {
       "sources",
       "story_map_chunk_checkpoints",
       "worldline_bookmarks",
+      "worldline_character_status_overrides",
       "worldlines",
     ]);
     expect(trigger?.name).toBe("sources_prevent_update");

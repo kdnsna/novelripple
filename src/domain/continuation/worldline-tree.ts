@@ -2,6 +2,7 @@ import {
   derivePathState,
   getDefaultScenePath,
   getScenePath,
+  mergeCharacterChange,
   type SceneNode,
   type SceneTree,
 } from "@/domain/continuation/scene-tree";
@@ -245,17 +246,20 @@ export type PathCharacterState = {
 };
 
 /**
- * 按给定顺序折叠人物状态：只认显式 `status`，后出现的覆盖先出现的。
+ * 按给定顺序折叠人物状态：只认显式非 null `status`，后出现的覆盖先出现的。
  *
- * 传入顺序就是路径顺序（baseDelta → 每个场景）；没有 status 的变化不会
- * 清空之前的状态，因此“状态未变”可以只写 summary。
+ * 这是 `mergeCharacterChange` 的薄包装，供旧调用点与测试使用；真正的
+ * 路径派生统一读取 `derivePathState` 的折叠结果。
  */
 export function foldCharacterStatus(
-  changes: readonly { status?: CharacterStatus }[],
+  changes: readonly { status?: CharacterStatus | null }[],
 ): CharacterStatus | null {
   let status: CharacterStatus | null = null;
   for (const change of changes) {
-    if (change.status !== undefined) status = change.status;
+    status = mergeCharacterChange(
+      status === null ? undefined : { characterId: "", summary: "", status },
+      { characterId: "", summary: "", status: change.status },
+    ).status ?? null;
   }
   return status;
 }
@@ -278,49 +282,37 @@ export function derivePathCharacterTimeline(input: {
   const finalState = derivePathState(baseDelta, path);
 
   const historyByCharacter = new Map<string, PathCharacterHistoryEntry[]>();
-  const statusChangesByCharacter = new Map<
-    string,
-    { status?: CharacterStatus }[]
-  >();
   const append = (
     characterId: string,
     entry: PathCharacterHistoryEntry,
-    statusChanges: { status?: CharacterStatus }[],
   ) => {
     const history = historyByCharacter.get(characterId) ?? [];
     history.push(entry);
     historyByCharacter.set(characterId, history);
-    const changes = statusChangesByCharacter.get(characterId) ?? [];
-    changes.push(...statusChanges);
-    statusChangesByCharacter.set(characterId, changes);
   };
 
   for (const change of baseDelta.characterChanges) {
-    append(
-      change.characterId,
-      {
-        sourceKind: "divergence",
-        sceneId: null,
-        depth: 0,
-        summary: change.summary,
-        ...(change.status === undefined ? {} : { status: change.status }),
-      },
-      [{ ...(change.status === undefined ? {} : { status: change.status }) }],
-    );
+    append(change.characterId, {
+      sourceKind: "divergence",
+      sceneId: null,
+      depth: 0,
+      summary: change.summary,
+      ...(change.status === null || change.status === undefined
+        ? {}
+        : { status: change.status }),
+    });
   }
   for (const node of path) {
     for (const change of node.statePatch.characterChanges) {
-      append(
-        change.characterId,
-        {
-          sourceKind: "scene",
-          sceneId: node.id,
-          depth: node.depth,
-          summary: change.summary,
-          ...(change.status === undefined ? {} : { status: change.status }),
-        },
-        [{ ...(change.status === undefined ? {} : { status: change.status }) }],
-      );
+      append(change.characterId, {
+        sourceKind: "scene",
+        sceneId: node.id,
+        depth: node.depth,
+        summary: change.summary,
+        ...(change.status === null || change.status === undefined
+        ? {}
+        : { status: change.status }),
+      });
     }
   }
 
@@ -330,11 +322,17 @@ export function derivePathCharacterTimeline(input: {
       change.summary,
     ]),
   );
+  // 状态直接取 derivePathState 的折叠结果；这里不再独立 fold 一次。
+  const statusById = new Map(
+    finalState.characterChanges
+      .filter((change) => change.status !== undefined)
+      .map((change) => [change.characterId, change.status!]),
+  );
   const knownIds = new Set(characters.map((character) => character.id));
   const result: PathCharacterState[] = [];
 
   const statusFor = (characterId: string): CharacterStatus | null =>
-    foldCharacterStatus(statusChangesByCharacter.get(characterId) ?? []);
+    statusById.get(characterId) ?? null;
 
   for (const character of characters) {
     const history = historyByCharacter.get(character.id);

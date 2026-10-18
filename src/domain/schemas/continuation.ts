@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ContextManifestSchema } from "./context-manifest";
-import { CharacterChangeSchema } from "./impact-plan";
+import { SceneCharacterChangeSchema } from "./impact-plan";
 
 const FactKeySchema = z
   .string()
@@ -18,7 +18,7 @@ export const StatePatchSchema = z
   .object({
     factsAdded: z.array(StateFactSchema),
     factsRemoved: z.array(FactKeySchema),
-    characterChanges: z.array(CharacterChangeSchema),
+    characterChanges: z.array(SceneCharacterChangeSchema),
     threadsOpened: z.array(z.string().trim().min(1)),
     threadsClosed: z.array(z.string().trim().min(1)),
   })

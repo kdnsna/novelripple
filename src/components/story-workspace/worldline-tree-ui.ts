@@ -1,3 +1,4 @@
+import type { CharacterStatusSource } from "@/domain/continuation/character-status";
 import type { SceneNode } from "@/domain/continuation/scene-tree";
 import type {
   PathCharacterHistoryEntry,
@@ -68,6 +69,25 @@ const characterStatusLabels: Record<CharacterStatus, string> = {
 /** 路径人物状态的固定中文标签；顺序与 Schema 枚举一致。 */
 export function pathCharacterStatusLabel(status: CharacterStatus): string {
   return characterStatusLabels[status];
+}
+
+/** 状态来源标签：原著推断 / 影响计划 / 第 n 幕 / 读者设定 / 默认。 */
+export function pathCharacterStatusSourceLabel(
+  source: CharacterStatusSource,
+  depth: number | null,
+): string {
+  switch (source) {
+    case "source_inference":
+      return "原著推断";
+    case "impact":
+      return "影响计划";
+    case "scene":
+      return depth === null ? "场景" : `第 ${depth} 幕`;
+    case "reader":
+      return "读者设定";
+    case "default":
+      return "默认";
+  }
 }
 
 /** 人物状态历史的一行：分歧点 → 第 n 幕；有显式状态时附在末尾。 */

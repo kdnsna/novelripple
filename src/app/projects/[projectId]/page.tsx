@@ -14,6 +14,7 @@ import {
 import { ensureJobRecovery } from "@/server/jobs/job-recovery";
 import { toJobView } from "@/server/jobs/job-view";
 import { listContinuationArtifactsForWorldline } from "@/server/repositories/continuation-repository";
+import { listCharacterStatusOverrides } from "@/server/repositories/character-status-repository";
 import { listWorldlineBookmarks } from "@/server/repositories/reading-position-repository";
 import { getLatestJobForSource } from "@/server/repositories/job-repository";
 import {
@@ -96,6 +97,9 @@ export default async function ProjectPage({
   const rippleSuggestionBatchLimit = resolveRippleSuggestionMaxBatches();
   const initialWorldlineBookmarks = selectedWorldlines.flatMap((worldline) =>
     listWorldlineBookmarks(worldline.id),
+  );
+  const initialCharacterStatusOverrides = selectedWorldlines.flatMap(
+    (worldline) => listCharacterStatusOverrides(worldline.id),
   );
   const selectedContinuationTrees = selectedWorldlines.map((worldline) => {
     const artifacts = listContinuationArtifactsForWorldline(worldline.id);
@@ -195,6 +199,7 @@ export default async function ProjectPage({
             }))}
             initialContinuationTrees={selectedContinuationTrees}
             initialWorldlineBookmarks={initialWorldlineBookmarks}
+            initialCharacterStatusOverrides={initialCharacterStatusOverrides}
             initialImpactPlanArtifacts={selectedImpactPlanArtifacts}
             initialRippleSuggestionBatches={initialRippleSuggestionBatches}
             initialWorldlines={selectedWorldlines}

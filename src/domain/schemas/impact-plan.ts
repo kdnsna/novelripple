@@ -66,13 +66,26 @@ export const CharacterStatusSchema = z.enum([
   "unknown",
 ]);
 
+/**
+ * Impact Plan 的人物变化：只有人物与摘要。
+ *
+ * 运行时状态属于世界线路径，不属于 Impact Plan；它由
+ * `SceneCharacterChangeSchema` 在场景 `statePatch` 中表达。
+ */
 export const CharacterChangeSchema = z
   .object({
     characterId: z.string().min(1),
     summary: z.string().min(1),
-    status: CharacterStatusSchema.optional(),
   })
   .strict();
+
+/**
+ * 场景/路径状态中的人物变化：`status` 为 null 或缺省都表示“本场景没有
+ * 改变该人物的生死或在场”，不会覆盖更早的显式值。
+ */
+export const SceneCharacterChangeSchema = CharacterChangeSchema.extend({
+  status: CharacterStatusSchema.nullable().optional(),
+}).strict();
 
 export const ThreadChangesSchema = z
   .object({
@@ -197,6 +210,7 @@ export type Anchor = z.infer<typeof AnchorSchema>;
 export type AnchorEvaluation = z.infer<typeof AnchorEvaluationSchema>;
 export type ImpactItem = z.infer<typeof ImpactItemSchema>;
 export type CharacterChange = z.infer<typeof CharacterChangeSchema>;
+export type SceneCharacterChange = z.infer<typeof SceneCharacterChangeSchema>;
 export type CharacterStatus = z.infer<typeof CharacterStatusSchema>;
 export type ThreadChanges = z.infer<typeof ThreadChangesSchema>;
 export type ImpactPlanModelOutput = z.infer<

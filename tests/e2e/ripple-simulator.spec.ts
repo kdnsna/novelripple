@@ -297,7 +297,7 @@ test("restores the persisted reading head and jumps between bookmarks", async ({
     "阅读位置已保存。",
   );
 
-  // 刷新后从 headNodeId 恢复同一场景，书签也从服务端恢复。
+  // 刷新后从持久化 head 恢复同一场景，书签也从服务端恢复。
   await page.reload();
   await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
   await page.getByRole("button", { name: "继续最近 Worldline" }).click();
@@ -314,6 +314,23 @@ test("restores the persisted reading head and jumps between bookmarks", async ({
     .getByRole("button", { name: "分歧点", exact: true })
     .click();
   await expect(page.getByTestId("continuation-path")).toHaveCount(0);
+  await expect(page.getByTestId("reading-position-status")).toHaveText(
+    "阅读位置已保存。",
+  );
+
+  // 分歧点是显式保存的 root：刷新后仍停在分歧点，不跳回默认路径叶子。
+  await page.reload();
+  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
+  await page.getByRole("button", { name: "继续最近 Worldline" }).click();
+  await expect(page.getByTestId("continuation-path")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("worldline-tree-row")
+      .filter({
+        has: page.getByRole("button", { name: "分歧点", exact: true }),
+      }),
+  ).toHaveAttribute("aria-current", "true");
+
   await page
     .getByTestId("worldline-bookmark")
     .filter({ hasText: "第一幕书签" })

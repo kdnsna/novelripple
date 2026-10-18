@@ -306,7 +306,9 @@ function toWorldlineRow(worldline: Worldline): typeof worldlines.$inferInsert {
     mode: worldline.mode,
     anchorsJson: JSON.stringify(worldline.anchors),
     acceptedImpactPlanId: worldline.acceptedImpactPlanId,
-    headNodeId: worldline.headNodeId,
+    headKind: worldline.head?.kind ?? null,
+    headNodeId:
+      worldline.head?.kind === "scene" ? worldline.head.sceneId : null,
     idempotencyKey: worldline.idempotencyKey,
     status: worldline.status,
     createdAt: worldline.createdAt,
@@ -353,6 +355,18 @@ function parseImpactPlanArtifact(
   });
 }
 
+
+function parseWorldlineHead(
+  row: typeof worldlines.$inferSelect,
+): Worldline["head"] {
+  if (row.headKind === null) return null;
+  if (row.headKind === "root") return { kind: "root" };
+  if (row.headNodeId === null) {
+    throw new Error(`Worldline 场景阅读位置缺少节点 id：${row.id}`);
+  }
+  return { kind: "scene", sceneId: row.headNodeId };
+}
+
 function parseWorldline(row: typeof worldlines.$inferSelect): Worldline {
   return WorldlineSchema.parse({
     id: row.id,
@@ -363,7 +377,7 @@ function parseWorldline(row: typeof worldlines.$inferSelect): Worldline {
     mode: row.mode,
     anchors: JSON.parse(row.anchorsJson),
     acceptedImpactPlanId: row.acceptedImpactPlanId,
-    headNodeId: row.headNodeId ?? null,
+    head: parseWorldlineHead(row),
     idempotencyKey: row.idempotencyKey,
     status: row.status,
     createdAt: normalizeSqliteDate(row.createdAt),

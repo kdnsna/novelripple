@@ -11,6 +11,7 @@ import {
   SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
   SettingDeltaSubjectSchema,
   ProjectIdSchema,
+  WorldlineHeadSchema,
   StoryMapRevisionChangeSchema,
   StoryMapGenerationStartModeSchema,
   type ContinuationDirectionsArtifact,
@@ -23,6 +24,7 @@ import {
   type StoryMapArtifact,
   type Worldline,
   type WorldlineBookmark,
+  type WorldlineCharacterStatusOverride,
 } from "@/domain/schemas";
 import { isSettingDeltaError } from "@/domain/continuation/setting-delta-error";
 import {
@@ -50,9 +52,13 @@ import {
 import {
   createWorldlineBookmark,
   deleteWorldlineBookmark,
-  isReadingPositionError,
+  readingPositionErrorMessage,
   setWorldlineHeadNode,
 } from "@/server/repositories/reading-position-repository";
+import {
+  createCharacterStatusOverride,
+  isCharacterStatusOverrideError,
+} from "@/server/repositories/character-status-repository";
 import {
   confirmStoryMapArtifact,
   createStoryMapRevision,
@@ -612,7 +618,7 @@ const SetWorldlineHeadInputSchema = z
   .object({
     projectId: ProjectIdSchema,
     worldlineId: z.string().min(1),
-    headNodeId: z.string().min(1).nullable(),
+    head: WorldlineHeadSchema.nullable(),
   })
   .strict();
 
@@ -632,7 +638,13 @@ export async function setWorldlineHeadAction(
     const worldline = setWorldlineHeadNode(parsed.data);
     return { ok: true, worldline };
   } catch (error) {
-    return { ok: false, error: readingPositionErrorMessage(error) };
+    return {
+      ok: false,
+      error: readingPositionErrorMessage(
+        error,
+        "阅读位置保存失败，未写入任何数据。",
+      ),
+    };
   }
 }
 
@@ -662,7 +674,10 @@ export async function createWorldlineBookmarkAction(
     revalidatePath(`/projects/${parsed.data.projectId}`);
     return { ok: true, bookmark };
   } catch (error) {
-    return { ok: false, error: readingPositionErrorMessage(error) };
+    return {
+      ok: false,
+      error: readingPositionErrorMessage(error, "书签保存失败，请重试。"),
+    };
   }
 }
 
@@ -690,14 +705,47 @@ export async function deleteWorldlineBookmarkAction(
     revalidatePath(`/projects/${parsed.data.projectId}`);
     return { ok: true, bookmarkId: parsed.data.bookmarkId };
   } catch (error) {
-    return { ok: false, error: readingPositionErrorMessage(error) };
+    return {
+      ok: false,
+      error: readingPositionErrorMessage(error, "书签删除失败，请重试。"),
+    };
   }
 }
 
-function readingPositionErrorMessage(error: unknown): string {
-  if (error instanceof z.ZodError) {
-    return "阅读位置或书签参数无效。";
+
+const SetCharacterStatusOverrideInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    anchorSceneId: z.string().min(1).nullable(),
+    characterId: z.string().min(1),
+    status: z.enum(["alive", "dead", "absent", "unknown"]),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export type CharacterStatusOverrideActionResult =
+  | { ok: true; override: WorldlineCharacterStatusOverride }
+  | { ok: false; error: string };
+
+/** 追加读者人物状态覆盖；只写新行，不更新既有路径状态。 */
+export async function setCharacterStatusOverrideAction(
+  input: unknown,
+): Promise<CharacterStatusOverrideActionResult> {
+  const parsed = SetCharacterStatusOverrideInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "人物状态参数无效，请刷新后重试。" };
   }
-  if (isReadingPositionError(error)) return error.message;
-  return "阅读位置保存失败，未写入任何数据。";
+  try {
+    const override = createCharacterStatusOverride(parsed.data);
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, override };
+  } catch (error) {
+    return {
+      ok: false,
+      error: isCharacterStatusOverrideError(error)
+        ? error.message
+        : "人物状态保存失败，请重试。",
+    };
+  }
 }

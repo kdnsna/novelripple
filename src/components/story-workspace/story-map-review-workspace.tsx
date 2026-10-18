@@ -35,6 +35,7 @@ import {
   type StoryMapRevisionChange,
   type Worldline,
   type WorldlineBookmark,
+  type WorldlineCharacterStatusOverride,
 } from "@/domain/schemas";
 import { RippleSimulatorPanel } from "./ripple-simulator-panel";
 import { SourceReader } from "./source-reader";
@@ -60,6 +61,7 @@ type StoryMapReviewWorkspaceProps = {
   initialRippleSuggestionBatches: RippleSuggestionsArtifact[];
   initialContinuationTrees: ContinuationTreeView[];
   initialWorldlineBookmarks: WorldlineBookmark[];
+  initialCharacterStatusOverrides: WorldlineCharacterStatusOverride[];
   rippleSuggestionBatchLimit: number;
 };
 
@@ -87,6 +89,7 @@ export function StoryMapReviewWorkspace({
   initialRippleSuggestionBatches,
   initialContinuationTrees,
   initialWorldlineBookmarks,
+  initialCharacterStatusOverrides,
   rippleSuggestionBatchLimit,
 }: StoryMapReviewWorkspaceProps) {
   const router = useRouter();
@@ -737,6 +740,9 @@ export function StoryMapReviewWorkspace({
               initialContinuation={activeContinuation!}
               initialBookmarks={initialWorldlineBookmarks.filter(
                 (bookmark) => bookmark.worldlineId === activeWorldline.id,
+              )}
+              initialCharacterStatusOverrides={initialCharacterStatusOverrides.filter(
+                (override) => override.worldlineId === activeWorldline.id,
               )}
               autoRootDirections={{
                 loading:

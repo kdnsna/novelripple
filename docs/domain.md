@@ -96,7 +96,7 @@ Story Map 生成不再占用一次同步 Server Action。用户点击生成后�
 
 Story Map 中可被事件引用的人物实体。Character 在所属 Story Map 版本内有唯一 ID，`role` 取 `protagonist` / `antagonist` / `supporting` / `minor` / `deceased`；`minor` 表示只短暂出现、无名、边缘或不确定是否重要的具体人物，仍与主要人物一样必须参与至少一个有 Evidence 的 Event。当前不在 Character 上复制独立 Evidence：可作为剧情事实使用的人物状态必须写入带 Evidence 的 Event；`role` 与 `initialState` 只用于地图浏览和提取定向，不能脱离相关 Event 充当 Canon 事实。别名可以归到同一 Character，但不确定的合并不得静默发生。Character split 只有真实 benchmark 记录明确需求后才实现；M1-04 没有取得该证据。
 
-`role` 是叙事功能，**不是**任一世界线路径上的运行状态；`deceased` 不会因分支事件被改写，也不迁移旧 Story Map。分歧后人物在某条路径上是否在世、在场，由可选 `statePatch.characterChanges[].status` 表示（`alive` / `dead` / `absent` / `unknown`）：旧 Artifact 没有该字段仍可解析，沿路径最后一条显式值生效，未设置的变化不清空更早状态，整条路径从未设置时为 `null`，绝不从 `role` 推断。
+`role` 是叙事功能，**不是**任一世界线路径上的运行状态；`deceased` 不会因分支事件被改写，也不迁移旧 Story Map。分歧后人物在某条路径上是否在世、在场，由场景 `statePatch.characterChanges[].status` 表示（`alive` / `dead` / `absent` / `unknown`）。Impact Plan 的 `characterChanges` 只有 `characterId` + `summary`，没有 status；场景变化使用可空 status：旧 Artifact 没有该字段仍可解析，`null` 与缺省都表示本场景没有改变状态，沿路径最后一个**显式非 null** 值生效，整条路径从未设置时为 `unknown`，绝不从 `role` 推断。折叠由唯一的 `derivePathCharacterStatuses` 完成：原著基线（分歧前 fact 事件中的确定性死亡启发式，排除推断/否定句/分歧事件自身及之后事件）→ `baseDelta` → 分歧点读者覆盖 → 每个路径场景（statePatch 后应用锚在该场景的读者覆盖）。读者覆盖是只追加的 Worldline 行，锚点为 null 或位于当前路径才生效；同一人物同一锚点取最新。
 
 ## Event
 
@@ -208,7 +208,7 @@ Source → Story Map version → Divergence → accepted Impact Plan → Worldli
 
 接受操作必须在同一事务中按顺序写入：`accepted Impact Plan revision → 幂等 Canonical Worldline → 子 Worldline`。Canonical 和子分支都使用确定性幂等标识；重复接受必须返回同一组记录。任一校验、Anchor 或写入失败时整个事务回滚。
 
-Worldline 行另有两个阅读游标，它们不是叙事 Artifact，也不进入 Delta 或生成上下文：`headNodeId` 记录最近阅读的场景（`null` 表示默认路径/分歧点，旧行迁移后为 `null`；canonical 只能为 `null`），`worldline_bookmarks` 保存命名书签（`scene_node_id` 为 `null` 表示分歧点）。这是 Artifact/revision 不可变合同之外唯一允许 UPDATE/删除的指针数据；非空场景 id 必须属于同一项目与 Worldline 且是已生成的场景，否则写入 fail closed，不建 artifacts 外键。书签名做 NFC + trim 后必须为 1–40 字符且同一 Worldline 内唯一；删除未知书签 fail closed。
+Worldline 行另有两个阅读游标，它们不是叙事 Artifact，也不进入 Delta 或生成上下文：`head_kind` + `head_node_id` 记录最近阅读位置——`head_kind = null` 表示从未设置（首次进入走默认路径），`root` 表示明确停在分歧点，`scene` 表示某个场景；旧行迁移后为 null，canonical 只能为 null。`worldline_bookmarks` 保存命名书签（`scene_node_id` 为 `null` 表示分歧点）。这是 Artifact/revision 不可变合同之外唯一允许 UPDATE/删除的指针数据；非空场景 id 必须属于同一项目与 Worldline 且是已生成的场景（directions 等其它 Artifact 或兄弟世界线场景都 fail closed），不建 artifacts 外键，Worldline 删除时级联清理书签。书签名做 NFC + trim 后必须为 1–40 字符，并拒绝零宽、bidi 控制符与换行等不可见/畸形字符；同一 Worldline 内唯一，每条 Worldline 最多 50 个书签。删除未知书签 fail closed。
 
 ## Continuation
 
@@ -229,7 +229,7 @@ Continuation 分为两个固定阶段，不是 Agent：
 
 Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta（`baseDelta`）。当前路径状态是 `baseDelta` 沿根节点到当前节点的 `statePatch` 依次折叠的结果：只读取该路径上的节点，不读取兄弟节点、世界线中路径外的场景或未来节点。折叠沿用上述 `statePatch` 语义。路径必须同属一个 Worldline、父子链连续、`depth` 逐级加一，否则 fail closed。因此兄弟分支的状态互不可见，任一节点只影响它的后代路径。
 
-人物路径状态在上述折叠之外单独汇总 `currentStatus`：按 `baseDelta` → 根→当前节点顺序收集所有显式 `status`，最后一条生效；只写 summary 的变化保留此前状态，从未出现则为 `null`。人物时间线的 `current` 仍与 `derivePathState` 的最终 summary 一致。界面只在非 `null` 时显示「在世 / 已故 / 不在场 / 未知」，`Character.role` 不参与该派生。
+人物路径状态不再独立折叠，而是由 `derivePathCharacterStatuses` 在上述路径状态之上汇总 `currentStatus` 与来源：原著推断基线 → `baseDelta` → 分歧点读者覆盖 → 路径场景的显式非 null `status` → 锚在该场景的读者覆盖。只写 summary 的变化保留此前状态；整条路径从未出现非默认状态时为 `unknown`。`applyStatePatch` 的共享合并规则保证 `derivePathState` 自身也不会因后续 null/缺省 status 丢掉更早状态。人物时间线的 `current` 仍与 `derivePathState` 的最终 summary 一致。界面显示「在世 / 已故 / 不在场 / 未知」及来源（原著推断 / 影响计划 / 第 n 幕 / 读者设定 / 默认），`Character.role` 不参与该派生。完整与紧凑 `worldline_setup` 都携带同一份 `characterStatuses`（只含 characterId/status/source），未列出的角色为 `unknown`。
 
 ### 路径作用域设定增量
 
@@ -292,7 +292,7 @@ v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 
 | 无（0011 前的 `worldline_setup.settingDeltas`） | `setting_deltas` | 新增独立可裁剪段：当前路径生效的读者规则，每条带 delta id 与“主体（作用域）：说明”；写时限制 ≤20 个生效主体、序列化 ≤2000 规范化字符，超预算时从最浅/最旧开始整条丢弃 |
 | `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；非 pinned 条目最后丢弃；分歧事件自身及其直接依赖的分歧前事件证据为 pinned，永不裁剪并进入必需下限 |
 | `styleContext.representativeExcerpts` / `styleContext.characterEvidence` | `canon_evidence` 的后半部分 | 仍由 `selectContinuationContext` 选择；排在相关事件证据之后，先被裁剪 |
-| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要（不确定项带 `uncertain: true`）/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
+| `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要（不确定项带 `uncertain: true`）/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态与 `currentState.characterStatuses[]`（characterId/status/source）；`stage` 由 Prompt 版本承担，不再重复 |
 | 无 | `path_summary` | 新增：当前路径较早场景的确定性滚动摘要 |
 | 无 | `recent_scenes` | 新增：当前路径最近 2 个场景正文 |
 | 无 | `anchor_reminder` | 新增：从 Prompt 模板移到上下文末尾的严格/开放 Anchor 与 statePatch 约束 |

@@ -2765,6 +2765,29 @@ input:focus-visible,
   color: var(--rust-dark);
 }
 
+.path-character-status-source {
+  margin-left: 0.3rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+}
+
+.path-character-status-select {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+}
+
+.path-character-status-select select {
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.68rem;
+}
+
 .reading-position-status,
 .worldline-bookmark-empty {
   margin: 0;

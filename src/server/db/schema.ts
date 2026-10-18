@@ -216,7 +216,8 @@ export const worldlines = sqliteTable(
     acceptedImpactPlanId: text("accepted_impact_plan_id").references(
       () => artifacts.id,
     ),
-    /** 阅读游标：最近一次阅读的场景；null 表示默认路径/分歧点。 */
+    /** 阅读游标：null 表示从未设置；root/scene 区分分歧点与场景。 */
+    headKind: text("head_kind", { enum: ["root", "scene"] }),
     headNodeId: text("head_node_id"),
     idempotencyKey: text("idempotency_key").notNull(),
     status: text("status", {
@@ -259,5 +260,36 @@ export const worldlineBookmarks = sqliteTable(
       table.name,
     ),
     index("worldline_bookmarks_worldline_idx").on(table.worldlineId),
+  ],
+);
+
+
+/**
+ * 读者对人物状态的分路径覆盖。只追加，不 UPDATE/DELETE；同一
+ * (worldline_id, idempotency_key) 唯一，保证重试幂等。
+ */
+export const worldlineCharacterStatusOverrides = sqliteTable(
+  "worldline_character_status_overrides",
+  {
+    id: text("id").primaryKey(),
+    worldlineId: text("worldline_id")
+      .notNull()
+      .references(() => worldlines.id, { onDelete: "cascade" }),
+    anchorSceneId: text("anchor_scene_id"),
+    characterId: text("character_id").notNull(),
+    status: text("status", {
+      enum: ["alive", "dead", "absent", "unknown"],
+    }).notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("worldline_character_status_overrides_idempotency_unique").on(
+      table.worldlineId,
+      table.idempotencyKey,
+    ),
+    index("worldline_character_status_overrides_worldline_idx").on(
+      table.worldlineId,
+    ),
   ],
 );

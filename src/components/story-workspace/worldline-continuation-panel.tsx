@@ -7,6 +7,7 @@ import {
   deleteWorldlineBookmarkAction,
   generateContinuationDirectionsAction,
   generateContinuationSceneAction,
+  setCharacterStatusOverrideAction,
   setWorldlineHeadAction,
 } from "@/app/projects/actions";
 import {
@@ -16,12 +17,12 @@ import {
 } from "@/domain/continuation/scene-tree";
 import {
   assertHeadOnTree,
-  headNodeIdFromReadingPosition,
+  headFromReadingPosition,
   readingPositionFromHead,
 } from "@/domain/continuation/reading-position";
+import { derivePathCharacterStatuses } from "@/domain/continuation/character-status";
 import {
   buildWorldlineTreeOutline,
-  derivePathCharacterTimeline,
   latestBatchForParent,
   listDirectionOptions,
   resolveReadingPath,
@@ -34,6 +35,7 @@ import {
 } from "@/domain/continuation/setting-deltas";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import type {
+  CharacterStatus,
   ContextManifest,
   ContextManifestSectionKind,
   ContinuationSceneArtifact,
@@ -41,6 +43,7 @@ import type {
   StoryMapArtifact,
   Worldline,
   WorldlineBookmark,
+  WorldlineCharacterStatusOverride,
 } from "@/domain/schemas";
 import {
   appendContinuationArtifact,
@@ -73,6 +76,7 @@ type WorldlineContinuationPanelProps = {
   acceptedImpactPlanArtifact: ImpactPlanArtifact;
   initialContinuation: ContinuationTreeView;
   initialBookmarks: WorldlineBookmark[];
+  initialCharacterStatusOverrides: WorldlineCharacterStatusOverride[];
   autoRootDirections: AutoRootDirections;
   onRetryRootDirections: () => void;
   onClose: () => void;
@@ -96,6 +100,7 @@ export function WorldlineContinuationPanel({
   acceptedImpactPlanArtifact,
   initialContinuation,
   initialBookmarks,
+  initialCharacterStatusOverrides,
   autoRootDirections,
   onRetryRootDirections,
   onClose,
@@ -108,14 +113,14 @@ export function WorldlineContinuationPanel({
     position: ReadingPosition;
     error: string | null;
   } => {
-    if (worldline.headNodeId === null) {
+    if (worldline.head === null) {
       return { position: { kind: "default" }, error: null };
     }
     try {
       const initialTree = buildSceneTree(initialContinuation.scenes);
-      assertHeadOnTree(initialTree, worldline.headNodeId);
+      assertHeadOnTree(initialTree, worldline.head);
       return {
-        position: readingPositionFromHead(worldline.headNodeId),
+        position: readingPositionFromHead(worldline.head),
         error: null,
       };
     } catch {
@@ -124,7 +129,7 @@ export function WorldlineContinuationPanel({
         error: "已保存的阅读位置已失效，已回到默认路径；数据库未被改动。",
       };
     }
-  }, [initialContinuation.scenes, worldline.headNodeId]);
+  }, [initialContinuation.scenes, worldline.head]);
 
   const [view, setView] = useState(initialContinuation);
   const [position, setPosition] = useState<ReadingPosition>(
@@ -133,6 +138,12 @@ export function WorldlineContinuationPanel({
   const [bookmarks, setBookmarks] = useState<WorldlineBookmark[]>(
     initialBookmarks,
   );
+  const [characterStatusOverrides, setCharacterStatusOverrides] = useState<
+    WorldlineCharacterStatusOverride[]
+  >(initialCharacterStatusOverrides);
+  const [statusPendingCharacterId, setStatusPendingCharacterId] = useState<
+    string | null
+  >(null);
   const [bookmarkName, setBookmarkName] = useState("");
   const [bookmarkPending, setBookmarkPending] = useState(false);
   const [headStatus, setHeadStatus] = useState<"idle" | "saving" | "saved">(
@@ -221,13 +232,13 @@ export function WorldlineContinuationPanel({
         storyMap,
       });
       const pathState = derivePathState(baseDelta, currentPath);
-      const characters = derivePathCharacterTimeline({
+      if (!worldline.divergence) throw new Error("缺少分歧点");
+      const characters = derivePathCharacterStatuses({
+        storyMap,
+        divergence: worldline.divergence,
         baseDelta,
         path: currentPath,
-        characters: storyMap.characters.map((character) => ({
-          id: character.id,
-          name: character.name,
-        })),
+        overrides: characterStatusOverrides,
       });
       return { baseDelta, pathState, characters, error: null as string | null };
     } catch {
@@ -238,7 +249,34 @@ export function WorldlineContinuationPanel({
         error: "无法沿当前路径推导状态，请刷新或返回 Evidence 后重试。",
       };
     }
-  }, [currentPath, plan, storyMap, worldline]);
+  }, [characterStatusOverrides, currentPath, plan, storyMap, worldline]);
+
+  async function setCharacterStatus(
+    characterId: string,
+    status: CharacterStatus,
+  ): Promise<void> {
+    if (statusPendingCharacterId !== null) return;
+    setStatusPendingCharacterId(characterId);
+    try {
+      const result = await setCharacterStatusOverrideAction({
+        projectId,
+        worldlineId: worldline.id,
+        anchorSceneId: currentNodeId,
+        characterId,
+        status,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setCharacterStatusOverrides((current) => [...current, result.override]);
+    } catch {
+      setError("人物状态保存失败，请重试。");
+    } finally {
+      setStatusPendingCharacterId(null);
+    }
+  }
 
   const directionOptions = useMemo(
     () =>
@@ -311,14 +349,14 @@ export function WorldlineContinuationPanel({
    * 最终保存的是最后一次点击；失败只提示，不回滚本地阅读位置。
    */
   function persistHead(next: ReadingPosition): void {
-    const headNodeId = headNodeIdFromReadingPosition(next);
+    const head = headFromReadingPosition(next);
     const sequence = ++headWriteSeq.current;
     setHeadStatus("saving");
     const write = headWriteQueue.current.then(async () => {
       const result = await setWorldlineHeadAction({
         projectId,
         worldlineId: worldline.id,
-        headNodeId,
+        head,
       });
       if (sequence !== headWriteSeq.current) return;
       if (!result.ok) {
@@ -685,7 +723,11 @@ export function WorldlineContinuationPanel({
       </section>
 
       {!pathDerivation.error && pathDerivation.pathState ? (
-        <PathCharacterStates states={pathDerivation.characters} />
+        <PathCharacterStates
+          states={pathDerivation.characters}
+          pendingCharacterId={statusPendingCharacterId}
+          onSetStatus={setCharacterStatus}
+        />
       ) : null}
 
       <PathSettingDeltas

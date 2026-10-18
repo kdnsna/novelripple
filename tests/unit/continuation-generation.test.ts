@@ -21,7 +21,12 @@ import {
   renderSettingDeltaContextText,
   settingDeltaActiveFingerprint,
 } from "@/domain/continuation/setting-deltas";
-import { buildSceneTree } from "@/domain/continuation/scene-tree";
+import {
+  buildSceneTree,
+  derivePathState,
+  getScenePath,
+} from "@/domain/continuation/scene-tree";
+import { derivePathCharacterStatuses } from "@/domain/continuation/character-status";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import type {
   AIProvider,
@@ -33,10 +38,12 @@ import {
   generateConfiguredContinuationScene,
 } from "@/server/continuation/generate-configured-continuation";
 import {
+  compactCurrentState,
   generateContinuationDirections,
   generateContinuationScene,
   readContinuationContextMaxChars,
 } from "@/server/continuation/generate-continuation";
+import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import {
@@ -370,7 +377,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === scene.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-scene.v6");
+    ).toBe("continuation-scene.v7");
     expect(sceneProvider.requests[0]?.prompt).toContain(selectedDirection.title);
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_events>");
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_evidence>");
@@ -582,6 +589,134 @@ describe("Continuation scene tree generation", () => {
     );
     expect(recentScenes?.included).toBe(true);
     expect(recentScenes?.chars).toBeGreaterThan(0);
+  });
+
+  it("keeps folded dead status in full and compact prompt after status-less changes", async () => {
+    const context = await createAcceptedWorldline();
+    const rootDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const rootDirection =
+      rootDirections.artifact.continuation.directions[0]!;
+    const rootOutput = makeSceneOutput({
+      title: "潮标站的第一夜",
+      factKey: "generated:status_root",
+      factStatement: "许澄在潮标站的第一夜留下封条记录。",
+    });
+    rootOutput.statePatch.characterChanges = [
+      {
+        characterId: "char_xucheng",
+        summary: "许澄在第一夜倒下。",
+        status: "dead",
+      },
+    ];
+    const rootScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: rootDirections.artifact.id,
+      selectedDirectionId: rootDirection.id,
+      provider: new MockAIProvider([JSON.stringify(rootOutput)]),
+      modelConfig,
+    });
+
+    const childDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      parentSceneId: rootScene.artifact.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const childDirection =
+      childDirections.artifact.continuation.directions[0]!;
+    const childOutput = makeSceneOutput({
+      title: "旧灯塔的追忆",
+      factKey: "generated:status_child",
+      factStatement: "旧灯塔的灯室里有人提起许澄。",
+    });
+    // 只写 summary、不写 status：不得清空第一幕的 dead。
+    childOutput.statePatch.characterChanges = [
+      {
+        characterId: "char_xucheng",
+        summary: "有人提起许澄，但没有新消息。",
+      },
+    ];
+    const childScene = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: childDirections.artifact.id,
+      selectedDirectionId: childDirection.id,
+      provider: new MockAIProvider([JSON.stringify(childOutput)]),
+      modelConfig,
+    });
+
+    const grandDirectionsProvider = new MockAIProvider([
+      JSON.stringify(directionOutput),
+    ]);
+    await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      parentSceneId: childScene.artifact.id,
+      provider: grandDirectionsProvider,
+      modelConfig,
+    });
+    const prompt = grandDirectionsProvider.requests[0]?.prompt ?? "";
+    const setup = JSON.parse(promptSection(prompt, "worldline_setup")) as {
+      currentState: {
+        characterStatuses: Array<{
+          characterId: string;
+          status: string;
+          source: string;
+        }>;
+      };
+    };
+    const statuses = setup.currentState.characterStatuses;
+    expect(statuses).toContainEqual({
+      characterId: "char_xucheng",
+      status: "dead",
+      source: "scene",
+    });
+    expect(prompt).toContain('"status":"dead"');
+
+    // Prompt 与 UI 折叠结果完全一致。
+    const tree = buildSceneTree([
+      rootScene.artifact.continuation,
+      childScene.artifact.continuation,
+    ]);
+    const path = getScenePath(tree, childScene.artifact.id);
+    const baseDelta = deriveWorldlineDelta({
+      worldline: context.worldline,
+      impactPlan: context.acceptedArtifact.impactPlan,
+      storyMap: context.storyMapArtifact.storyMap,
+    });
+    const divergence = context.worldline.divergence;
+    if (!divergence) throw new Error("expected divergence");
+    const expected = derivePathCharacterStatuses({
+      storyMap: context.storyMapArtifact.storyMap,
+      divergence,
+      baseDelta,
+      path,
+      overrides: [],
+    }).map((character) => ({
+      characterId: character.characterId,
+      status: character.status,
+      source: character.source,
+    }));
+    expect(statuses).toEqual(expected);
+
+    // 紧凑 currentState 保留同一份 characterStatuses（status 不被裁剪）。
+    const compact = compactCurrentState(
+      derivePathState(baseDelta, path),
+      expected,
+    );
+    expect(compact.characterStatuses).toEqual(expected);
+    expect(compact.characterStatuses).toContainEqual({
+      characterId: "char_xucheng",
+      status: "dead",
+      source: "scene",
+    });
   });
 
   it("keeps every related Canon event and evidence excerpt for root and depth-2 scenes", async () => {

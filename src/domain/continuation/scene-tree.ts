@@ -5,6 +5,7 @@ import {
   type ContinuationCanonWarning,
   type ContinuationSceneV1,
   type ContinuationSceneV2,
+  type CharacterStatus,
   type StatePatch,
   type WorldlineDelta,
 } from "@/domain/schemas";
@@ -147,12 +148,43 @@ export function getScenePath(tree: SceneTree, nodeId: string): SceneNode[] {
 }
 
 /**
+ * 折叠同一人物的相邻变化：summary 总是由新变化替换，status 只在新的
+ * 非 null 值出现时覆盖；`null` 与缺省都表示“本场景没有改变状态”。
+ *
+ * 这是 UI 与 Prompt 共用的唯一人物状态合并规则，折叠结果只保存非 null
+ * status，避免把“未改变”写成会覆盖更早状态的显式值。
+ */
+export function mergeCharacterChange(
+  previous:
+    | { characterId: string; summary: string; status?: CharacterStatus | null }
+    | undefined,
+  next: {
+    characterId: string;
+    summary: string;
+    status?: CharacterStatus | null;
+  },
+): { characterId: string; summary: string; status?: CharacterStatus } {
+  const status =
+    next.status !== undefined && next.status !== null
+      ? next.status
+      : previous?.status !== undefined && previous.status !== null
+        ? previous.status
+        : undefined;
+  return {
+    characterId: next.characterId,
+    summary: next.summary,
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
+/**
  * 把一个场景的 statePatch 折叠进当前路径状态。
  *
  * 语义与 `validateContinuationStatePatch` 对齐：
  * - 新增事实追加；删除事实进入 `factsRemoved`，并从 `factsAdded` 中移除；
  * - 线索保持 `open = threadsOpened − threadsClosed`，重新开启会从 closed 移除；
- * - 同一人物后来的变化替换先前变化。
+ * - 同一人物后来的 summary 替换先前 summary；显式非 null status 覆盖，
+ *   null/缺省保留更早状态（见 `mergeCharacterChange`）。
  *
  * 结果始终通过 `WorldlineDeltaSchema`，因此不会产生重复 key。
  */
@@ -212,7 +244,10 @@ export function applyStatePatch(
     current.characterChanges.map((change) => [change.characterId, change]),
   );
   for (const change of parsedPatch.characterChanges) {
-    characterChanges.set(change.characterId, change);
+    characterChanges.set(
+      change.characterId,
+      mergeCharacterChange(characterChanges.get(change.characterId), change),
+    );
   }
 
   return WorldlineDeltaSchema.parse({
