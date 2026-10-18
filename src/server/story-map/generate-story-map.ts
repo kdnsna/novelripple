@@ -85,7 +85,7 @@ export const STORY_MAP_PROMPT_VERSIONS = {
   glean: "story-map-glean.v5",
   names: "story-map-names.v2",
   endings: "story-map-endings.v2",
-  merge: "story-map-merge.v6",
+  merge: "story-map-merge.v5",
 } as const;
 
 /** 结局轮次读取的全书末尾比例（按自然段数）。 */
