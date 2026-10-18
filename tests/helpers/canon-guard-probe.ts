@@ -165,8 +165,8 @@ export const CANON_GUARD_LEGITIMATE = [
 ] as const;
 
 /**
- * 31 条对白/谎言/传闻/怀疑/角色断言/愿望/被转述/冒号直接引语，以及逗号
- * 引出的无引号话语、后置引述与整段配对的多句引语的句子。
+ * 37 条对白/谎言/传闻/怀疑/角色断言/愿望/被转述/冒号直接引语，以及逗号
+ * 引出的无引号话语、后置引述、整段配对的多句引语与嵌套引语的句子。
  *
  * 这些句子里的“未发生/不存在/是假的”属于角色话语或叙述者的不确定转述，
  * 不是叙述者的直接断言；只允许 warning，必须 0 条硬拒绝。
@@ -210,6 +210,14 @@ export const CANON_GUARD_DIALOGUE_LIE = [
   "“交出钥匙之后，他离开了小岛。交出钥匙从来没有发生过。”老人说。",
   // 上一轮作为“框架在前分句”的硬拒绝样本；决策 B 下它是角色转述，移入本集。
   "她坚称，交出钥匙从来没有发生过。",
+  // PR #15 第 5 轮：大叫/尖叫/高声道等复合言语动词、`道` 的结构区分、
+  // 20 字长定语主语，以及不同风格嵌套引语。
+  "船工大叫，灯塔熄灭根本没有发生过。",
+  "她尖叫，交出钥匙从未发生过！",
+  "他高声道，交出钥匙根本没有发生过。",
+  "老人道，灯塔熄灭从未发生过。",
+  "那个总在码头边打盹的老更夫坚称，灯塔熄灭从未发生过。",
+  "“他低声道：『灯塔熄灭从未发生过。』”",
 ] as const;
 
 /**
@@ -248,6 +256,30 @@ export const CANON_GUARD_FRAME_THEN_NARRATOR = [
   "他坚称，可灯塔熄灭从未发生过。",
   "结论只有一个：灯塔熄灭从未发生过。",
   "他可能记错了，灯塔熄灭从未发生过。",
+  // PR #15 第 5 轮：量词 + 道结尾的叙述分句不是“说道”，后面的叙述者否定仍硬拒绝。
+  "他走上那条道，灯塔熄灭从未发生过。",
+] as const;
+
+/**
+ * 7 条 fail-closed 引号探针：开引号未闭合、风格混用、跨段孤立开/闭引号、
+ * 段首未闭合与撇号误用都不能遮蔽后面的叙述者否定，因此整组必须硬拒绝。
+ * 单独的 `’` 按撇号忽略，不会让同一句里的坏引号被漏掉。
+ */
+export const CANON_GUARD_BROKEN_QUOTE_NARRATOR = [
+  // 段落中间一个多余开引号、没有闭合。
+  "夜色渐深，“灯塔熄灭从未发生过。",
+  // 中英引号混用：“…” 永远等不到对应的 ”，」 是孤立关闭引号。
+  "“灯塔熄灭从未发生过。」",
+  // 第一段孤立开引号、第二段叙述者否定、第三段孤立闭引号：不能跨段配对。
+  "“他离开了码头。\n灯塔熄灭从未发生过。\n她回来了。」",
+  // 段首开引号整段没有闭合：按 fail-closed 策略按旁白处理。
+  "“灯塔熄灭从未发生过。海面很安静。",
+  // 单独的 ’ 是撇号；同一段里的坏开引号仍不覆盖否定。
+  "海风’很冷，“灯塔熄灭从未发生过。",
+  // 单独的 ‘ 没有闭合，不遮蔽任何内容。
+  "海风很冷，‘灯塔熄灭从未发生过。",
+  // 只有孤立关闭引号时同样不能遮蔽叙述者否定。
+  "灯塔熄灭从未发生过。」",
 ] as const;
 
 /**
@@ -295,6 +327,8 @@ export type CanonGuardProbeStats = {
   dialogueWarnings: number;
   /** 框架在前一分句、叙述者否定在后一分句的样本中被硬拒绝的数量。 */
   frameThenNarratorCaught: number;
+  /** fail-closed 引号样本（坏引号不能遮蔽叙述者否定）中被硬拒绝的数量。 */
+  brokenQuoteNarratorCaught: number;
   /** 评审方类别对白样本中被硬拒绝的数量（必须为 0）。 */
   reviewerDialogueHardRejects: number;
   /** 评审方类别对白样本中出现 warning 的数量。 */
@@ -317,6 +351,7 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
   const dialogue = CANON_GUARD_DIALOGUE_LIE.map(evaluate);
   const reviewerDialogue = CANON_GUARD_REVIEWER_DIALOGUE.map(evaluate);
   const frameThenNarrator = CANON_GUARD_FRAME_THEN_NARRATOR.map(evaluate);
+  const brokenQuoteNarrator = CANON_GUARD_BROKEN_QUOTE_NARRATOR.map(evaluate);
   const neutral = evaluate(CANON_GUARD_NEUTRAL_PROSE);
   return {
     caught: shouldReject.filter((result) => result.issues.length > 0).length,
@@ -334,6 +369,9 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
     dialogueWarnings: dialogue.filter((result) => result.warnings.length > 0)
       .length,
     frameThenNarratorCaught: frameThenNarrator.filter(
+      (result) => result.issues.length > 0,
+    ).length,
+    brokenQuoteNarratorCaught: brokenQuoteNarrator.filter(
       (result) => result.issues.length > 0,
     ).length,
     reviewerDialogueHardRejects: reviewerDialogue.filter(

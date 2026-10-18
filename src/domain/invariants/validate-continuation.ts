@@ -238,6 +238,15 @@ export type ContinuationCanonHardRejection = {
   eventId: string;
   title: string;
   field: string;
+  /** 模型输出中真正命中的那句话（trim 后最多约 60 字，超出以 … 截断）。 */
+  sentence: string;
+  /**
+   * 该句所在段落是否存在未闭合/孤立/风格错配的引号。
+   *
+   * 按 fail-closed 策略，这种段落里的引号不遮蔽任何内容；服务端据此提示
+   * 读者“补全引号后重试即可”。
+   */
+  unpairedQuote: boolean;
 };
 
 /** 最终校验问题中的 Canon 硬拒绝标记；只用于服务端选择错误文案。 */
@@ -330,6 +339,8 @@ export function validateAgainstPreDivergenceCanon(input: {
           eventId: event.id,
           title: event.title,
           field: field.field,
+          sentence: signals.sentence ?? "",
+          unpairedQuote: signals.unpairedQuote,
         });
         continue;
       }
@@ -532,6 +543,9 @@ const CANON_SPEECH_VERBS = [
   "一口咬定",
   "矢口否认",
   "坚持说",
+  "高声道",
+  "大声说",
+  "大声道",
   "低声道",
   "轻声道",
   "冷笑道",
@@ -544,6 +558,18 @@ const CANON_SPEECH_VERBS = [
   "吼道",
   "笑道",
   "叹道",
+  "大叫",
+  "大喊",
+  "尖叫",
+  "高喊",
+  "怒吼",
+  "怒道",
+  "哭喊",
+  "哭道",
+  "惊叫",
+  "惊呼",
+  "呼喊",
+  "喊叫",
   "回答",
   "告诉",
   "询问",
@@ -639,7 +665,6 @@ const CANON_SPEECH_VERB_BLOCKED_BEFORE: Readonly<
     "外",
     "内",
     "王",
-    "说",
     "古",
     "山",
     "河",
@@ -654,13 +679,6 @@ const CANON_SPEECH_VERB_BLOCKED_BEFORE: Readonly<
     "小",
     "传",
     "学",
-    "解",
-    "游",
-    "诉",
-    "演",
-    "叙",
-    "胡",
-    "瞎",
     "虽",
     "照",
     "按",
@@ -671,23 +689,80 @@ const CANON_SPEECH_VERB_BLOCKED_BEFORE: Readonly<
     "学",
     "疑",
     "访",
-    "询",
     "过",
     "慰",
     "拷",
     "审",
-    "提",
-    "发",
-    "责",
-    "质",
     "顾",
-    "借",
     "设",
   ]),
-  答: new Set(["解", "报", "作", "应"]),
-  喊: new Set(["尖", "呐", "高", "大"]),
-  叫: new Set(["尖", "喊", "哭", "鸣", "大", "小", "狗", "鸡", "猫", "嗷", "嚎"]),
+  答: new Set(["解", "报"]),
+  叫: new Set(["鸣", "狗", "鸡", "猫", "嗷", "嚎"]),
 };
+
+/**
+ * 单字 `道` 的结构性判定：除了词法黑名单，量词/指示词/数字直接放在 `道`
+ * 前面时它属于名词（一道、这道、那条道），不能当作“说道”的 `道`。
+ */
+const CANON_DAO_MEASURE_OR_DETERMINER_CHARS = new Set([
+  "一",
+  "二",
+  "三",
+  "四",
+  "五",
+  "六",
+  "七",
+  "八",
+  "九",
+  "十",
+  "百",
+  "千",
+  "万",
+  "零",
+  "两",
+  "几",
+  "这",
+  "那",
+  "哪",
+  "每",
+  "某",
+  "条",
+  "个",
+]);
+
+/** `道` 前的言语类副词/动词字；命中时直接按言语动词处理。 */
+const CANON_DAO_SPEECH_PREFIX_CHARS = new Set([
+  "说",
+  "问",
+  "答",
+  "喊",
+  "叫",
+  "嚷",
+  "吼",
+  "笑",
+  "叹",
+  "低",
+  "轻",
+  "冷",
+  "怒",
+  "哭",
+  "惊",
+  "高",
+  "大",
+  "尖",
+  "忙",
+  "急",
+  "沉",
+  "缓",
+  "哑",
+  "颤",
+  "厉",
+  "朗",
+  "连",
+  "又",
+  "才",
+  "正",
+]);
 
 /** `说` 只有作为引述动词时才豁免；这些后续字说明它是“说完/说明/起来”等。 */
 const CANON_SAY_BLOCKED_FOLLOWERS = new Set(["完", "明", "起", "来", "法", "服"]);
@@ -721,6 +796,8 @@ const CANON_COUNTERFACTUAL_CLAUSE_DELIMITER = /[，,；;：:、]/u;
  *
  * 冒号直接跟在框架动词后时引入直接引语（`他说：…`、`据说：…`），引语到
  * 下一个句末标点/换行为止都由该框架治理；该特例由 `frameCueGoverns` 处理。
+ * ASCII `.` 已由 `splitSentenceSpans` 在切句时处理（小数点除外），因此这里
+ * 不把 `.` 当分句边界，避免把 `3.5` 拆成两个分句。
  */
 const CANON_GOVERNANCE_CLAUSE_DELIMITER = /[，,。；;！!？?、\n\r]/u;
 
@@ -732,28 +809,38 @@ const CANON_QUOTE_PAIRS: Readonly<Record<string, string>> = {
   '"': '"',
 };
 
-type CanonQuotedSpan = {
+export type QuotedSpan = {
   start: number;
-  /** 排他下标：成对引号包含闭引号，未闭合引号到换行（不含换行）。 */
+  /** 排他下标：成对引号包含闭引号。 */
   end: number;
-  closed: boolean;
+};
+
+type CanonRewriteSignals = {
+  hard: boolean;
+  weak: boolean;
+  /** 命中硬拒绝的原句（trim 后 ≤60 字）；未命中时为 null。 */
+  sentence: string | null;
+  /** 该句所在段落是否存在未闭合/孤立/风格错配的引号。 */
+  unpairedQuote: boolean;
 };
 
 function detectEventRewriteSignals(
   text: string,
   title: string,
-): { hard: boolean; weak: boolean } {
-  if (title.length < 2) return { hard: false, weak: false };
-  const sentencePattern = /[。！？!?；;\n\r]+/u;
-  // 先在整段文本上配对引号，再切句：多句引语里的第二句以后仍属于引号内容。
-  // 未闭合的开引号只遮蔽到换行（段落边界），不会吞掉后文。
+): CanonRewriteSignals {
+  if (title.length < 2) {
+    return { hard: false, weak: false, sentence: null, unpairedQuote: false };
+  }
+  // 先在整段文本上按 fail-closed 策略配对引号，再切句：同一段内跨句的
+  // 多句引语仍属于引号内容；未闭合/错配的引号不遮蔽任何文本。
   const { masked, quotedSpans } = maskQuotedSpans(text);
   let weak = false;
 
   // 弱线索仍在原文句子上判断：即使引号里的否定没有直接绑定标题（例如
   // 「灯塔熄灭之后，他说『从来没有发生过』」），也要给出 warning。硬拒绝
   // 只看遮蔽后的句子，因此引号内容永远不会升级为硬拒绝。
-  for (const sentence of text.split(sentencePattern)) {
+  for (const span of splitSentenceSpans(text)) {
+    const sentence = text.slice(span.start, span.end);
     if (!sentence.includes(title)) continue;
     const withoutTitle = sentence.split(title).join("");
     if (CANON_WEAK_CUES.some((cue) => withoutTitle.includes(cue))) {
@@ -764,23 +851,122 @@ function detectEventRewriteSignals(
   // 标题只在引号内出现时，masked 段里已经没有标题；引号内容单独检查是否
   // 足以命中，但只产生 warning。
   for (const span of quotedSpans) {
-    const inner = text.slice(
-      span.start + 1,
-      span.closed ? span.end - 1 : span.end,
-    );
+    const inner = text.slice(span.start + 1, span.end - 1);
     if (!inner.includes(title)) continue;
     if (hasExplicitOccurrenceNegation(inner, title) !== null) {
       weak = true;
     }
   }
 
-  for (const sentence of masked.split(sentencePattern)) {
+  for (const span of splitSentenceSpans(masked)) {
+    const sentence = masked.slice(span.start, span.end);
     if (!sentence.includes(title)) continue;
     const signal = hasExplicitOccurrenceNegation(sentence, title);
-    if (signal === "hard") return { hard: true, weak: false };
+    if (signal === "hard") {
+      const paragraph = paragraphRangeAt(text, span.start);
+      return {
+        hard: true,
+        weak: false,
+        sentence: sampleCanonSentence(text.slice(span.start, span.end)),
+        unpairedQuote: hasUnpairedQuote(
+          text.slice(paragraph.start, paragraph.end),
+        ),
+      };
+    }
     if (signal === "nonAssertive") weak = true;
   }
-  return { hard: false, weak };
+  return { hard: false, weak, sentence: null, unpairedQuote: false };
+}
+
+/** 把命中硬拒绝的整句压成服务端可安全展示的短样本（最多约 60 字）。 */
+function sampleCanonSentence(sentence: string): string {
+  const trimmed = sentence.trim();
+  const max = 60;
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max - 1)}…`;
+}
+
+/**
+ * Canon 切句终止符：全角/半角句末标点、换行、省略号与 ASCII `.`。
+ *
+ * ASCII `.` 夹在两个数字之间时是小数点（`3.5`），不是句末；连续的 `.`
+ * 与 `…` 按一个终止符处理，避免把 `...` 拆成多个空句。弱线索与硬拒绝都
+ * 必须调用 `splitSentenceSpans`，保证下游看到的是同一批句子。
+ */
+const CANON_SENTENCE_TERMINATORS = new Set([
+  "。",
+  "！",
+  "？",
+  "!",
+  "?",
+  "；",
+  ";",
+  "\n",
+  "\r",
+  "…",
+]);
+
+function isAsciiDigit(char: string | undefined): boolean {
+  return char !== undefined && char >= "0" && char <= "9";
+}
+
+function isCanonSentenceTerminatorAt(text: string, index: number): boolean {
+  const char = text[index]!;
+  if (char === ".") {
+    return !(
+      isAsciiDigit(text[index - 1]) && isAsciiDigit(text[index + 1])
+    );
+  }
+  return CANON_SENTENCE_TERMINATORS.has(char);
+}
+
+/** 判断一段文本里是否还有句末边界（小数点不算）。 */
+function hasCanonSentenceTerminator(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    if (isCanonSentenceTerminatorAt(text, index)) return true;
+  }
+  return false;
+}
+
+/** 切句但不丢下标；所有句末判断共用这一处。 */
+function splitSentenceSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
+  let index = 0;
+  while (index < text.length) {
+    if (!isCanonSentenceTerminatorAt(text, index)) {
+      index += 1;
+      continue;
+    }
+    if (index > cursor) spans.push({ start: cursor, end: index });
+    index += 1;
+    // 连续终止符（`...`、`……`、`！？`）只切一次。
+    while (
+      index < text.length &&
+      isCanonSentenceTerminatorAt(text, index)
+    ) {
+      index += 1;
+    }
+    cursor = index;
+  }
+  if (cursor < text.length) spans.push({ start: cursor, end: text.length });
+  return spans;
+}
+
+/** 返回下标所在段落（按 \n / \r\n / \r 切分）的 [start, end)。 */
+function paragraphRangeAt(
+  text: string,
+  index: number,
+): { start: number; end: number } {
+  let start = index;
+  while (start > 0 && !isLineBreak(text[start - 1]!)) start -= 1;
+  let end = index;
+  while (end < text.length && !isLineBreak(text[end]!)) end += 1;
+  return { start, end };
+}
+
+function isLineBreak(char: string): boolean {
+  return char === "\n" || char === "\r";
 }
 
 /**
@@ -1086,7 +1272,7 @@ function colonDirectlyAfter(
  * - 「他低声道，交出钥匙根本没有发生过。」
  * - 「老人道，灯塔熄灭从来没有发生过。」
  *
- * 分句必须以言语动词结尾（可带 道/着/了），前面的主语部分 ≤10 字且不再含
+ * 分句必须以言语动词结尾（可带 道/着/了），前面的主语部分 ≤20 字且不再含
  * 其它框架动词；「少年发誓要离开小岛，…」这类分句不以动词结尾，仍是叙述者
  * 的直接断言。言语之后一旦出现词法意义上的叙述者转折，治理立即结束。
  */
@@ -1171,6 +1357,7 @@ function isTellingClause(clause: string): boolean {
   const object = clause.slice(index + 2);
   if (object.length === 0 || object.length > 4) return false;
   if (/[。！？!?；;，,、：:\n\r]/u.test(object)) return false;
+  if (hasCanonSentenceTerminator(object)) return false;
   if (!speechPrefixIsShortAndClean(clause, index)) return false;
   return !prefixContainsFrameCue(object);
 }
@@ -1202,22 +1389,50 @@ function isSpeechVerbAllowedInContext(
   if (verb.length !== 1) return true;
   const blocked = CANON_SPEECH_VERB_BLOCKED_BEFORE[verb];
   const previous = clause[start - 1];
-  return !(blocked && previous !== undefined && blocked.has(previous));
+  if (blocked && previous !== undefined && blocked.has(previous)) return false;
+  if (verb === "道") {
+    return isDaoSpeechVerbAllowed(clause, start);
+  }
+  return true;
 }
+
+/**
+ * 单字 `道` 的结构性判定。
+ *
+ * `道` 既可以是“说道”的言语动词，也可以是“一道/这条道/门道/味道”里的
+ * 量词或名词。除名词黑名单外：
+ * - 紧邻数字、量词、指示词（一/两/几/这/那/每/某/条…）时，按名词处理；
+ * - 紧邻言语类副词/动词字（笑/怒/低/高/大/忙…）时，按言语动词处理；
+ * - 其余情况要求 `道` 前面有一个非空的短主语（长度由统一的 20 字上限约束）。
+ *
+ * 这样「老人道，…」仍是引述，「他走上那条道，…」不会被误当成言语动词。
+ */
+function isDaoSpeechVerbAllowed(clause: string, start: number): boolean {
+  const previous = clause[start - 1];
+  if (previous === undefined) return false;
+  if (CANON_DAO_MEASURE_OR_DETERMINER_CHARS.has(previous)) return false;
+  if (/[0-9０-９]/u.test(previous)) return false;
+  if (CANON_DAO_SPEECH_PREFIX_CHARS.has(previous)) return true;
+  return start > 0;
+}
+
+/** 言语动词前只允许 ≤20 字的短主语，且不能再嵌套另一个框架动词。 */
+const CANON_SPEECH_SUBJECT_MAX_CHARS = 20;
 
 /**
  * 言语动词前只允许短主语，且不能再嵌套另一个框架动词。
  *
  * 「他撒谎说」、「她坚持说」里的 撒谎/坚持 紧贴言语动词，视为同一个转述
  * 短语；更早出现的 以为/希望/说 等则说明这不是单纯的主语，不能降级。
+ * 20 字上限覆盖「那个总在码头边打盹的老更夫坚称，…」这类长定语主语。
  */
 function speechPrefixIsShortAndClean(
   clause: string,
   verbStart: number,
 ): boolean {
   const prefix = clause.slice(0, verbStart);
-  if (prefix.length > 10) return false;
-  if (/[。！？!?；;\n\r]/u.test(prefix)) return false;
+  if (prefix.length > CANON_SPEECH_SUBJECT_MAX_CHARS) return false;
+  if (hasCanonSentenceTerminator(prefix)) return false;
   return !prefixContainsFrameCue(prefix);
 }
 
@@ -1329,57 +1544,128 @@ function clauseEndAfter(
   return sentence.length;
 }
 
+const CANON_QUOTE_OPENERS = new Set(Object.keys(CANON_QUOTE_PAIRS));
+const CANON_QUOTE_CLOSERS = new Set(Object.values(CANON_QUOTE_PAIRS));
+
 /**
- * 把成对引号（含嵌套）内的内容替换为空格，保留长度与下标。
+ * 按当前 fail-closed 策略找出成立的引号区间（按 start 升序）。
  *
- * 在整段文本上配对，因此 `「…。…。」` 这类跨句引语整段都受遮蔽；之后才切句。
- * 未闭合的开引号一直遮蔽到换行（段落边界）或文本末尾：宁可少抓一条对白，
- * 也不把角色台词当成叙述者的直接断言。引号本身也一并遮蔽，避免跨引号拼出
- * 假匹配。
+ * 策略是产品决定，后续可以整体调整；调用方不应再自行写第二套配对逻辑：
+ * - 段落 = 两个 \n / \r\n / \r 之间的文本。引号只在同一段内配对，并且只与
+ *   同一种风格配对：`“ ”`、`「 」`、`『 』`、`‘ ’` 与 ASCII `" "`。
+ * - 段内可以跨句配对（`“…。…。”` 是完整区间）；ASCII `"` 在同一段内交替
+ *   开/闭。
+ * - 不同风格的嵌套（如 `“…『…』…”`）各自成立。
+ * - 关闭引号不匹配栈顶时：若它匹配栈中更深的同风格开引号，就关闭到那一层，
+ *   丢弃中间未匹配的开引号（它们不覆盖任何文本）；否则忽略这个孤立关闭引号。
+ * - 段末仍未闭合的开引号不覆盖任何文本（按旁白处理）。因此风格混用
+ *   （`“…」`）、跨段的开/闭引号都不会产生遮蔽区间。
+ * - `’` 单独出现常常是撇号，未匹配时忽略；`‘` 未闭合也不覆盖任何文本。
+ *
+ * 返回的区间只用于“引号内内容只 warning”的低置信判断；是否值得向读者提示
+ * 未闭合引号由 `hasUnpairedQuote` 回答。
+ */
+export function findQuotedSpans(text: string): QuotedSpan[] {
+  return scanQuotedText(text).spans;
+}
+
+/**
+ * 该段落是否存在未闭合、孤立或风格错配的引号。
+ *
+ * 与 `findQuotedSpans` 使用同一套 fail-closed 策略；单独的 `’` 按撇号忽略，
+ * 不算未配对。传入多段文本时，只要任一段有问题就返回 true。
+ */
+export function hasUnpairedQuote(paragraph: string): boolean {
+  return scanQuotedText(paragraph).unpaired;
+}
+
+function scanQuotedText(text: string): {
+  spans: QuotedSpan[];
+  unpaired: boolean;
+} {
+  const spans: QuotedSpan[] = [];
+  let unpaired = false;
+  let paragraphStart = 0;
+  for (let index = 0; index <= text.length; index += 1) {
+    if (index < text.length && !isLineBreak(text[index]!)) continue;
+    if (scanQuoteParagraph(text, paragraphStart, index, spans)) {
+      unpaired = true;
+    }
+    // \r\n 会在 \r 与 \n 各触发一次；中间的空段不会产生区间或误报。
+    paragraphStart = index + 1;
+  }
+  spans.sort((left, right) => left.start - right.start);
+  return { spans, unpaired };
+}
+
+/** 扫描一个段落；返回该段落是否存在未闭合/孤立/错配的引号。 */
+function scanQuoteParagraph(
+  text: string,
+  start: number,
+  end: number,
+  spans: QuotedSpan[],
+): boolean {
+  const stack: Array<{ close: string; start: number }> = [];
+  let unpaired = false;
+  for (let index = start; index < end; index += 1) {
+    const char = text[index]!;
+    const closeIndex = deepestMatchingQuote(stack, char);
+    if (closeIndex >= 0) {
+      // 丢弃关闭引号内层未匹配的开引号：它们不覆盖任何文本。
+      if (closeIndex < stack.length - 1) unpaired = true;
+      const open = stack[closeIndex]!;
+      stack.length = closeIndex;
+      spans.push({ start: open.start, end: index + 1 });
+      continue;
+    }
+    if (CANON_QUOTE_OPENERS.has(char)) {
+      stack.push({ close: CANON_QUOTE_PAIRS[char]!, start: index });
+      continue;
+    }
+    // 孤立关闭引号：`’` 常作撇号，忽略；其它关闭引号说明引号写坏了。
+    if (CANON_QUOTE_CLOSERS.has(char) && char !== "’") {
+      unpaired = true;
+    }
+  }
+  if (stack.length > 0) unpaired = true;
+  return unpaired;
+}
+
+/** 栈中与 `char` 匹配的最深开引号下标；没有则返回 -1。 */
+function deepestMatchingQuote(
+  stack: Array<{ close: string; start: number }>,
+  char: string,
+): number {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    if (stack[index]!.close === char) return index;
+  }
+  return -1;
+}
+
+/**
+ * 把成立的引号区间（含嵌套）替换为空格，保留长度与下标；之后才切句。
+ *
+ * 这里的区间只来自 `findQuotedSpans`，因此未闭合/错配的引号不会遮蔽任何
+ * 文本，一个笔误不会让后面的叙述者否定静默降级。引号本身也一并遮蔽，避免
+ * 跨引号拼出假匹配。
  */
 function maskQuotedSpans(text: string): {
   masked: string;
-  quotedSpans: CanonQuotedSpan[];
+  quotedSpans: QuotedSpan[];
 } {
-  const stack: Array<{ close: string; start: number }> = [];
-  const spans: CanonQuotedSpan[] = [];
-  // 引号都是 BMP 字符，按 UTF-16 下标扫描即可与正则 match.index 对齐。
+  const spans = findQuotedSpans(text);
+  const depthDelta = new Int32Array(text.length + 1);
+  for (const span of spans) {
+    depthDelta[span.start] = (depthDelta[span.start] ?? 0) + 1;
+    depthDelta[span.end] = (depthDelta[span.end] ?? 0) - 1;
+  }
+  const chars = text.split("");
+  let depth = 0;
   for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-    const top = stack.at(-1);
-    if (top && top.close === char) {
-      stack.pop();
-      spans.push({ start: top.start, end: index + 1, closed: true });
-      continue;
-    }
-    if (Object.hasOwn(CANON_QUOTE_PAIRS, char)) {
-      stack.push({ close: CANON_QUOTE_PAIRS[char]!, start: index });
-    }
+    depth += depthDelta[index] ?? 0;
+    if (depth > 0) chars[index] = " ";
   }
-  while (stack.length > 0) {
-    const open = stack.pop()!;
-    spans.push({
-      start: open.start,
-      end: lineEndAfter(text, open.start),
-      closed: false,
-    });
-  }
-  let masked = "";
-  for (let index = 0; index < text.length; index += 1) {
-    const inside = spans.some(
-      (span) => index >= span.start && index < span.end,
-    );
-    masked += inside ? " " : text[index]!;
-  }
-  return { masked, quotedSpans: spans };
-}
-
-function lineEndAfter(text: string, from: number): number {
-  for (let index = from; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "\n" || char === "\r") return index;
-  }
-  return text.length;
+  return { masked: chars.join(""), quotedSpans: spans };
 }
 
 function escapeRegExp(text: string): string {

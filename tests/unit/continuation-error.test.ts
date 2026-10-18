@@ -93,15 +93,49 @@ describe("continuationErrorMessage", () => {
     expect(message).not.toContain("必需上下文段超过预算");
   });
 
-  it("maps a hard canon rejection to the specific Chinese message without prose", () => {
+  it("maps a hard canon rejection to the specific Chinese message with one short sentence", () => {
     const message = continuationErrorMessage(
-      new CanonGuardRejectionError(["铜门被打开"]),
+      new CanonGuardRejectionError([
+        {
+          title: "铜门被打开",
+          sentence: "铜门被打开从未发生过",
+          unpairedQuote: false,
+        },
+      ]),
       "scene",
     );
     expect(message).toBe(
-      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」，已拒绝且未保存；请重试或换一批。",
+      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」：「铜门被打开从未发生过」。已拒绝且未保存；请重试或换一批。",
     );
     expect(message).not.toContain("Structured generation failed");
+  });
+
+  it("appends the unpaired-quote fix hint only when the record says so", () => {
+    const withBrokenQuote = continuationErrorMessage(
+      new CanonGuardRejectionError([
+        {
+          title: "铜门被打开",
+          sentence: "夜色渐深，“铜门被打开从未发生过",
+          unpairedQuote: true,
+        },
+      ]),
+      "scene",
+    );
+    expect(withBrokenQuote).toContain(
+      "这句所在段落的引号没有闭合，系统按旁白处理；补全引号后重试即可。",
+    );
+    expect(withBrokenQuote).toContain(
+      "「铜门被打开」：「夜色渐深，“铜门被打开从未发生过」。",
+    );
+
+    const withoutSentence = continuationErrorMessage(
+      new CanonGuardRejectionError([{ title: "铜门被打开" }]),
+      "scene",
+    );
+    expect(withoutSentence).toBe(
+      "生成内容明确否定了分歧前已确认的原著事件「铜门被打开」，已拒绝且未保存；请重试或换一批。",
+    );
+    expect(withoutSentence).not.toContain("引号没有闭合");
   });
 
   it("only claims a canon rejection when the final failing issues are canon issues", async () => {
@@ -115,7 +149,13 @@ describe("continuationErrorMessage", () => {
             { path: "", message: "Response is not valid JSON" },
           ]);
         },
-        () => ["铜门被打开"],
+        () => [
+          {
+            title: "铜门被打开",
+            sentence: "铜门被打开从未发生过",
+            unpairedQuote: false,
+          },
+        ],
       );
     } catch (error) {
       nonCanonFailure = error;
@@ -138,7 +178,13 @@ describe("continuationErrorMessage", () => {
           },
         ]);
       },
-      () => ["铜门被打开"],
+      () => [
+        {
+          title: "铜门被打开",
+          sentence: "铜门被打开从未发生过",
+          unpairedQuote: false,
+        },
+      ],
     );
     await expect(canonFailure).rejects.toBeInstanceOf(CanonGuardRejectionError);
   });

@@ -210,7 +210,7 @@ export async function generateContinuationDirections(input: {
         },
         input.provider,
       ),
-      () => hardRejections.map((rejection) => rejection.title),
+      () => hardRejections,
     );
     const artifact = createContinuationDirectionsArtifactV2({
       projectId: input.projectId,
@@ -372,7 +372,7 @@ export async function generateContinuationScene(input: {
         },
         input.provider,
       ),
-      () => hardRejections.map((rejection) => rejection.title),
+      () => hardRejections,
     );
     const artifact = createContinuationSceneArtifactV2({
       projectId: input.projectId,
