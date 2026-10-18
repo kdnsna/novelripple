@@ -11,6 +11,9 @@ import {
   ContinuationSceneModelOutputSchema,
   ContinuationSceneModelOutputV3Schema,
   ContinuationSchema,
+  SettingDeltaArtifactSchema,
+  SettingDeltaSubjectSchema,
+  SettingDeltaV1Schema,
   type ContinuationArtifact,
   type ContinuationDirectionsArtifact,
   type ContinuationDirectionsModelOutput,
@@ -18,15 +21,22 @@ import {
   type ContinuationSceneModelOutput,
   type ContextManifest,
   type ImpactPlanArtifact,
+  type SettingDeltaArtifact,
+  type SettingDeltaSubject,
+  type SettingDeltaV1,
   type Worldline,
 } from "@/domain/schemas";
+import { SETTING_DELTA_MAX_PER_WORLDLINE } from "@/domain/continuation/setting-delta-limits";
 import { getDatabase } from "@/server/db/client";
 import { artifacts } from "@/server/db/schema";
 import { getGenerationRun } from "@/server/repositories/generation-run-repository";
+import { getWorldline } from "@/server/repositories/ripple-repository";
+import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
 export type ContinuationArtifactLists = {
   directions: ContinuationDirectionsArtifact[];
   scenes: ContinuationSceneArtifact[];
+  settingDeltas: SettingDeltaArtifact[];
 };
 
 export function createContinuationDirectionsArtifact(input: {
@@ -355,6 +365,129 @@ export function createContinuationSceneArtifactV2(input: {
   return stored;
 }
 
+/**
+ * 读者设定的路径作用域增量（`artifactType: "setting_delta"`）。
+ *
+ * 不调用模型，因此没有 Generation Run / basedOnArtifactId。id 由
+ * (worldlineId, anchorSceneId ?? "root", idempotencyKey) 确定性派生；
+ * 同一幂等键的重复/并发写入返回已有行。旧规则永不 UPDATE，修订 = 新行。
+ */
+export function createSettingDeltaArtifact(input: {
+  projectId: string;
+  worldlineId: string;
+  anchorSceneId: string | null;
+  subject: SettingDeltaSubject;
+  statement: string;
+  idempotencyKey: string;
+}): SettingDeltaArtifact {
+  const subject = SettingDeltaSubjectSchema.parse(input.subject);
+  const statement = input.statement.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+  if (statement.length === 0 || statement.length > 200) {
+    throw new Error("设定增量说明必须为 1–200 个字符");
+  }
+  if (idempotencyKey.length === 0 || idempotencyKey.length > 200) {
+    throw new Error("设定增量幂等键必须为 1–200 个字符");
+  }
+
+  const worldline = getWorldline(input.worldlineId);
+  if (!worldline || worldline.projectId !== input.projectId) {
+    throw new Error("Worldline 不存在或不属于当前项目");
+  }
+  const storyMapArtifact = getStoryMapArtifact(
+    worldline.baseStoryMapArtifactId,
+  );
+  if (
+    !storyMapArtifact ||
+    storyMapArtifact.projectId !== input.projectId ||
+    storyMapArtifact.storyMap.status !== "confirmed"
+  ) {
+    throw new Error("设定增量必须绑定当前项目的 confirmed Story Map 基线");
+  }
+  if (input.anchorSceneId !== null) {
+    const anchor = getContinuationArtifact(input.anchorSceneId);
+    if (
+      !anchor ||
+      anchor.artifactType !== "scene" ||
+      anchor.projectId !== input.projectId ||
+      anchor.worldlineId !== worldline.id
+    ) {
+      throw new Error("锚点场景不属于当前 Worldline");
+    }
+  }
+  if (subject.kind === "character") {
+    if (
+      !storyMapArtifact.storyMap.characters.some(
+        (character) => character.id === subject.characterId,
+      )
+    ) {
+      throw new Error("设定增量的人物不在当前 Worldline 的 Story Map 中");
+    }
+  }
+
+  const id = stableSettingDeltaArtifactId(
+    worldline.id,
+    input.anchorSceneId,
+    idempotencyKey,
+  );
+  const existing = getContinuationArtifact(id);
+  if (existing) {
+    if (
+      existing.artifactType !== "setting_delta" ||
+      existing.worldlineId !== worldline.id ||
+      existing.settingDelta.anchorSceneId !== input.anchorSceneId
+    ) {
+      throw new Error("设定增量幂等键已被其他内容占用");
+    }
+    return existing;
+  }
+
+  if (
+    listSettingDeltaArtifactsForWorldline(worldline.id).length >=
+    SETTING_DELTA_MAX_PER_WORLDLINE
+  ) {
+    throw new Error(
+      `设定增量已达到每条世界线的上限（${SETTING_DELTA_MAX_PER_WORLDLINE} 条）`,
+    );
+  }
+
+  const createdAt = new Date().toISOString();
+  const settingDelta = SettingDeltaV1Schema.parse({
+    id,
+    worldlineId: worldline.id,
+    anchorSceneId: input.anchorSceneId,
+    subject,
+    statement,
+    contentKind: "user",
+    createdAt,
+  });
+  const artifact = SettingDeltaArtifactSchema.parse({
+    id,
+    projectId: input.projectId,
+    sourceId: storyMapArtifact.sourceId,
+    worldlineId: worldline.id,
+    kind: "continuation",
+    artifactType: "setting_delta",
+    schemaVersion: 1,
+    settingDelta,
+    basedOnArtifactId: null,
+    generationRunId: null,
+    createdAt,
+  });
+
+  insertContinuationArtifact(artifact);
+  const stored = getContinuationArtifact(artifact.id);
+  if (
+    !stored ||
+    stored.artifactType !== "setting_delta" ||
+    stored.settingDelta.anchorSceneId !== input.anchorSceneId ||
+    stored.settingDelta.statement !== statement
+  ) {
+    throw new Error("设定增量 Artifact 写入失败");
+  }
+  return stored;
+}
+
 export function getContinuationArtifact(
   id: string,
 ): ContinuationArtifact | null {
@@ -379,7 +512,26 @@ export function listContinuationArtifactsForWorldline(
       (artifact): artifact is ContinuationSceneArtifact =>
         artifact.artifactType === "scene",
     ),
+    settingDeltas: all.filter(
+      (artifact): artifact is SettingDeltaArtifact =>
+        artifact.artifactType === "setting_delta",
+    ),
   };
+}
+
+/** 当前世界线的设定增量 payload，按 createdAt、id 升序。 */
+export function listSettingDeltasForWorldline(
+  worldlineId: string,
+): SettingDeltaV1[] {
+  return listSettingDeltaArtifactsForWorldline(worldlineId).map(
+    (artifact) => artifact.settingDelta,
+  );
+}
+
+function listSettingDeltaArtifactsForWorldline(
+  worldlineId: string,
+): SettingDeltaArtifact[] {
+  return listContinuationArtifactsForWorldline(worldlineId).settingDeltas;
 }
 
 export function listProjectContinuationArtifacts(
@@ -584,6 +736,30 @@ function assertGenerationRun(input: {
 }
 
 function insertContinuationArtifact(artifact: ContinuationArtifact): void {
+  if (artifact.artifactType === "setting_delta") {
+    getDatabase()
+      .insert(artifacts)
+      .values({
+        id: artifact.id,
+        projectId: artifact.projectId,
+        sourceId: artifact.sourceId,
+        worldlineId: artifact.worldlineId,
+        kind: artifact.kind,
+        schemaVersion: artifact.schemaVersion,
+        version: null,
+        dataJson: JSON.stringify({
+          artifactType: artifact.artifactType,
+          settingDelta: artifact.settingDelta,
+        }),
+        basedOnArtifactId: null,
+        generationRunId: null,
+        createdAt: artifact.createdAt,
+      })
+      .onConflictDoNothing()
+      .run();
+    return;
+  }
+
   getDatabase()
     .insert(artifacts)
     .values({
@@ -611,17 +787,16 @@ function parseContinuationArtifact(
 ): ContinuationArtifact {
   if (
     row.sourceId === null ||
-    row.worldlineId === null ||
-    row.basedOnArtifactId === null ||
-    row.generationRunId === null
+    row.worldlineId === null
   ) {
     throw new Error(`Continuation Artifact 缺少必要引用：${row.id}`);
   }
   const packet = JSON.parse(row.dataJson) as {
     artifactType?: unknown;
     continuation?: unknown;
+    settingDelta?: unknown;
   };
-  return ContinuationArtifactSchema.parse({
+  const base = {
     id: row.id,
     projectId: row.projectId,
     sourceId: row.sourceId,
@@ -629,10 +804,22 @@ function parseContinuationArtifact(
     kind: row.kind,
     artifactType: packet.artifactType,
     schemaVersion: row.schemaVersion,
-    continuation: packet.continuation,
     basedOnArtifactId: row.basedOnArtifactId,
     generationRunId: row.generationRunId,
     createdAt: normalizeSqliteDate(row.createdAt),
+  };
+  if (packet.artifactType === "setting_delta") {
+    return ContinuationArtifactSchema.parse({
+      ...base,
+      settingDelta: packet.settingDelta,
+    });
+  }
+  if (row.basedOnArtifactId === null || row.generationRunId === null) {
+    throw new Error(`Continuation Artifact 缺少必要引用：${row.id}`);
+  }
+  return ContinuationArtifactSchema.parse({
+    ...base,
+    continuation: packet.continuation,
   });
 }
 
@@ -676,6 +863,19 @@ export function stableSceneArtifactIdV2(
     )
     .digest("hex");
   return `artifact_continuation_scene_${digest.slice(0, 24)}`;
+}
+
+export function stableSettingDeltaArtifactId(
+  worldlineId: string,
+  anchorSceneId: string | null,
+  idempotencyKey: string,
+): string {
+  const digest = createHash("sha256")
+    .update(
+      `setting_delta:${worldlineId}:${anchorSceneId ?? "root"}:${idempotencyKey}`,
+    )
+    .digest("hex");
+  return `artifact_setting_delta_${digest.slice(0, 24)}`;
 }
 
 function stableDirectionId(artifactId: string, index: number): string {

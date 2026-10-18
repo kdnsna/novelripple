@@ -992,6 +992,100 @@ describe("assembleContext", () => {
     expect(sawSummary).toBe(true);
   });
 
+  it("keeps the ladder monotonic and setting deltas present across budgets", () => {
+    const settingDeltas = JSON.stringify([
+      {
+        subject: { kind: "character", characterId: "char_shenyan", name: "沈砚" },
+        statement: "沈砚从此左手受伤，不能划船。",
+        anchor: "分歧点",
+      },
+      {
+        subject: { kind: "term", name: "旧灯塔" },
+        statement: "旧灯塔已被封锁，不能进入。",
+        anchor: "第 1 幕",
+      },
+    ]);
+    const settingSections: ContextAssemblerInput["sections"] = {
+      worldlineSetup: `完整世界线设定：${"事实正文".repeat(40)}{"settingDeltas":${settingDeltas}}`,
+      worldlineSetupCompact: `{"currentState":{"factsAddedCount":2},"settingDeltas":${settingDeltas}}`,
+      worldlineSetupCompactRemoved: ["currentState.factsAdded[].statement"],
+      canonEvents: '{"events":[{"id":"event_01"}],"edges":[],"endingCandidates":[]}',
+      pathSummary: "第 1 幕：丁——丁的摘要。\n第 2 幕：戊——戊的摘要。",
+      pathSummaryCoveredSceneIds: ["p1", "p2"],
+      canonEvidence: [
+        { id: "related_1", text: "相关证据一。", priority: 2 },
+        { id: "style_1", text: "代表片段。", priority: 1 },
+      ],
+      recentScenes: [
+        { id: "scene_1", text: "第一幕正文。".repeat(6), summary: "第一幕摘要。" },
+        { id: "scene_2", text: "第二幕正文。".repeat(6), summary: "第二幕摘要。" },
+      ],
+      selectedDirection: "让沈砚在雨夜说出真相。",
+      anchorReminder: "请保留顾闻舟在钟楼出现的结局。",
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: settingSections,
+    });
+
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length + 20; budget += 1) {
+      const result = tryAssemble(budget, settingSections);
+      if (result) firstSuccess ??= budget;
+      else expect(firstSuccess).toBeNull();
+    }
+    expect(firstSuccess).not.toBeNull();
+
+    const droppedIds = (
+      result: ContextAssemblerResult,
+      kind: "canon_evidence" | "recent_scenes",
+    ) => new Set(sectionOf(result, kind).droppedItemIds);
+    const keptIds = (
+      result: ContextAssemblerResult,
+      kind: "canon_evidence" | "recent_scenes",
+      ids: string[],
+    ) => {
+      const dropped = droppedIds(result, kind);
+      return ids.filter((id) => !dropped.has(id));
+    };
+
+    let previous: ContextAssemblerResult | null = null;
+    for (
+      let budget = firstSuccess!;
+      budget <= full.prompt.length + 40;
+      budget += 1
+    ) {
+      const result = tryAssemble(budget, settingSections);
+      expect(result).not.toBeNull();
+      if (!result) continue;
+      // 读者设定位于永不裁剪的 worldline_setup：任何预算下都必须可见。
+      expect(result.prompt).toContain("沈砚从此左手受伤，不能划船。");
+      expect(result.prompt).toContain("旧灯塔已被封锁，不能进入。");
+      if (previous) {
+        for (const id of keptIds(previous, "canon_evidence", [
+          "related_1",
+          "style_1",
+        ])) {
+          expect(
+            keptIds(result, "canon_evidence", ["related_1", "style_1"]),
+          ).toContain(id);
+        }
+        for (const id of keptIds(previous, "recent_scenes", [
+          "scene_1",
+          "scene_2",
+        ])) {
+          expect(
+            keptIds(result, "recent_scenes", ["scene_1", "scene_2"]),
+          ).toContain(id);
+        }
+        expect(result.prompt.length).toBeGreaterThanOrEqual(
+          previous.prompt.length,
+        );
+      }
+      previous = result;
+    }
+  });
+
   it(
     "keeps the ladder monotonic for every budget across seeded random fixtures",
     { timeout: 30_000 },

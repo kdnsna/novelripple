@@ -36,6 +36,7 @@ import {
   createContinuationDirectionsArtifactV2,
   createContinuationSceneArtifact,
   createContinuationSceneArtifactV2,
+  createSettingDeltaArtifact,
   getContinuationArtifact,
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
@@ -298,7 +299,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === directions.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-directions.v3");
+    ).toBe("continuation-directions.v4");
     expect(directionProvider.requests).toHaveLength(1);
     const directionsPrompt = directionProvider.requests[0]?.prompt ?? "";
     expect(directionsPrompt).toContain("<worldline_setup>");
@@ -352,7 +353,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === scene.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-scene.v4");
+    ).toBe("continuation-scene.v5");
     expect(sceneProvider.requests[0]?.prompt).toContain(selectedDirection.title);
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_events>");
     expect(sceneProvider.requests[0]?.prompt).toContain("<canon_evidence>");
@@ -450,7 +451,7 @@ describe("Continuation scene tree generation", () => {
       listProjectGenerationRuns(context.project.id).find(
         (run) => run.id === directions.generation?.runId,
       )?.promptVersion,
-    ).toBe("continuation-directions.v3");
+    ).toBe("continuation-directions.v4");
 
     const selectedDirection = directions.artifact.continuation.directions[0]!;
     const sceneProvider = new MockAIProvider([JSON.stringify(sceneOutput)]);
@@ -1155,5 +1156,129 @@ describe("Continuation scene tree generation", () => {
       worldlineId: context.worldline.id,
       status: "failed",
     });
+  });
+
+  it("puts only path-scoped setting deltas into worldline_setup for directions and scenes", async () => {
+    const context = await createAcceptedWorldline();
+    const rootDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      provider: new MockAIProvider([JSON.stringify(directionOutput)]),
+      modelConfig,
+    });
+    const rootDirection = rootDirections.artifact.continuation.directions[0]!;
+    const branchA = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: rootDirections.artifact.id,
+      selectedDirectionId: rootDirection.id,
+      provider: new MockAIProvider([JSON.stringify(sceneOutput)]),
+      modelConfig,
+    });
+    const branchB = await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: rootDirections.artifact.id,
+      selectedDirectionId:
+        rootDirections.artifact.continuation.directions[1]!.id,
+      provider: new MockAIProvider([
+        JSON.stringify(
+          makeSceneOutput({
+            title: "分支 B 场景",
+            factKey: "generated:branch_b_fact",
+            factStatement: "这是只属于分支 B 的独占事实。",
+          }),
+        ),
+      ]),
+      modelConfig,
+    });
+
+    createSettingDeltaArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      anchorSceneId: null,
+      subject: { kind: "term", name: "旧灯塔" },
+      statement: "旧灯塔已被封锁，任何人不得进入。",
+      idempotencyKey: "generation-delta-root",
+    });
+    createSettingDeltaArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      anchorSceneId: branchA.artifact.id,
+      subject: { kind: "term", name: "渡船" },
+      statement: "夜班渡船已经停航。",
+      idempotencyKey: "generation-delta-a",
+    });
+    createSettingDeltaArtifact({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      anchorSceneId: branchB.artifact.id,
+      subject: { kind: "term", name: "北侧石阶" },
+      statement: "北侧石阶已经塌方，不能通行。",
+      idempotencyKey: "generation-delta-b",
+    });
+
+    const rootProvider = new MockAIProvider([JSON.stringify(directionOutput)]);
+    await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      newBatch: true,
+      provider: rootProvider,
+      modelConfig,
+    });
+    const rootPrompt = rootProvider.requests[0]?.prompt ?? "";
+    expect(rootPrompt).toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(rootPrompt).not.toContain("夜班渡船已经停航。");
+    expect(rootPrompt).not.toContain("北侧石阶已经塌方，不能通行。");
+    expect(rootPrompt).toContain('"settingDeltas"');
+    expect(rootPrompt).toContain('"anchor":"分歧点"');
+
+    const childDirectionsProvider = new MockAIProvider([
+      JSON.stringify(directionOutput),
+    ]);
+    const childDirections = await generateContinuationDirections({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      parentSceneId: branchA.artifact.id,
+      newBatch: true,
+      provider: childDirectionsProvider,
+      modelConfig,
+    });
+    const childDirectionsPrompt =
+      childDirectionsProvider.requests[0]?.prompt ?? "";
+    expect(childDirectionsPrompt).toContain("旧灯塔已被封锁，任何人不得进入。");
+    expect(childDirectionsPrompt).toContain("夜班渡船已经停航。");
+    expect(childDirectionsPrompt).not.toContain(
+      "北侧石阶已经塌方，不能通行。",
+    );
+    expect(childDirectionsPrompt).toContain('"anchor":"第 1 幕"');
+    expect(
+      listProjectGenerationRuns(context.project.id).find(
+        (run) => run.id === childDirections.generation?.runId,
+      )?.promptVersion,
+    ).toBe("continuation-directions.v4");
+
+    const sceneProvider = new MockAIProvider([
+      JSON.stringify(
+        makeSceneOutput({
+          title: "从分支 A 继续",
+          factKey: "generated:from_branch_a",
+          factStatement: "新场景只从分支 A 的路径继续。",
+        }),
+      ),
+    ]);
+    await generateContinuationScene({
+      projectId: context.project.id,
+      worldlineId: context.worldline.id,
+      directionsArtifactId: childDirections.artifact.id,
+      selectedDirectionId:
+        childDirections.artifact.continuation.directions[0]!.id,
+      provider: sceneProvider,
+      modelConfig,
+    });
+    const scenePrompt = sceneProvider.requests[0]?.prompt ?? "";
+    expect(scenePrompt).toContain("夜班渡船已经停航。");
+    expect(scenePrompt).not.toContain("北侧石阶已经塌方，不能通行。");
+    expect(scenePrompt).toContain("worldline_setup.settingDeltas");
   });
 });

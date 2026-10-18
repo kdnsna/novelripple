@@ -15,10 +15,15 @@ import {
 } from "@/domain/continuation/canon-context";
 import { buildPathSummary } from "@/domain/continuation/path-summary";
 import {
+  deriveActiveSettingDeltas,
+  type ActiveSettingDelta,
+} from "@/domain/continuation/setting-deltas";
+import {
   buildSceneTree,
   derivePathState,
   getScenePath,
   type SceneNode,
+  type SceneTree,
 } from "@/domain/continuation/scene-tree";
 import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { isUncertainImpact } from "@/domain/ripple/derive-uncertain-impact-ids";
@@ -54,6 +59,7 @@ import {
   getLatestDirectionsBatch,
   listContinuationArtifactsForWorldline,
   listScenesForDirection,
+  listSettingDeltasForWorldline,
   stableDirectionsArtifactIdV2,
   stableSceneArtifactIdV2,
 } from "@/server/repositories/continuation-repository";
@@ -64,8 +70,8 @@ import {
 } from "@/server/repositories/ripple-repository";
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
-const directionsPromptVersion = "continuation-directions.v3";
-const scenePromptVersion = "continuation-scene.v4";
+const directionsPromptVersion = "continuation-directions.v4";
+const scenePromptVersion = "continuation-scene.v5";
 
 export {
   CONTINUATION_CONTEXT_MAX_CHARS_ENV,
@@ -84,9 +90,14 @@ export async function generateContinuationDirections(input: {
   const parentSceneId = input.parentSceneId ?? null;
   const newBatch = input.newBatch ?? false;
   const context = loadContinuationContext(input);
-  const { path } = resolveScenePath({
+  const { path, tree, activeSettingDeltas } = resolveScenePath({
     worldlineId: context.worldline.id,
     parentSceneId,
+  });
+  const settingDeltas = buildContextSettingDeltas({
+    active: activeSettingDeltas,
+    tree,
+    characters: context.storyMapArtifact.storyMap.characters,
   });
 
   const latestBatch = getLatestDirectionsBatch(
@@ -115,6 +126,7 @@ export async function generateContinuationDirections(input: {
       context,
       path,
       pathState,
+      settingDeltas,
       selectedDirection: null,
     });
     const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
@@ -221,16 +233,22 @@ export async function generateContinuationScene(input: {
       return { artifact: existing, generation: null };
     }
 
-    const { path, parent } = resolveScenePath({
+    const { path, parent, tree, activeSettingDeltas } = resolveScenePath({
       worldlineId: context.worldline.id,
       parentSceneId,
     });
     const depth = parent === null ? 1 : parent.depth + 1;
     const pathState = derivePathState(context.baseState, path);
+    const settingDeltas = buildContextSettingDeltas({
+      active: activeSettingDeltas,
+      tree,
+      characters: context.storyMapArtifact.storyMap.characters,
+    });
     const material = buildContextMaterial({
       context,
       path,
       pathState,
+      settingDeltas,
       selectedDirection,
     });
     const prompt = await buildPrompt(scenePromptVersion, material.prompt);
@@ -349,31 +367,89 @@ function loadContinuationContext(input: {
 }
 
 /**
- * 解析父场景并返回 root→父节点路径。
+ * 解析父场景并返回 root→父节点路径与路径上生效的设定增量。
  *
  * 父节点必须属于当前 Worldline；树断裂、跨世界线或深度不连续时
- * `buildSceneTree` / `getScenePath` 会 fail closed。
+ * `buildSceneTree` / `getScenePath` 会 fail closed。根批次路径为空，
+ * 因此只读取 anchorSceneId = null（从分歧点生效）的设定增量。
  */
 function resolveScenePath(input: {
   worldlineId: string;
   parentSceneId: string | null;
-}): { path: SceneNode[]; parent: SceneNode | null } {
+}): {
+  path: SceneNode[];
+  parent: SceneNode | null;
+  tree: SceneTree;
+  activeSettingDeltas: ActiveSettingDelta[];
+} {
   const { scenes } = listContinuationArtifactsForWorldline(input.worldlineId);
   const tree = buildSceneTree(scenes.map((scene) => scene.continuation));
-  if (input.parentSceneId === null) {
-    return { path: [], parent: null };
+  let parent: SceneNode | null = null;
+  let path: SceneNode[] = [];
+  if (input.parentSceneId !== null) {
+    parent = tree.nodes.get(input.parentSceneId) ?? null;
+    if (!parent) {
+      throw new Error("父场景不属于当前 Worldline");
+    }
+    path = getScenePath(tree, input.parentSceneId);
   }
-  const parent = tree.nodes.get(input.parentSceneId);
-  if (!parent) {
-    throw new Error("父场景不属于当前 Worldline");
-  }
-  return { path: getScenePath(tree, input.parentSceneId), parent };
+  const activeSettingDeltas = deriveActiveSettingDeltas({
+    tree,
+    deltas: listSettingDeltasForWorldline(input.worldlineId),
+    path,
+  });
+  return { path, parent, tree, activeSettingDeltas };
+}
+
+type ContextSettingDelta = {
+  subject:
+    | { kind: "character"; characterId: string; name: string }
+    | { kind: "term"; name: string };
+  statement: string;
+  anchor: string;
+};
+
+/**
+ * 把生效设定增量整理成 worldline_setup 中的读者规则条目。
+ *
+ * 人物主体附带 Story Map 中的姓名；锚点写成读者可读的“分歧点”/“第 n 幕”。
+ * 这些规则属于 `worldline_setup`，不进入 statePatch 或路径状态。
+ */
+function buildContextSettingDeltas(input: {
+  active: readonly ActiveSettingDelta[];
+  tree: SceneTree;
+  characters: readonly { id: string; name: string }[];
+}): ContextSettingDelta[] {
+  const charactersById = new Map(
+    input.characters.map((character) => [character.id, character]),
+  );
+  return input.active.map(({ active }) => {
+    const subject =
+      active.subject.kind === "character"
+        ? {
+            kind: "character" as const,
+            characterId: active.subject.characterId,
+            name:
+              charactersById.get(active.subject.characterId)?.name ??
+              active.subject.characterId,
+          }
+        : { kind: "term" as const, name: active.subject.name };
+    return {
+      subject,
+      statement: active.statement,
+      anchor:
+        active.anchorSceneId === null
+          ? "分歧点"
+          : `第 ${input.tree.nodes.get(active.anchorSceneId)?.depth ?? 0} 幕`,
+    };
+  });
 }
 
 function buildContextMaterial(input: {
   context: ContinuationContext;
   path: readonly SceneNode[];
   pathState: WorldlineDelta;
+  settingDeltas: readonly ContextSettingDelta[];
   selectedDirection: ContinuationDirection | null;
 }): ContextAssemblerResult {
   const storyMap = input.context.storyMapArtifact.storyMap;
@@ -430,10 +506,17 @@ function buildContextMaterial(input: {
     text: node.prose,
     ...(node.summary === null ? {} : { summary: node.summary }),
   }));
-  const worldlineSetup = buildWorldlineSetup(input.context, input.pathState);
+  const worldlineSetup = buildWorldlineSetup(
+    input.context,
+    input.pathState,
+    input.settingDeltas,
+    true,
+  );
   const worldlineSetupCompact = buildWorldlineSetup(
     input.context,
     compactCurrentState(input.pathState),
+    input.settingDeltas,
+    false,
   );
   const anchorReminder = buildAnchorReminder(input.context);
   const selectedDirection =
@@ -446,7 +529,12 @@ function buildContextMaterial(input: {
     sections: {
       worldlineSetup,
       worldlineSetupCompact,
-      worldlineSetupCompactRemoved: WORLDLINE_SETUP_COMPACT_REMOVED,
+      worldlineSetupCompactRemoved: [
+        ...WORLDLINE_SETUP_COMPACT_REMOVED,
+        ...(input.settingDeltas.length > 0
+          ? ["settingDeltas[].anchor"]
+          : []),
+      ],
       canonEvents,
       pathSummary: pathSummary.text,
       pathSummaryCoveredSceneIds: pathSummary.coveredSceneIds,
@@ -471,6 +559,8 @@ const WORLDLINE_SETUP_COMPACT_REMOVED = [
 function buildWorldlineSetup(
   context: ContinuationContext,
   currentState: unknown,
+  settingDeltas: readonly ContextSettingDelta[],
+  includeSettingDeltaAnchors: boolean,
 ): string {
   const storyMap = context.storyMapArtifact.storyMap;
   const plan = context.acceptedImpactPlanArtifact.impactPlan;
@@ -489,6 +579,11 @@ function buildWorldlineSetup(
       name: character.name,
       aliases: character.aliases,
       role: character.role,
+    })),
+    settingDeltas: settingDeltas.map((delta) => ({
+      subject: delta.subject,
+      statement: delta.statement,
+      ...(includeSettingDeltaAnchors ? { anchor: delta.anchor } : {}),
     })),
     acceptedImpactPlan: {
       id: plan.id,

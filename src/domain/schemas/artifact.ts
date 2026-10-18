@@ -4,6 +4,7 @@ import {
   ContinuationDirectionsSchema,
   ContinuationSchema,
 } from "./continuation";
+import { SettingDeltaV1Schema } from "./setting-delta";
 import { SourceReferenceSchema } from "./source";
 import { ImpactPlanSchema } from "./impact-plan";
 import { EvidenceKindSchema, StoryMapSchema } from "./story-map";
@@ -520,9 +521,40 @@ export const ContinuationSceneArtifactSchema =
       }
     });
 
+/**
+ * 读者在场景节点新增的设定增量。
+ *
+ * 它不是模型生成结果，因此没有 Generation Run，也不基于某个产物行；
+ * 仍然作为 `kind: "continuation"` 的不可变 Artifact 保存。
+ */
+export const SettingDeltaArtifactSchema = ContinuationArtifactBaseSchema.extend({
+  artifactType: z.literal("setting_delta"),
+  schemaVersion: z.literal(1),
+  settingDelta: SettingDeltaV1Schema,
+  basedOnArtifactId: z.null(),
+  generationRunId: z.null(),
+})
+  .strict()
+  .superRefine((artifact, context) => {
+    if (
+      artifact.settingDelta.id !== artifact.id ||
+      artifact.settingDelta.worldlineId !== artifact.worldlineId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["settingDelta"],
+        message: "设定增量 Artifact 与领域对象引用不一致",
+      });
+    }
+  });
+
 export const ContinuationArtifactSchema = z.discriminatedUnion(
   "artifactType",
-  [ContinuationDirectionsArtifactSchema, ContinuationSceneArtifactSchema],
+  [
+    ContinuationDirectionsArtifactSchema,
+    ContinuationSceneArtifactSchema,
+    SettingDeltaArtifactSchema,
+  ],
 );
 
 export type StoryMapArtifact = z.infer<typeof StoryMapArtifactSchema>;
@@ -538,6 +570,9 @@ export type ContinuationDirectionsArtifact = z.infer<
 >;
 export type ContinuationSceneArtifact = z.infer<
   typeof ContinuationSceneArtifactSchema
+>;
+export type SettingDeltaArtifact = z.infer<
+  typeof SettingDeltaArtifactSchema
 >;
 export type ContinuationArtifact = z.infer<typeof ContinuationArtifactSchema>;
 export type StoryMapReview = z.infer<typeof StoryMapReviewSchema>;

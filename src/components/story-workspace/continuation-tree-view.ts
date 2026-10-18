@@ -3,13 +3,17 @@ import {
   type ScenePayload,
 } from "@/domain/continuation/scene-tree";
 import type { ContinuationDirectionBatchView } from "@/domain/continuation/worldline-tree";
-import type { ContinuationArtifact } from "@/domain/schemas";
+import type {
+  ContinuationArtifact,
+  SettingDeltaV1,
+} from "@/domain/schemas";
 
 /**
  * 续写面板的序列化视图模型。
  *
  * 只保存面板真正需要展示的不可变内容：场景正文各保存一次，方向批次只保存
- * 三个方向。世界线、ImpactPlan 等绑定信息已经由外层面板持有，不在这里重复。
+ * 三个方向，设定增量保存读者输入的短规则。世界线、ImpactPlan 等绑定信息
+ * 已经由外层面板持有，不在这里重复。
  */
 export type { ContinuationDirectionBatchView };
 
@@ -17,12 +21,18 @@ export type ContinuationTreeView = {
   worldlineId: string;
   scenes: ScenePayload[];
   directionBatches: ContinuationDirectionBatchView[];
+  settingDeltas: SettingDeltaV1[];
 };
 
 export function emptyContinuationTreeView(
   worldlineId: string,
 ): ContinuationTreeView {
-  return { worldlineId, scenes: [], directionBatches: [] };
+  return {
+    worldlineId,
+    scenes: [],
+    directionBatches: [],
+    settingDeltas: [],
+  };
 }
 
 /**
@@ -37,6 +47,7 @@ export function buildContinuationTreeView(
 ): ContinuationTreeView {
   const scenes: ScenePayload[] = [];
   const directionBatches: ContinuationDirectionBatchView[] = [];
+  const settingDeltas: SettingDeltaV1[] = [];
 
   for (const artifact of artifacts) {
     if (artifact.worldlineId !== worldlineId) {
@@ -44,6 +55,10 @@ export function buildContinuationTreeView(
     }
     if (artifact.artifactType === "scene") {
       scenes.push(artifact.continuation);
+      continue;
+    }
+    if (artifact.artifactType === "setting_delta") {
+      settingDeltas.push(artifact.settingDelta);
       continue;
     }
     directionBatches.push(directionBatchView(artifact));
@@ -56,9 +71,15 @@ export function buildContinuationTreeView(
       throw new Error("方向批次引用了未知父场景");
     }
   }
+  for (const delta of settingDeltas) {
+    if (delta.anchorSceneId !== null && !sceneIds.has(delta.anchorSceneId)) {
+      throw new Error("设定增量引用了未知锚点场景");
+    }
+  }
   directionBatches.sort(compareDirectionBatches);
+  settingDeltas.sort(compareSettingDeltas);
 
-  return { worldlineId, scenes, directionBatches };
+  return { worldlineId, scenes, directionBatches, settingDeltas };
 }
 
 /** 把新生成的方向/场景 Artifact 合并进视图；同 id 幂等。 */
@@ -74,6 +95,22 @@ export function appendContinuationArtifact(
       return view;
     }
     return { ...view, scenes: [...view.scenes, artifact.continuation] };
+  }
+
+  if (artifact.artifactType === "setting_delta") {
+    if (
+      view.settingDeltas.some(
+        (delta) => delta.id === artifact.settingDelta.id,
+      )
+    ) {
+      return view;
+    }
+    return {
+      ...view,
+      settingDeltas: [...view.settingDeltas, artifact.settingDelta].sort(
+        compareSettingDeltas,
+      ),
+    };
   }
 
   if (
@@ -113,6 +150,17 @@ function compareDirectionBatches(
   if (left.batchIndex !== right.batchIndex) {
     return left.batchIndex - right.batchIndex;
   }
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt < right.createdAt ? -1 : 1;
+  }
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
+function compareSettingDeltas(
+  left: SettingDeltaV1,
+  right: SettingDeltaV1,
+): number {
   if (left.createdAt !== right.createdAt) {
     return left.createdAt < right.createdAt ? -1 : 1;
   }

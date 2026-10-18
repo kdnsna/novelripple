@@ -225,11 +225,17 @@ Continuation 分为两个固定阶段，不是 Agent：
 
 Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta（`baseDelta`）。当前路径状态是 `baseDelta` 沿根节点到当前节点的 `statePatch` 依次折叠的结果：只读取该路径上的节点，不读取兄弟节点、世界线中路径外的场景或未来节点。折叠沿用上述 `statePatch` 语义。路径必须同属一个 Worldline、父子链连续、`depth` 逐级加一，否则 fail closed。因此兄弟分支的状态互不可见，任一节点只影响它的后代路径。
 
+### 路径作用域设定增量
+
+读者可在任意场景节点添加一条短设定规则（`setting_delta` continuation Artifact，payload `SettingDeltaV1`：`subject`、`statement`、`anchorSceneId`）。`anchorSceneId` 为 `null` 时规则从分歧点起整条世界线生效；否则只在该锚点场景及其后代生效。规则只沿当前路径可见：祖先节点与当前节点上的规则生效，兄弟分支的规则永不出现。同一主体（人物稳定 ID 或规范化术语名）沿路径更晚/更深的规则覆盖较早规则，旧行保留为只读 history，不 UPDATE 或 DELETE。
+
+每条世界线最多保存 `SETTING_DELTA_MAX_PER_WORLDLINE = 50` 条；派生当前路径时最多保留 `SETTING_DELTA_MAX_ACTIVE = 20` 个生效主体（最深/最新优先）。因此 `worldline_setup.settingDeltas` 有界，不进入裁剪阶梯。设定增量是读者规则，不是 Canon 证据，也不写入 `statePatch` 或路径状态；方向与场景生成的 full / compact `worldline_setup` 都携带它们（compact 只省略 anchor 标签），Prompt 要求其覆盖冲突的 Canon 细节与更早状态且不得被违背。
+
 ### 上下文组装与清单
 
 每次生成只从当前路径和当前 Worldline 组装上下文，固定顺序为：
 
-1. `worldline_setup`：世界线、分歧、模式、Anchor、人物、accepted Impact Plan 与当前路径状态；
+1. `worldline_setup`：世界线、分歧、模式、Anchor、人物、accepted Impact Plan、当前路径状态与当前路径生效的设定增量；
 2. `canon_events`：与 accepted Impact Plan / Anchor 相关的 Canon 事件（id、标题、摘要、参与者、状态变化）、这些事件之间的边（id、from、to、类型、说明、置信度、confirmed），以及 Anchor 目标结局（id、targetEventId、requirement）；人物只带 id、姓名、别名与角色。该段**不包含任何 `evidence[]`**：相关事件的原著证据只在可裁剪的 `canon_evidence` 中提供，边与结局不再在必需段重复携带证据；
 3. `path_summary`：当前路径较早场景的滚动摘要；
 4. `canon_evidence`：相关事件的原著证据切片排在最前，随后是 `selectContinuationContext` 选出的代表窗口与人物证据（后者仍受 6000 字符且严格小于 Source 25% 的选择器上限）；

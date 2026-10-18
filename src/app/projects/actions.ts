@@ -8,6 +8,7 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import {
+  SettingDeltaSubjectSchema,
   type ContinuationDirectionsArtifact,
   type ContinuationSceneArtifact,
   ProjectIdSchema,
@@ -15,6 +16,7 @@ import {
   StoryMapGenerationStartModeSchema,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
+  type SettingDeltaArtifact,
   type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
@@ -36,6 +38,7 @@ import {
   createProject,
   importProjectSource,
 } from "@/server/repositories/project-repository";
+import { createSettingDeltaArtifact } from "@/server/repositories/continuation-repository";
 import {
   confirmStoryMapArtifact,
   createStoryMapRevision,
@@ -73,6 +76,9 @@ export type ContinuationDirectionsActionResult =
   | { ok: false; error: string };
 export type ContinuationSceneActionResult =
   | { ok: true; artifact: ContinuationSceneArtifact }
+  | { ok: false; error: string };
+export type SettingDeltaActionResult =
+  | { ok: true; artifact: SettingDeltaArtifact }
   | { ok: false; error: string };
 
 export async function createProjectAction(
@@ -411,6 +417,61 @@ export async function generateContinuationSceneAction(
   } catch (error) {
     return { ok: false, error: continuationErrorMessage(error, "scene") };
   }
+}
+
+const AddSettingDeltaInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    anchorSceneId: z.string().min(1).nullable(),
+    subject: SettingDeltaSubjectSchema,
+    statement: z.string().trim().min(1).max(200),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export async function addSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaActionResult> {
+  const parsed = AddSettingDeltaInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "设定增量参数无效：请检查主体、说明与锚点。",
+    };
+  }
+
+  try {
+    const artifact = createSettingDeltaArtifact(parsed.data);
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, artifact };
+  } catch (error) {
+    return { ok: false, error: settingDeltaErrorMessage(error) };
+  }
+}
+
+function settingDeltaErrorMessage(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return "设定增量参数无效：请检查主体、说明与锚点。";
+  }
+  if (!(error instanceof Error)) {
+    return "设定增量保存失败，未写入任何规则。";
+  }
+  const safeMessages = [
+    "设定增量说明必须为 1–200 个字符",
+    "设定增量幂等键必须为 1–200 个字符",
+    "Worldline 不存在或不属于当前项目",
+    "设定增量必须绑定当前项目的 confirmed Story Map 基线",
+    "锚点场景不属于当前 Worldline",
+    "设定增量的人物不在当前 Worldline 的 Story Map 中",
+    "设定增量幂等键已被其他内容占用",
+    "设定增量 Artifact 写入失败",
+  ];
+  if (safeMessages.includes(error.message)) return error.message;
+  if (error.message.startsWith("设定增量已达到每条世界线的上限")) {
+    return error.message;
+  }
+  return "设定增量保存失败，未写入任何规则。";
 }
 
 function sourceImportErrorMessage(error: unknown): string {
