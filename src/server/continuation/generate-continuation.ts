@@ -12,6 +12,7 @@ import {
 import {
   buildCanonEventsSection,
   buildRelatedEvidenceItems,
+  divergenceDependencyEventIds,
 } from "@/domain/continuation/canon-context";
 import { buildPathSummary } from "@/domain/continuation/path-summary";
 import {
@@ -579,6 +580,12 @@ function buildContextMaterial(input: {
     acceptedImpactPlan: input.context.acceptedImpactPlanArtifact,
     selectedDirection: selectorDirection,
   });
+  // 分歧事件自身及其直接依赖的分歧前 Canon 证据永不裁剪：它们在
+  // canon_evidence 中的位置不变，但 pinned 条目会进入必需下限。
+  const pinnedEventIds = divergenceDependencyEventIds(
+    storyMap,
+    plan.divergence.eventId,
+  );
   const relatedEvidence: ContextEvidenceItem[] =
     buildRelatedEvidenceItems({
       storyMap,
@@ -587,6 +594,9 @@ function buildContextMaterial(input: {
     }).map((item) => ({
       ...item,
       priority: RELATED_EVIDENCE_PRIORITY,
+      ...(pinnedEventIds.has(eventIdOfRelatedEvidenceId(item.id))
+        ? { pinned: true }
+        : {}),
     }));
   const canonEvidence: ContextEvidenceItem[] = [
     ...relatedEvidence,
@@ -642,6 +652,14 @@ function buildContextMaterial(input: {
       anchorReminder,
     },
   });
+}
+
+/** 从 `related:<eventId>:<n>` 提取事件 id；格式由 canon-context 固定。 */
+function eventIdOfRelatedEvidenceId(id: string): string {
+  const prefix = "related:";
+  if (!id.startsWith(prefix)) return "";
+  const separator = id.lastIndexOf(":");
+  return separator > prefix.length ? id.slice(prefix.length, separator) : "";
 }
 
 /**

@@ -125,9 +125,9 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 
 `setting_deltas` 是可裁剪段，不再依赖“20 × 260 字必有界”的假设；写时已按锚点子树里的每条路径检查 20 个 active 主体与真实渲染 2k。`CONTINUATION_CONTEXT_MAX_CHARS` 的降级阶梯仍是单一嵌套序列，顺序更新为：
 
-完整内容 → 丢 `canon_evidence` → 丢 `setting_deltas` → 丢旧 `recent_scenes` → 裁 `path_summary` → compact `worldline_setup` → 最新场景摘要 → v1 句末截断 → fail closed。
+完整内容 → 丢 `canon_evidence` 中的非 pinned 条目 → 丢 `setting_deltas` → 丢旧 `recent_scenes` → 裁 `path_summary` → compact `worldline_setup` → 最新场景摘要 → v1 句末截断 → fail closed。
 
-`setting_deltas` 每次整条丢弃最浅（`anchorDepth` 最小）再最旧（`createdAt`）再按 id 的规则，因此更深/更新的路径规则保留更久；被丢弃 id 写入 manifest 的 `droppedItemIds`。规则裁剪排在证据之后、最近场景之前，且释放的预算不回填证据；更大预算只会停留在更早（或相同）的阶梯状态。`tests/unit/context-assembler.test.ts` 的阶梯单调性、全预算扫描与“必需段单独放得下时 20 条规则必不导致失败”测试保持通过。
+`canon_evidence` 中分歧事件自身及其直接依赖的分歧前事件证据是 pinned，与 `worldline_setup`、`canon_events`、`selected_direction`、`anchor_reminder` 同属必需下限，任何阶梯步骤都不裁剪；放不下时抛类型化预算错误。`setting_deltas` 每次整条丢弃最浅（`anchorDepth` 最小）再最旧（`createdAt`）再按 id 的规则，因此更深/更新的路径规则保留更久；被丢弃 id 写入 manifest 的 `droppedItemIds`。规则裁剪排在证据之后、最近场景之前，且释放的预算不回填证据；更大预算只会停留在更早（或相同）的阶梯状态。`tests/unit/context-assembler.test.ts` 的阶梯单调性、全预算扫描与“必需段单独放得下时 20 条规则必不导致失败”测试保持通过。
 
 ## 备选方案
 

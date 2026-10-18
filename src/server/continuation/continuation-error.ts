@@ -23,7 +23,7 @@ export function continuationErrorMessage(
   if (isContinuationContextBudgetError(error)) {
     const target = stage === "scene" ? "场景" : "方向";
     return [
-      `续写所需的基础上下文（世界线设定、相关原著事件、结局约束）超过了当前上限（需要约 ${error.neededChars} 字，上限 ${error.maxChars} 字），无法生成${target}。`,
+      `续写所需的基础上下文（世界线设定、相关原著事件、分歧事件及其直接依赖的原著证据、结局约束）超过了当前上限（需要约 ${error.neededChars} 字，上限 ${error.maxChars} 字），无法生成${target}。`,
       "接下来可以：",
       "• 换一个分歧瞬间，或改用「让故事自由发展」（开放模式通常更短）；",
       "• 减少保留的结局 Anchor；",

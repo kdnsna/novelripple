@@ -77,11 +77,14 @@ export function isContinuationContextBudgetError(
  * 证据如何选取仍由 `selectContinuationContext` 单独负责；组装器只负责
  * 排序、渲染和按预算裁剪，不复制窗口/人物证据的选择逻辑。
  * `priority` 越大越重要；未提供时按 0 处理，同优先级内从末尾开始丢弃。
+ * `pinned` 的证据（分歧事件及其直接依赖）永不丢弃，属于必需下限；
+ * 它们仍按原始位置渲染，不因固定而重排。
  */
 export type ContextEvidenceItem = {
   id: string;
   text: string;
   priority?: number;
+  pinned?: boolean;
 };
 
 export type ContextSceneItem = {
@@ -137,6 +140,7 @@ type NormalizedItem = {
   text: string;
   priority: number;
   summary: string;
+  pinned: boolean;
 };
 
 type NormalizedSettingDelta = {
@@ -172,7 +176,8 @@ export const TRUNCATION_MARKER = "（后文已截断）";
  * 超预算时只沿一条固定降级阶梯前进。阶梯是单一嵌套序列，结果是该预算下
  * 第一个放得下的状态：
  * 1. 完整内容；
- * 2. canon_evidence 按 priority 从低到高、同优先级从末尾整条丢弃；
+ * 2. canon_evidence 中非 pinned 的条目按 priority 从低到高、同优先级从末尾
+ *    整条丢弃；pinned 证据（分歧事件及其直接依赖的原著证据）永不丢弃；
  * 3. setting_deltas 从最浅/最旧开始整条丢弃，保留最深/最新的路径规则；
  * 4. recent_scenes 从最旧开始整条丢弃，但始终保留最新一个场景；
  * 5. path_summary 按整行从开头裁剪（首行省略/压缩提示保留到最后一刻）；
@@ -180,6 +185,10 @@ export const TRUNCATION_MARKER = "（后文已截断）";
  * 7. 用最新场景自己的 summary 替换正文（仅当非空且严格更短）；
  * 8. 最新场景没有可用摘要时，在句末边界截断正文并追加 TRUNCATION_MARKER；
  * 9. 仍超过预算则 fail closed，错误消息包含所需长度与 maxChars。
+ *
+ * pinned 证据与 worldline_setup、canon_events、selected_direction、
+ * anchor_reminder 一样属于必需下限；放不下时抛类型化预算错误，绝不静默
+ * 丢弃 pinned 条目。
  *
  * 每一步只删除或严格缩短上一步的内容，因此状态序列逐级“更少”。更大预算只会
  * 停留在更早（或相同）的状态：它绝不会丢掉更小预算已保留的证据、规则或场景，
@@ -192,7 +201,7 @@ export const TRUNCATION_MARKER = "（后文已截断）";
  * 紧凑形式只出现在第 6 步。
  *
  * worldline_setup、canon_events、selected_direction、anchor_reminder
- * 永不整段裁剪（worldline_setup 只允许整体替换为更紧凑的等价形式）。
+ * 与 pinned 证据永不裁剪（worldline_setup 只允许整体替换为更紧凑的等价形式）。
  * setting_deltas 虽然承载必须遵守的读者规则，但它是可裁剪段：写时已保证
  * 最多 20 个生效主体、序列化不超过 SETTING_DELTA_CONTEXT_MAX_CHARS。
  */
@@ -263,9 +272,10 @@ export function assembleContext(
   let prompt = renderPrompt(live);
   if (prompt.length <= maxChars) return finish(prompt);
 
-  // 2. 原著证据：低优先级先丢，同优先级从末尾整条丢弃。
-  while (live.canonEvidence.length > 0 && prompt.length > maxChars) {
-    const index = lowestPriorityLastIndex(live.canonEvidence);
+  // 2. 原著证据：只裁非 pinned 条目；低优先级先丢，同优先级从末尾整条丢弃。
+  while (prompt.length > maxChars) {
+    const index = lowestPriorityLastDroppableEvidenceIndex(live.canonEvidence);
+    if (index < 0) break;
     const dropped = live.canonEvidence.splice(index, 1)[0]!;
     droppedEvidence.push(dropped);
     evidenceTrimmed = true;
@@ -409,7 +419,7 @@ function renderMandatoryPrompt(sections: LiveSections): string {
     pathSummary: "",
     pathSummaryCoveredSceneIds: [],
     pathSummaryWatermarkSceneId: null,
-    canonEvidence: [],
+    canonEvidence: sections.canonEvidence.filter((item) => item.pinned),
     recentScenes: [],
     selectedDirection: sections.selectedDirection,
     anchorReminder: sections.anchorReminder,
@@ -450,6 +460,7 @@ function normalizeEvidence(
         text: item.text.trim(),
         priority,
         summary: "",
+        pinned: item.pinned ?? false,
       };
     })
     .filter((item) => item.text.length > 0);
@@ -462,6 +473,7 @@ function normalizeScenes(items: readonly ContextSceneItem[]): NormalizedItem[] {
       text: item.text.trim(),
       priority: 0,
       summary: item.summary?.trim() ?? "",
+      pinned: false,
     }))
     .filter((item) => item.text.length > 0);
 }
@@ -596,15 +608,21 @@ function closingQuoteRunEnd(
   return stack.length === 0 && index > start ? index : null;
 }
 
-/** 最低优先级中最后一个条目的下标，等价于同优先级从末尾丢弃。 */
-function lowestPriorityLastIndex(items: readonly NormalizedItem[]): number {
-  let lowest = items[0]!.priority;
+/**
+ * 最低优先级中最后一个可裁条目的下标，等价于同优先级从末尾丢弃。
+ * pinned 条目没有候选时返回 -1，由调用方进入后续阶梯步骤。
+ */
+function lowestPriorityLastDroppableEvidenceIndex(
+  items: readonly NormalizedItem[],
+): number {
+  let lowest = Number.POSITIVE_INFINITY;
   for (const item of items) {
-    if (item.priority < lowest) lowest = item.priority;
+    if (!item.pinned && item.priority < lowest) lowest = item.priority;
   }
-  let index = 0;
+  if (lowest === Number.POSITIVE_INFINITY) return -1;
+  let index = -1;
   for (const [current, item] of items.entries()) {
-    if (item.priority === lowest) index = current;
+    if (!item.pinned && item.priority === lowest) index = current;
   }
   return index;
 }
@@ -778,6 +796,9 @@ function buildManifest(input: {
       }
       case "canon_evidence": {
         const included = live.canonEvidence.length > 0;
+        const pinnedItemIds = live.canonEvidence
+          .filter((item) => item.pinned)
+          .map((item) => item.id);
         return section(
           kind,
           included,
@@ -786,6 +807,7 @@ function buildManifest(input: {
             : 0,
           input.evidenceTrimmed,
           input.droppedEvidenceIds,
+          pinnedItemIds.length > 0 ? { pinnedItemIds } : {},
         );
       }
       case "recent_scenes": {
@@ -848,6 +870,7 @@ function buildManifest(input: {
 }
 
 type SectionExtras = {
+  pinnedItemIds?: string[];
   summarizedItemIds?: string[];
   truncatedItemIds?: string[];
   compactedFields?: string[];

@@ -242,7 +242,7 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 每次生成只从当前路径和当前 Worldline 组装上下文，固定顺序为：
 
 1. `worldline_setup`：世界线、分歧、模式、Anchor、人物、accepted Impact Plan 与当前路径状态；
-2. `canon_events`：与 accepted Impact Plan / Anchor 相关的 Canon 事件（id、标题、摘要、参与者、状态变化）、这些事件之间的边（id、from、to、类型、说明、置信度、confirmed），以及 Anchor 目标结局（id、targetEventId、requirement）；人物只带 id、姓名、别名与角色。该段**不包含任何 `evidence[]`**：相关事件的原著证据只在可裁剪的 `canon_evidence` 中提供，边与结局不再在必需段重复携带证据；
+2. `canon_events`：与 accepted Impact Plan / Anchor 相关的 Canon 事件（id、标题、摘要、参与者、状态变化）、这些事件之间的边（id、from、to、类型、说明、置信度、confirmed），以及 Anchor 目标结局（id、targetEventId、requirement）；人物只带 id、姓名、别名与角色。该段**不包含任何 `evidence[]`**：相关事件的原著证据只在 `canon_evidence` 中提供（分歧直接依赖的 pinned 条目不可裁剪，其余可裁剪），边与结局不再在必需段重复携带证据；
 3. `setting_deltas`：当前路径生效的读者设定规则，每条带稳定 id（delta id）与“主体（作用域）：说明”；可裁剪，永不进入 `worldline_setup`；
 4. `path_summary`：当前路径较早场景的滚动摘要；
 5. `canon_evidence`：相关事件的原著证据切片排在最前，随后是 `selectContinuationContext` 选出的代表窗口与人物证据（后者仍受 6000 字符且严格小于 Source 25% 的选择器上限）；
@@ -252,23 +252,23 @@ Worldline 的基础状态只来自 accepted Impact Plan 确定性派生的 Delta
 
 方向生成没有 `selected_direction`，其余段相同。
 
-`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限；`setting_deltas` 不是必需段。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试。阶梯是单一嵌套序列，每一级都只删除或严格缩短上一级的内容；结果固定为该预算下第一个放得下的状态。因此更大的预算只会停留在更早（或相同）的状态，绝不会丢掉更小预算已保留的证据、规则或完整场景，也不会使用更小预算没有启用的降级。阶梯为：
+`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 是必需段，永不整段裁剪，它们只是预算下限；`canon_evidence` 中的 pinned 条目（分歧事件自身及其直接依赖的分歧前事件证据）同样属于必需下限，永不裁剪；`setting_deltas` 不是必需段。超出 `CONTINUATION_CONTEXT_MAX_CHARS` 时按一条固定降级阶梯逐级尝试。阶梯是单一嵌套序列，每一级都只删除或严格缩短上一级的内容；结果固定为该预算下第一个放得下的状态。因此更大的预算只会停留在更早（或相同）的状态，绝不会丢掉更小预算已保留的证据、规则或完整场景，也不会使用更小预算没有启用的降级。阶梯为：
 
 1. 完整内容；
-2. `canon_evidence` 按优先级从低到高、同优先级从末尾一次丢一条，因此相关事件证据最后才被裁掉；
+2. `canon_evidence` 中非 pinned 条目按优先级从低到高、同优先级从末尾一次丢一条；分歧事件自身及其直接依赖的分歧前事件证据是 pinned，永不裁剪，并与其它必需段一起构成预算下限；
 3. `setting_deltas` 从最浅/最旧开始整条丢弃（先 `anchorDepth`，再 `createdAt`，再 id），保留最深/最新的路径规则更久；被丢弃 id 写入 manifest 的 `droppedItemIds`；
 4. `recent_scenes` 从最旧开始整条丢弃，始终保留最新一个场景；
 5. `path_summary` 按整行从开头裁剪，首行省略/压缩提示保留到最后一刻，绝不把一行切成半句；
 6. 若调用方提供了严格更短的紧凑 `worldline_setup`，整体替换为紧凑形式（只保留计数与 key，不包含任何 fact 正文）；
 7. 最新场景有非空且严格短于正文的 `summary` 时，用该摘要替换正文；
 8. 最新场景没有可用摘要（v1 场景 `summary` 为 `null`/空）时，在句末边界（`。！？!?…；;` 或换行，保留标点）截断正文为能放下的最长前缀，并追加 `（后文已截断）`；截断不得落在未闭合的引号内（`「」『』“”‘’` 与 ASCII 引号），也不得拆开 `……`；句末后紧跟恰好闭合引号的闭引号时（如 `。」`、`。』」`、`……」`），在所有闭引号之后截断；若只有引号内的句末可用，则在最外层开引号之前截断；若最外层开引号就在正文开头（整段都在引号内）、连安全前缀都放不下或正文没有句末边界，则进入第 9 步；
-9. 仍超过预算则 fail closed，组装器抛出类型化 `ContinuationContextBudgetError`（`continuation_context_budget_exceeded`，携带 `neededChars` / `maxChars`），`message` 保留内部细节供日志；服务端边界把它映射为普通中文说明与可执行出路（换分歧瞬间或开放模式、减少 Anchor、说明设定增量会自动裁剪而不是失败原因、或由部署方提高 `CONTINUATION_CONTEXT_MAX_CHARS`），界面不直接展示内部术语。
+9. 仍超过预算（包括必需段与 pinned 证据本身放不下）则 fail closed，组装器抛出类型化 `ContinuationContextBudgetError`（`continuation_context_budget_exceeded`，携带 `neededChars` / `maxChars`），`message` 保留内部细节供日志；服务端边界把它映射为普通中文说明与可执行出路（换分歧瞬间或开放模式、减少 Anchor、说明设定增量会自动裁剪而不是失败原因、或由部署方提高 `CONTINUATION_CONTEXT_MAX_CHARS`），界面不直接展示内部术语。
 
 第 6—8 步释放的预算不会回填第 2 步丢弃的证据：跨层回填会把低优先级内容塞进更小预算的结果（大预算停留在第 4—5 步时证据为零，小预算却带着回填证据），破坏嵌套顺序。紧凑 `worldline_setup`、摘要替换与 v1 截断释放的预算只用于让当前状态本身放得下；摘要与 v1 截断仍只在仍超预算时使用。
 
 不会因为“完整形式的必需段放不下”提前启用紧凑形式：紧凑 `worldline_setup` 只出现在阶梯第 6 步，且只有它严格更短时才使用。总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，只约束组装后的 `<continuation_context>` 素材，不包含约 2–3k 字符的系统 Prompt 模板；配置不是正整数时 fail closed。预算按 UTF-16 字符数计算，不引入 tokenizer。
 
-每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`canon_evidence` 与 `setting_deltas` 的被丢弃 id 都记入各自段的 `droppedItemIds`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`canon_evidence` 的 `backfilledItemIds` 只为本分支期间可能已存的旧 manifest 保留为可选只读字段；新 manifest 不再写入（不做跨层证据回填），被丢弃的证据只出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
+每次场景生成保存一个不含正文的 Context Manifest，只记录段名、是否包含、字符数、是否裁剪、被丢弃条目 ID，以及 `budget.totalChars / maxChars / percentageUsed`。`canon_evidence` 与 `setting_deltas` 的被丢弃 id 都记入各自段的 `droppedItemIds`；`canon_evidence` 的 pinned 证据可选记入 `pinnedItemIds`（只含 id），且永不出现在 `droppedItemIds`。`recent_scenes` 用 `summarizedItemIds` 单独记录“用自身摘要替换正文”的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；这两类场景不再计入 `droppedItemIds`。`canon_evidence` 的 `backfilledItemIds` 只为本分支期间可能已存的旧 manifest 保留为可选只读字段；新 manifest 不再写入（不做跨层证据回填），被丢弃的证据只出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录实际移除的字段名（如 `currentState.factsAdded[].statement`、`currentState.characterChanges[].summary`），只含字段名，不含正文。`path_summary` 段额外用 `coveredItemIds`（只含场景 id）和 `watermarkId` 记录实际进入上下文的摘要覆盖范围。manifest 随场景 Artifact 保存，不写入 Prompt、原文或生成正文；前端只展示段名和计数。
 
 ### 路径滚动摘要
 
@@ -284,7 +284,7 @@ v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 
 | --- | --- | --- |
 | `readonlyCanonical` | `canon_events` | 保留 `sourceId`、`storyMapArtifactId`、`storyMapId`、人物 slim 字段、相关事件完整字段、事件之间的边（不含 `evidence`）与 Anchor 目标 `endingCandidates`（不含 `evidence`） |
 | 无（0011 前的 `worldline_setup.settingDeltas`） | `setting_deltas` | 新增独立可裁剪段：当前路径生效的读者规则，每条带 delta id 与“主体（作用域）：说明”；写时限制 ≤20 个生效主体、序列化 ≤2000 规范化字符，超预算时从最浅/最旧开始整条丢弃 |
-| `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；裁剪时最后丢弃；未变 |
+| `relevantEvidence` | `canon_evidence` 的前半部分 | 每个相关事件的证据切片，id 为 `related:<eventId>:<n>`；非 pinned 条目最后丢弃；分歧事件自身及其直接依赖的分歧前事件证据为 pinned，永不裁剪并进入必需下限 |
 | `styleContext.representativeExcerpts` / `styleContext.characterEvidence` | `canon_evidence` 的后半部分 | 仍由 `selectContinuationContext` 选择；排在相关事件证据之后，先被裁剪 |
 | `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` | `worldline_setup` | 保留世界线 id/模式/分歧/Anchor、Story Map id/标题/logline、人物 id/姓名/别名/角色、accepted Impact Plan 的 id/mode/divergence/impacts 摘要（不确定项带 `uncertain: true`）/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态；`stage` 由 Prompt 版本承担，不再重复 |
 | 无 | `path_summary` | 新增：当前路径较早场景的确定性滚动摘要 |
@@ -293,7 +293,7 @@ v2 的 `<continuation_context>` 是一个 JSON packet，包含 `stage`、完整 
 | 完整 `currentWorldline` JSON | `worldline_setup` 字段 | 不再发送完整 worldline 行；只保留上述字段。未发送的是数据库/审计字段（如 `parentWorldlineId`、`baseStoryMapArtifactId`、`acceptedImpactPlanId`、`idempotencyKey`、`createdAt`、`status` 等引用与时间戳），它们不改变生成语义 |
 | 无预算/无清单 | manifest + `CONTINUATION_CONTEXT_MAX_CHARS` | 新增：段级字符预算、裁剪记录、`coveredItemIds` / `watermarkId`；Prompt 模板不计入预算 |
 
-`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。边与结局的 `evidence[]` 不再进入必需段，相关事件的原著证据仍由可裁剪的 `canon_evidence`（相关事件切片）提供，因而不会让 strict 模式的必需上下文随边/结局的证据体积无限增长。
+`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。边与结局的 `evidence[]` 不再进入必需段，相关事件的原著证据仍由 `canon_evidence`（相关事件切片；分歧直接依赖的 pinned 条目进入必需下限，其余可裁剪）提供，因而不会让 strict 模式的必需上下文随边/结局的证据体积无限增长。
 
 
 ## 状态转换与确认门

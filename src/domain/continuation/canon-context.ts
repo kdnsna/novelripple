@@ -27,6 +27,35 @@ export function collectRelevantEventIds(plan: ImpactPlan): Set<string> {
   return ids;
 }
 
+/**
+ * 分歧事件及其直接依赖的分歧前 Canon Event 集合。
+ *
+ * 规则：始终包含分歧事件自身；再包含每条已确认（`edge.confirmed`）Story Map
+ * 边的 `from` 事件——前提是该边的 `to` 正是分歧事件，且 `from` 事件在故事
+ * 顺序上早于分歧事件（`sequence < divergence.sequence`）。分歧后事件、从
+ * 分歧事件出发的边、未确认边以及不存在的端点都不算直接依赖。该集合用于把
+ * 对应原著证据标记为 pinned：它们是分歧成立所依赖的最小 Canon 依据，任何
+ * 预算下都不得被降级阶梯裁掉。纯函数，不读取生成内容或兄弟分支。
+ */
+export function divergenceDependencyEventIds(
+  storyMap: StoryMap,
+  divergenceEventId: string,
+): Set<string> {
+  const ids = new Set<string>([divergenceEventId]);
+  const divergence = storyMap.events.find(
+    (event) => event.id === divergenceEventId,
+  );
+  if (divergence === undefined) return ids;
+  for (const edge of storyMap.edges) {
+    if (!edge.confirmed || edge.to !== divergenceEventId) continue;
+    const from = storyMap.events.find((event) => event.id === edge.from);
+    if (from !== undefined && from.sequence < divergence.sequence) {
+      ids.add(edge.from);
+    }
+  }
+  return ids;
+}
+
 export type RelatedCanon = {
   relevantEventIds: Set<string>;
   events: StoryMap["events"];
@@ -123,7 +152,8 @@ export type RelatedEvidenceItem = {
 /**
  * 每个相关事件的原著证据切片，id 为 `related:<eventId>:<n>`。
  *
- * 这些证据必须排在代表片段/人物证据之前，并在裁剪时最后被丢弃。
+ * 这些证据必须排在代表片段/人物证据之前：非 pinned 条目在裁剪时最后丢，
+ * 分歧事件自身及直接依赖事件的条目由调用方标为 pinned，永不裁剪。
  */
 export function buildRelatedEvidenceItems(input: {
   storyMap: StoryMap;
@@ -135,7 +165,19 @@ export function buildRelatedEvidenceItems(input: {
     impactPlan: input.impactPlan,
     anchors: [],
   });
-  return related.events.flatMap((event) =>
+  // 分歧事件直接依赖的事件即使不在 Impact Plan 的 reasonPath 中，也必须带上
+  // 其原著证据，否则生成器无法把它们标成 pinned。仍按 Story Map 的事件顺序
+  // 输出，保持渲染稳定。
+  const dependencyEventIds = divergenceDependencyEventIds(
+    input.storyMap,
+    input.impactPlan.divergence.eventId,
+  );
+  const events = input.storyMap.events.filter(
+    (event) =>
+      related.relevantEventIds.has(event.id) ||
+      dependencyEventIds.has(event.id),
+  );
+  return events.flatMap((event) =>
     event.evidence.map((reference, index) => ({
       id: `related:${event.id}:${index}`,
       text: [

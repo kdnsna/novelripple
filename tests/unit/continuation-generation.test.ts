@@ -12,6 +12,7 @@ import type {
 } from "@/domain/schemas";
 import {
   buildRelatedEvidenceItems,
+  divergenceDependencyEventIds,
   selectRelatedCanon,
 } from "@/domain/continuation/canon-context";
 import {
@@ -402,6 +403,28 @@ describe("Continuation scene tree generation", () => {
       manifest.sections.find((section) => section.kind === "selected_direction")
         ?.included,
     ).toBe(true);
+    const divergenceEventId =
+      context.acceptedArtifact.impactPlan.divergence.eventId;
+    const pinnedEventIds = divergenceDependencyEventIds(
+      context.storyMapArtifact.storyMap,
+      divergenceEventId,
+    );
+    expect(pinnedEventIds.has("event_07")).toBe(true);
+    expect(pinnedEventIds.has("event_06")).toBe(true);
+    const canonEvidenceSection = manifest.sections.find(
+      (section) => section.kind === "canon_evidence",
+    )!;
+    expect(canonEvidenceSection.pinnedItemIds).toBeDefined();
+    for (const eventId of pinnedEventIds) {
+      expect(
+        canonEvidenceSection.pinnedItemIds!.some((id) =>
+          id.startsWith(`related:${eventId}:`),
+        ),
+      ).toBe(true);
+    }
+    for (const id of canonEvidenceSection.pinnedItemIds!) {
+      expect(canonEvidenceSection.droppedItemIds).not.toContain(id);
+    }
     expect(JSON.stringify(manifest)).not.toContain(
       sceneOutput.prose.slice(0, 40),
     );

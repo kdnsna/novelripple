@@ -789,6 +789,104 @@ describe("assembleContext", () => {
     expect(() => assemble(320)).toThrow("必需上下文段与最新场景超过预算");
   });
 
+  it("keeps pinned evidence at every budget at or above the floor", () => {
+    const pinnedText = "分歧事件自身的原著证据。".repeat(10);
+    const dependencyText = "分歧前直接依赖的原著证据。".repeat(8);
+    const pinnedSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      canonEvidence: [
+        {
+          id: "related:event_07:0",
+          text: pinnedText,
+          priority: 0,
+          pinned: true,
+        },
+        {
+          id: "related:event_06:0",
+          text: dependencyText,
+          priority: 0,
+          pinned: true,
+        },
+        { id: "related:event_08:0", text: "分歧后事件证据。", priority: 2 },
+        { id: "style_1", text: "代表片段证据。", priority: 1 },
+      ],
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: pinnedSections,
+    });
+
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length + 20; budget += 1) {
+      const result = tryAssemble(budget, pinnedSections);
+      if (result === null) {
+        expect(firstSuccess).toBeNull();
+        continue;
+      }
+      firstSuccess ??= budget;
+      const canon = sectionOf(result, "canon_evidence");
+      expect(result.prompt).toContain(pinnedText);
+      expect(result.prompt).toContain(dependencyText);
+      expect(canon.pinnedItemIds).toEqual([
+        "related:event_07:0",
+        "related:event_06:0",
+      ]);
+      expect(canon.droppedItemIds).not.toContain("related:event_07:0");
+      expect(canon.droppedItemIds).not.toContain("related:event_06:0");
+    }
+    expect(firstSuccess).not.toBeNull();
+    // 扫描确实触发过第 2 步裁剪，pinned 证据仍然全部保留。
+    let sawEvidenceDrop = false;
+    for (let budget = firstSuccess!; budget <= full.prompt.length; budget += 1) {
+      const result = tryAssemble(budget, pinnedSections);
+      if (!result) continue;
+      sawEvidenceDrop ||= sectionOf(result, "canon_evidence").droppedItemIds.length > 0;
+      expect(result.prompt).toContain(pinnedText);
+    }
+    expect(sawEvidenceDrop).toBe(true);
+  });
+
+  it("fails closed with the typed budget error below the pinned-evidence floor", () => {
+    const pinnedSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      canonEvidence: [
+        {
+          id: "related:event_07:0",
+          text: "分歧事件自身的原著证据。".repeat(20),
+          priority: 0,
+          pinned: true,
+        },
+      ],
+      recentScenes: [{ id: "scene_1", text: "唯一场景正文。" }],
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: pinnedSections,
+    });
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length; budget += 1) {
+      if (tryAssemble(budget, pinnedSections) !== null) {
+        firstSuccess = budget;
+        break;
+      }
+    }
+    expect(firstSuccess).not.toBeNull();
+
+    let thrown: unknown;
+    try {
+      assembleContext({ maxChars: firstSuccess! - 1, sections: pinnedSections });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ContinuationContextBudgetError);
+    expect(
+      (thrown as ContinuationContextBudgetError).code,
+    ).toBe(CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE);
+    expect(
+      (thrown as ContinuationContextBudgetError).neededChars,
+    ).toBeGreaterThan(firstSuccess! - 1);
+  });
+
   it("rejects an invalid budget", () => {
     expect(() => assemble(0)).toThrow("上下文预算必须是正整数");
     expect(() => assemble(1.5)).toThrow("上下文预算必须是正整数");
@@ -1225,6 +1323,7 @@ describe("assembleContext", () => {
         id: string;
         text: string;
         priority: number;
+        pinned: boolean;
         index: number;
       };
       type SceneSpec = {
@@ -1280,6 +1379,7 @@ describe("assembleContext", () => {
             id: `evidence_${index}`,
             text: `${evidenceToken(index)}${makeText(rng, 1, 2)}`,
             priority: randomInt(rng, 0, 3),
+            pinned: rng() < 0.2,
             index,
           }),
         );
@@ -1344,11 +1444,14 @@ describe("assembleContext", () => {
             pathSummaryCoveredSceneIds: pathLines.map(
               (_, index) => `p${index}`,
             ),
-            canonEvidence: evidence.map(({ id, text, priority }) => ({
-              id,
-              text,
-              priority,
-            })),
+            canonEvidence: evidence.map(
+              ({ id, text, priority, pinned }) => ({
+                id,
+                text,
+                priority,
+                pinned,
+              }),
+            ),
             recentScenes: scenes.map(({ id, text, summary }) =>
               summary === undefined ? { id, text } : { id, text, summary },
             ),
@@ -1505,6 +1608,8 @@ describe("assembleContext", () => {
         emptyCanonEvents: false,
         emptySelectedDirection: false,
         emptyAnchorReminder: false,
+        pinnedEvidence: false,
+        unpinnedEvidence: false,
         usedCompact: false,
         usedSummary: false,
         usedTruncation: false,
@@ -1545,6 +1650,12 @@ describe("assembleContext", () => {
         coverage.emptySelectedDirection ||=
           fixture.sections.selectedDirection === "";
         coverage.emptyAnchorReminder ||= fixture.sections.anchorReminder === "";
+        coverage.pinnedEvidence ||= fixture.evidence.some(
+          (item) => item.pinned,
+        );
+        coverage.unpinnedEvidence ||= fixture.evidence.some(
+          (item) => !item.pinned,
+        );
         const full = assembleContext({
           maxChars: 1_000_000,
           sections: fixture.sections,
@@ -1610,11 +1721,22 @@ describe("assembleContext", () => {
             );
           }
 
-          // 任意预算下，保留证据的优先级不低于丢弃证据；同优先级只丢末尾。
+          // pinned 证据在任何成功结果中都必须保留。
+          for (const spec of fixture.evidence) {
+            if (spec.pinned) {
+              assertTrue(
+                snapshot.evidence.has(spec.index),
+                `${label} pinned 证据 ${spec.index} 必须保留`,
+              );
+            }
+          }
+          // 任意预算下，非 pinned 保留证据的优先级不低于非 pinned 丢弃证据；
+          // 同优先级只从末尾丢弃。pinned 可位于任意优先级，不参与该比较。
           let minKeptPriority = Number.POSITIVE_INFINITY;
           let maxDroppedPriority = Number.NEGATIVE_INFINITY;
           const droppedAtPriority = new Set<number>();
           for (const spec of fixture.evidence) {
+            if (spec.pinned) continue;
             if (snapshot.evidence.has(spec.index)) {
               minKeptPriority = Math.min(
                 minKeptPriority,

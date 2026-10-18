@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCanonEventsSection,
+  buildRelatedEvidenceItems,
+  divergenceDependencyEventIds,
   selectRelatedCanon,
 } from "@/domain/continuation/canon-context";
 import {
@@ -222,5 +224,73 @@ describe("buildCanonEventsSection", () => {
         (section) => section.kind === "canon_evidence",
       ),
     ).toMatchObject({ included: false, chars: 0 });
+  });
+});
+
+describe("divergenceDependencyEventIds", () => {
+  it("returns the divergence event and pre-divergence confirmed incoming sources only", async () => {
+    const fixture = await loadRippleFixture();
+    const storyMap = structuredClone(fixture.storyMap);
+    const divergence = storyMap.events.find((event) => event.id === "event_07")!;
+    const evidence = divergence.evidence[0]!;
+    // 已确认、早于分歧的额外入边：应计入直接依赖。
+    storyMap.edges.push({
+      id: "edge_test_pre_incoming",
+      from: "event_02",
+      to: "event_07",
+      type: "enables",
+      explanation: "测试构造：分歧前的额外入边。",
+      confidence: 0.5,
+      confirmed: true,
+      evidence: [{ ...evidence }],
+    });
+    // 晚于分歧的入边：不是直接依赖。
+    storyMap.edges.push({
+      id: "edge_test_post_incoming",
+      from: "event_08",
+      to: "event_07",
+      type: "causes",
+      explanation: "测试构造：分歧后的入边。",
+      confidence: 0.5,
+      confirmed: true,
+      evidence: [{ ...evidence }],
+    });
+    // 未确认入边：不是直接依赖。
+    storyMap.edges.push({
+      id: "edge_test_unconfirmed_incoming",
+      from: "event_05",
+      to: "event_07",
+      type: "foreshadows",
+      explanation: "测试构造：未确认入边。",
+      confidence: 0.5,
+      confirmed: false,
+      evidence: [{ ...evidence }],
+    });
+
+    const ids = divergenceDependencyEventIds(storyMap, "event_07");
+
+    expect([...ids].sort()).toEqual(["event_02", "event_06", "event_07"]);
+    // 从分歧事件出发的边（event_07 -> event_08）不算直接依赖。
+    expect(ids.has("event_08")).toBe(false);
+    expect(ids.has("event_05")).toBe(false);
+  });
+
+  it("includes dependency evidence even when it is not otherwise relevant", async () => {
+    const fixture = await loadRippleFixture();
+    const plan = structuredClone(fixture.impactPlans[0]!);
+    plan.impacts = [];
+    plan.anchorEvaluations = [];
+    plan.anchors = [];
+
+    const items = buildRelatedEvidenceItems({
+      storyMap: fixture.storyMap,
+      source: fixture.source,
+      impactPlan: plan,
+    });
+    const ids = items.map((item) => item.id);
+
+    expect(ids.some((id) => id.startsWith("related:event_07:"))).toBe(true);
+    expect(ids.some((id) => id.startsWith("related:event_06:"))).toBe(true);
+    expect(ids.some((id) => id.startsWith("related:event_08:"))).toBe(false);
   });
 });
