@@ -8,6 +8,7 @@ import { validateStoryMap } from "@/domain/invariants/validate-story-map";
 import { deriveEvidenceUnitChunks } from "@/domain/source/evidence-unit-chunks";
 import { deriveEvidenceUnits } from "@/domain/source/evidence-units";
 import { CHARACTER_ENDING_PREFIX } from "@/domain/story-map/assemble-story-map-candidate";
+import { computeEventBudget } from "@/domain/story-map/event-budget";
 import { MockAIProvider } from "@/server/ai/mock-provider";
 import { closeDatabase, getDatabase } from "@/server/db/client";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
@@ -104,13 +105,13 @@ const modelConfig = {
 };
 
 describe("chunked Story Map recall pipeline", () => {
-  it("pins the v5 event prompts while names and endings stay v2", () => {
+  it("pins chunk and glean v5, merge v7, and names/endings v2", () => {
     expect(STORY_MAP_PROMPT_VERSIONS).toEqual({
       extract: "story-map-chunk.v5",
       glean: "story-map-glean.v5",
       names: "story-map-names.v2",
       endings: "story-map-endings.v2",
-      merge: "story-map-merge.v5",
+      merge: "story-map-merge.v7",
     });
   });
 
@@ -208,12 +209,15 @@ describe("chunked Story Map recall pipeline", () => {
         chunk.coreUnitIds.reduce((sum, id) => sum + unitTextById.get(id)!.length, 0),
       0,
     );
-    const lowerTarget = Math.max(3, Math.round(totalCoreChars / 1000));
-    const upperTarget = Math.max(lowerTarget, Math.round(totalCoreChars / 600));
     const mergePrompt = provider.requests[stage.merge]?.prompt;
     expect(mergePrompt).toContain("<granularity_hint>");
-    expect(mergePrompt).toContain(`"coreTextChars":${totalCoreChars}`);
-    expect(mergePrompt).toContain(`"targetEventRange":[${lowerTarget},${upperTarget}]`);
+    const budgetHint = mergePrompt?.match(
+      /<granularity_hint>\n([\s\S]*?)\n<\/granularity_hint>/,
+    )?.[1];
+    // 合并前的池事件数等于夹具事件数：每块抽取只放一次，补抽与结局轮次不新增事件。
+    expect(JSON.parse(budgetHint!)).toEqual(
+      computeEventBudget(totalCoreChars, fixture.storyMap.events.length),
+    );
 
     const runs = listProjectGenerationRuns(project.id);
     const describeRun = (run: { kind: string; promptVersion: string; status: string }) =>
