@@ -491,6 +491,8 @@ describe("setting delta repository and action", () => {
       "\u202E",
       "\u{E0041}",
       "\u3164",
+      "🏽",
+      "字🏽",
     ].entries()) {
       let caught: unknown;
       try {

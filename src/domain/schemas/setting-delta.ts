@@ -23,6 +23,7 @@ const SETTING_DELTA_FORBIDDEN_CATEGORY =
   /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]/u;
 const SETTING_DELTA_EMOJI_CAPABLE = /\p{Emoji}/u;
 const SETTING_DELTA_EXTENDED_PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+const SETTING_DELTA_EMOJI_MODIFIER_BASE = /\p{Emoji_Modifier_Base}/u;
 
 /** 视觉上为空白、但不是普通空格的码位；普通空格与全角空格仍允许。 */
 const SETTING_DELTA_VISUALLY_BLANK = new Set([
@@ -227,7 +228,8 @@ function consumeEmojiUnit(
   codePoints: readonly number[],
   index: number,
 ): number {
-  if (!isEmojiCapable(codePoints[index]!)) return index;
+  const base = codePoints[index]!;
+  if (!isEmojiCapable(base)) return index;
   let cursor = index + 1;
   if (
     cursor < codePoints.length &&
@@ -235,14 +237,27 @@ function consumeEmojiUnit(
   ) {
     cursor += 1;
   }
-  if (cursor < codePoints.length && isSkinTone(codePoints[cursor]!)) {
+  // 肤色修饰符只能跟在 Emoji_Modifier_Base 后；❤️🏽 这类序列仍会拒绝 🏽。
+  if (
+    cursor < codePoints.length &&
+    isSkinTone(codePoints[cursor]!) &&
+    isEmojiModifierBase(base)
+  ) {
     cursor += 1;
   }
   return cursor;
 }
 
 function isEmojiCapable(codePoint: number): boolean {
+  // 肤色修饰符不是基字；孤立出现（或跟在非基字后）必须交给拒收逻辑。
+  if (isSkinTone(codePoint)) return false;
   return SETTING_DELTA_EMOJI_CAPABLE.test(String.fromCodePoint(codePoint));
+}
+
+function isEmojiModifierBase(codePoint: number): boolean {
+  return SETTING_DELTA_EMOJI_MODIFIER_BASE.test(
+    String.fromCodePoint(codePoint),
+  );
 }
 
 function isExtendedPictographic(codePoint: number): boolean {
@@ -316,13 +331,7 @@ function settingDeltaTextSchema(
   return z
     .string()
     .superRefine((value, context) => {
-      const forbidden = findForbiddenSettingDeltaChar(value);
-      if (forbidden !== null) {
-        context.addIssue({
-          code: "custom",
-          message: settingDeltaForbiddenCharMessage(forbidden, charLabel),
-        });
-      }
+      addSettingDeltaForbiddenCharIssue(value, context, charLabel);
     })
     .transform(normalizeSettingDeltaText)
     .pipe(
@@ -331,6 +340,32 @@ function settingDeltaTextSchema(
         .min(1, `${label}不能为空`)
         .max(maxChars, `${label}不能超过 ${maxChars} 个字符`),
     );
+}
+
+/**
+ * 只拒绝不可见/畸形字符、不做 NFC/trim 或长度限制的说明 Schema。
+ *
+ * Server Action 用它在进入仓储前把具体码位错误回给读者；trim/NFC 与
+ * 1–200 字长度仍由仓储层按存储文本统一校验，避免原始长度抢先拒绝本应
+ * 被规范化接受的文本。
+ */
+export const SettingDeltaStatementInputSchema = z
+  .string()
+  .superRefine((value, context) => {
+    addSettingDeltaForbiddenCharIssue(value, context, "设定说明");
+  });
+
+function addSettingDeltaForbiddenCharIssue(
+  value: string,
+  context: z.RefinementCtx,
+  charLabel: SettingDeltaCharLabel,
+): void {
+  const forbidden = findForbiddenSettingDeltaChar(value);
+  if (forbidden === null) return;
+  context.addIssue({
+    code: "custom",
+    message: settingDeltaForbiddenCharMessage(forbidden, charLabel),
+  });
 }
 
 /**

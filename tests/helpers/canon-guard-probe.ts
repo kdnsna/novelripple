@@ -132,6 +132,9 @@ export const CANON_GUARD_SHOULD_REJECT = [
   "灯塔熄灭未发生过。",
   "灯塔熄灭未曾发生。",
   "灯塔熄灭没有发生过。",
+  // 裸「说」不再无条件豁免：这些是叙述者的直接断言，不是引述。
+  "众人说完后便散了，灯塔熄灭从未发生过。",
+  "这么说来，灯塔熄灭从未发生过。",
 ] as const;
 
 /**
@@ -162,7 +165,7 @@ export const CANON_GUARD_LEGITIMATE = [
 ] as const;
 
 /**
- * 8 条对白/谎言/传闻/怀疑/被转述的句子。
+ * 14 条对白/谎言/传闻/怀疑/角色断言/愿望/被转述的句子。
  *
  * 这些句子里的“未发生/不存在/是假的”属于角色话语或叙述者的不确定转述，
  * 不是叙述者的直接断言；只允许 warning，必须 0 条硬拒绝。
@@ -176,6 +179,28 @@ export const CANON_GUARD_DIALOGUE_LIE = [
   "“灯塔熄灭从来没有发生过。”她撒谎道。",
   "他骗众人说交出钥匙是假的。",
   "她坚称灯塔熄灭从未发生，没人信。",
+  // PR #15：角色断言与愿望框架同样只警告。
+  "老渔夫一口咬定灯塔熄灭没发生过。",
+  "她咬定交出钥匙从来没有发生过。",
+  "他多希望灯塔熄灭从未发生。",
+  "但愿交出钥匙从未发生过。",
+  "她坚持说灯塔熄灭根本没有发生过。",
+  "他矢口否认交出钥匙存在过。",
+] as const;
+
+/**
+ * 8 条按评审方类别构造的对白探针：谎言、引号对白、传闻、怀疑/疑问、
+ * maybe、角色咬定、愿望、转述。全部是自建短句，必须 0 条硬拒绝。
+ */
+export const CANON_GUARD_REVIEWER_DIALOGUE = [
+  "他撒谎说灯塔熄灭从未发生过。", // lie
+  "“交出钥匙从来没有发生过。”她低声说。", // quoted dialogue
+  "据说灯塔熄灭根本没有发生过。", // hearsay
+  "她怀疑交出钥匙从未存在过。", // doubt/question
+  "或许灯塔熄灭从来没有发生过。", // maybe
+  "老渔夫一口咬定灯塔熄灭没发生过。", // character insists
+  "他多希望灯塔熄灭从未发生。", // wish
+  "她转述说灯塔熄灭根本没有发生过。", // reported speech
 ] as const;
 
 /** 数百字中性叙述，逐字提到锁定事件标题但不含否定/改写语义。 */
@@ -206,6 +231,10 @@ export type CanonGuardProbeStats = {
   dialogueHardRejects: number;
   /** 对白/谎言/传闻样本中出现 warning 的数量。 */
   dialogueWarnings: number;
+  /** 评审方类别对白样本中被硬拒绝的数量（必须为 0）。 */
+  reviewerDialogueHardRejects: number;
+  /** 评审方类别对白样本中出现 warning 的数量。 */
+  reviewerDialogueWarnings: number;
 };
 
 function evaluate(text: string) {
@@ -222,6 +251,7 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
   const shouldReject = CANON_GUARD_SHOULD_REJECT.map(evaluate);
   const legitimate = CANON_GUARD_LEGITIMATE.map(evaluate);
   const dialogue = CANON_GUARD_DIALOGUE_LIE.map(evaluate);
+  const reviewerDialogue = CANON_GUARD_REVIEWER_DIALOGUE.map(evaluate);
   const neutral = evaluate(CANON_GUARD_NEUTRAL_PROSE);
   return {
     caught: shouldReject.filter((result) => result.issues.length > 0).length,
@@ -238,5 +268,11 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
       .length,
     dialogueWarnings: dialogue.filter((result) => result.warnings.length > 0)
       .length,
+    reviewerDialogueHardRejects: reviewerDialogue.filter(
+      (result) => result.issues.length > 0,
+    ).length,
+    reviewerDialogueWarnings: reviewerDialogue.filter(
+      (result) => result.warnings.length > 0,
+    ).length,
   };
 }

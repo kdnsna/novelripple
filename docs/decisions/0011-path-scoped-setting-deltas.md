@@ -24,7 +24,7 @@
 
 `statement` 与术语 `name` 在写入时做 NFC + trim，长度按存储的 NFC 文本检查（200 / 40）；存储与 Prompt 渲染使用同一份文本。NFC 保留读者输入的 `，！？：（）；…①` 等字符；NFKC 只用于术语主体匹配（`subjectKey`）。
 
-不可见/畸形字符先放行合法 emoji 序列，再按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`。允许的 emoji 形式为：U+FE0E/U+FE0F 仅紧跟在 emoji 基字后；U+200D 仅连接两个 `Extended_Pictographic`（各自可带变体选择符和/或肤色 U+1F3FB–1F3FF）；肤色修饰符只跟在 emoji 基字后；`[0-9#*] FE0F? U+20E3` 键帽；成对区域指示符国旗；以及 U+1F3F4 + U+E0020–E007E + U+E007F 的完整细分旗帜标签序列。其余一律拒绝：孤立/首尾/邻近非 emoji 的 ZWJ、非 emoji 基字后的 FE0E/FE0F、其它零宽/bidi/变体选择符、完整细分旗帜序列之外的标签字符，以及视觉空白码位 U+034F、U+115F、U+1160、U+17B4、U+17B5、U+180E、U+2800、U+3164、U+1D159、U+FFA0、U+1D173–U+1D17A、U+E0000–U+E007F（标签字符只在上述完整序列中放行）。普通空格与全角空格仍允许。
+不可见/畸形字符先放行合法 emoji 序列，再按 Unicode 大类拒绝 `Cc` / `Cf` / `Cs` / `Co` / `Zl` / `Zp`。允许的 emoji 形式为：U+FE0E/U+FE0F 仅紧跟在 emoji 基字后；U+200D 仅连接两个 `Extended_Pictographic`（各自可带变体选择符和/或肤色 U+1F3FB–1F3FF）；肤色修饰符只跟在 `Emoji_Modifier_Base` 后，孤立肤色（如单独的 `🏽` 或 `字🏽`）与跟在非基字后的肤色一律拒绝；`[0-9#*] FE0F? U+20E3` 键帽；成对区域指示符国旗；以及 U+1F3F4 + U+E0020–E007E + U+E007F 的完整细分旗帜标签序列。其余一律拒绝：孤立/首尾/邻近非 emoji 的 ZWJ、非 emoji 基字后的 FE0E/FE0F、其它零宽/bidi/变体选择符、完整细分旗帜序列之外的标签字符，以及视觉空白码位 U+034F、U+115F、U+1160、U+17B4、U+17B5、U+180E、U+2800、U+3164、U+1D159、U+FFA0、U+1D173–U+1D17A、U+E0000–U+E007F（标签字符只在上述完整序列中放行）。普通空格与全角空格仍允许。
 
 错误文案直接指出具体码位，例如「词条名包含不允许的字符 U+200B（零宽空格）」；Schema、服务端、Server Action 与界面共用同一个 `findForbiddenSettingDeltaChar`（返回码位）和同一条文案 helper，不存在“测量去不可见字符、渲染保留不可见字符”的双口径。
 
@@ -80,7 +80,7 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
   - 实际渲染进 Prompt 的 `setting_deltas` 文本长度 ≤ `SETTING_DELTA_CONTEXT_MAX_CHARS = 2000`。
 - 渲染函数只有一个：`renderSettingDeltaContextText(items)` 返回 `<setting_deltas>` 标签内部逐条文本（`\n` 连接）的精确字符串。组装器与写时检查都调用它，写时 `.length` 就是 Prompt 实际长度；不再使用 `normalizedContextChars` 之类的第二套测量。NFC 组合字符（例如谚文 jamo）在存储、测量、渲染三处一致。
 - 任一路径或世界线上限超限即 fail closed。`path_active_limit` 文案仍指出具体路径与 20 条上限；`path_text_limit` 的读者文案改为「会使「第 3 幕 · 标题」所在路径的设定增量过长：请缩短规则说明，或停用/删除该路径上的其他规则」，不显示 2000 / 当前长度等原始数字（数字只留在内部 `message` / 日志与稳定 `code` 中）。同一主体替换不增加 active 数，但仍必须让所有受影响路径都通过检查。
-- 仓储与领域检查统一抛 `SettingDeltaError`，带稳定 `code`（`forbidden_char`、`path_active_limit`、`path_text_limit`、`worldline_active_rows_limit`、`worldline_total_rows_limit`、`deleted_terminal`、`invalid_anchor` 等）与已面向读者的中文 `message`。Server Action 对该类型直接返回 `error.message`，不再维护易漂移的字符串白名单。
+- 仓储与领域检查统一抛 `SettingDeltaError`，带稳定 `code`（`forbidden_char`、`path_active_limit`、`path_text_limit`、`worldline_active_rows_limit`、`worldline_total_rows_limit`、`deleted_terminal`、`invalid_anchor` 等）与已面向读者的中文 `message`。Server Action 对该类型直接返回 `error.message`，不再维护易漂移的字符串白名单。输入解析失败时，若任意 issue 来自同一条不可见字符文案，`settingDeltaInputErrorMessage` 也直接返回该具体码位信息（例如「词条名包含不允许的字符 U+200B（零宽空格）」）；其余字段仍只回复通用提示，不回显 Zod 内部结构或原始输入。
 - 检查与插入之间没有 `await`，并发写入只能有一个越过上限；重新启用同样对整棵锚点子树检查，不增加行数但必须尊重 50 条未删除行与 20 个 active 主体。
 - 界面在当前路径 active ≥ 20、世界线未删除行 ≥ 50 或全部行（含已删除）≥ 200 时提示并禁用添加。服务端仍独立校验，不依赖界面。
 
@@ -121,7 +121,7 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 
 - **锁定集合**与 `validateContinuationStatePatch` 的“分歧前”定义一致：Story Map 中 `sequence < 分歧事件.sequence` 且不在**当前路径状态** `factsRemoved`（`derivePathState(baseDelta, path)`）中的事件。分歧后事件永不锁定；路径上合法删除的事件也不锁定。
 - **精度**：只硬拒绝高置信的字面否定——锁定事件标题与“未发生 / 不存在 / 是假的 / 是捏造的”等明确谓词直接绑定，且否定词后必须确实跟“发生/存在”类谓词（例如 `从来没有发生过<title>`、`<title>根本没有发生过`、`<title>没发生过`、`<title>未曾发生`、`<title>是捏造的`），中间最多几个助词（过/了/这件事/那场等，≤4 字），且在同一句内。发生/存在类否定词包括 从未/从来没有/根本没有/压根没有/其实没有/压根没/并没有/未曾/从没/并未/不曾/没有/未/没，但都只有后接发生/存在谓词时才硬拒绝。反事实线索（如果/要不是/若是/假如/倘若/要是）必须与否定谓词处于同一分句且位于其前面才豁免；失去义（没有了/再也没有）只在该线索本身紧邻标题时豁免，因此「灯塔熄灭从未发生过，如果有人问起就这么说。」与「假如你还记得，灯塔熄灭根本没有发生过。」仍硬拒绝。裸 `没有<title>`、`没有忘记<title>`、回忆（`想起<title>……不再…`）、因果（`因为<title>，她不再…`）、附近出现 `取消了`、提及其它否定词，都只产生 warning。
-- **对白/谎言/传闻只警告**：硬检查前先剥离成对引号（「」『』“”‘’与 ASCII 双引号，含嵌套；未闭合引号遮蔽到句末）内的内容；引号内若单独看足以命中，仍产生 warning。引号外的匹配若前面同一句出现引述/传闻/怀疑/撒谎线索（说/说道/声称/坚称/告诉/骗/撒谎/谎称/听说/据说/据传/传言/传闻/有人说/难道/也许/或许/可能/大概/怀疑/以为/假装/装作），也只警告，不硬拒绝——只有叙述者直接断言事件没有发生才硬拒绝。
+- **对白/谎言/传闻/角色断言/愿望只警告**：硬检查前先剥离成对引号（「」『』“”‘’与 ASCII 双引号，含嵌套；未闭合引号遮蔽到句末）内的内容；引号内若单独看足以命中，仍产生 warning。引号外的匹配若前面同一句出现引述/传闻/怀疑/撒谎线索（说道/声称/坚称/告诉/撒谎/谎称/听说/据说/据传/传言/传闻/有人说/难道/也许/或许/可能/大概/怀疑/以为/假装/装作）、角色断言框架（一口咬定/咬定/咬死/坚持说/坚持认为/一再强调/矢口否认/否认/断言/发誓/嚷道/喊道/辩称/硬说/非说）或愿望框架（希望/多希望/但愿/宁愿/巴不得/恨不得/盼着/宁可相信/祈祷），也只警告，不硬拒绝——只有叙述者直接断言事件没有发生才硬拒绝。裸 `说` / `骗` 不再无条件豁免：`说` 只在它与匹配处于同一分句，或紧跟 `：` / `:` / `，` 时算引述，且排除 `说完/说明/说起/说来/说法/说服/说过了`；`骗` 只认「骗…说」「骗人」「欺骗」。因此叙述句「众人说完后便散了，灯塔熄灭从未发生过。」「这么说来，灯塔熄灭从未发生过。」仍硬拒绝；「矢口否认<title>存在过」这类没有显式否定词的角色断言至少产生 warning。
 - **召回边界**：换一种说法的否定、隐含矛盾、与已确认设定的矛盾不会被这个字面护栏抓到。它是低召回护栏，不是语义判定。
 - **策略开关**：环境变量 `CONTINUATION_CANON_GUARD` 由服务端配置 helper 解析，缺省 `strict`；`warn` 把所有信号降级为 warning，`off` 关闭生成后检查（Prompt 护栏仍保留）。非法值在任何模型调用前 fail closed。
 - **硬拒绝**仍走既有 validation-issue → repair → fail-closed 路径：Generation Run 记为 failed、保留原始输出、不落 Artifact。服务端边界把可识别的 Canon 硬拒绝映射为「生成内容明确否定了分歧前已确认的原著事件「<title>」，已拒绝且未保存；请重试或换一批。」，不回显模型正文。
@@ -129,7 +129,7 @@ artifact_setting_delta_<sha256("setting_delta:<worldlineId>:<anchor|root>:<key>"
 - 方向校验覆盖标题、前提与预期后果，场景校验覆盖标题、正文与摘要。
 - **旧 Impact Plan 读取**：`getImpactPlanArtifact` 在 Zod 解析后重新加载绑定 Story Map，并复用 `validateImpactPlanUncertainEdgeIds` 校验 `uncertainEdgeIds` / `usedUncertainEdgeIds`；悬空 Edge id 直接抛错，不把无效计划交给预览、接受或续写。
 
-标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**catch 12/18，hard false-reject 0/19，legit warnings 10/19，中性长文 hard reject 0，对白/谎言/传闻 hard reject 0/8、warnings 8/8**。18 条应拒绝样本包含直接否定、前缀否定、“没发生过/未发生过/未曾发生”等变体、跨分句反事实与明确抓不到的改写；19 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、同分句反事实/失去义、分歧后事件、路径删除事件与中性提及；8 条对白/谎言/传闻样本覆盖引号、据说、难道、也许、撒谎、骗、坚称等只警告情形。测试同时断言合法与对白样本的硬假阳性必须为 0。**这些数字来自我们自建的探针集，不是通用召回率承诺；评审方独立的 11 条样本集上 catch 为 3/11。**
+标注探针（`tests/unit/canon-guard-probe.test.ts`，自建迷你故事地图，不含原文）测得：**自建 should-reject catch 14/20，hard false-reject 0/19，legit warnings 10/19，中性长文 hard reject 0，自建对白/谎言/角色断言/愿望 hard reject 0/14、warnings 14/14；另按评审方类别构造的 8 条 reviewer-modelled dialogue hard reject 0/8、warnings 8/8**。20 条应拒绝样本包含直接否定、前缀否定、“没发生过/未发生过/未曾发生”等变体、跨分句反事实、明确抓不到的改写，以及两条裸「说」叙述句（`众人说完后…`、`这么说来…`）；19 条合法样本覆盖回忆、因果、`没有忘记`、附近 `取消`、裸 `没有<title>`、同分句反事实/失去义、分歧后事件、路径删除事件与中性提及；14 条对白样本覆盖引号、据说、难道、也许、撒谎、骗、坚称，以及新增的角色咬定/坚持/矢口否认/愿望等只警告情形；8 条 reviewer-modelled 样本覆盖谎言、引号对白、传闻、怀疑/疑问、maybe、角色咬定、愿望与被转述。测试同时断言合法、对白与 reviewer-modelled 样本的硬假阳性必须为 0。**这些数字来自我们自建或按评审方类别自建的探针集，不是通用召回率承诺；评审方独立的 11 条样本集上 catch 为 3/11（评审方报告）。**
 
 ### 10. 上下文阶梯与单调性
 

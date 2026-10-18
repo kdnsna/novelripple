@@ -6,6 +6,7 @@ import {
   CANON_GUARD_NEUTRAL_PROSE,
   CANON_GUARD_PROBE_PATH_STATE,
   CANON_GUARD_PROBE_STORY_MAP,
+  CANON_GUARD_REVIEWER_DIALOGUE,
   CANON_GUARD_SHOULD_REJECT,
   computeCanonGuardProbeStats,
 } from "../helpers/canon-guard-probe";
@@ -21,6 +22,7 @@ const stats = computeCanonGuardProbeStats();
 const shouldRejectCount = CANON_GUARD_SHOULD_REJECT.length;
 const legitimateCount = CANON_GUARD_LEGITIMATE.length;
 const dialogueCount = CANON_GUARD_DIALOGUE_LIE.length;
+const reviewerDialogueCount = CANON_GUARD_REVIEWER_DIALOGUE.length;
 
 describe("canon guard labeled probe", () => {
   it(
@@ -30,24 +32,32 @@ describe("canon guard labeled probe", () => {
       legitimateCount
     }, neutral ${stats.neutralHardRejects}, dialogue hard-reject ${
       stats.dialogueHardRejects
-    }/${dialogueCount}, dialogue warnings ${stats.dialogueWarnings}/${dialogueCount}`,
+    }/${dialogueCount}, dialogue warnings ${stats.dialogueWarnings}/${dialogueCount}, reviewer dialogue hard-reject ${
+      stats.reviewerDialogueHardRejects
+    }/${reviewerDialogueCount}, reviewer dialogue warnings ${
+      stats.reviewerDialogueWarnings
+    }/${reviewerDialogueCount}`,
     () => {
-      // 合法续写与对白/传闻都是硬约束：一条都不能被硬拒绝。
+      // 合法续写、对白/传闻与评审方类别样本都是硬约束：一条都不能被硬拒绝。
       expect(stats.hardFalseRejects).toBe(0);
       expect(stats.neutralHardRejects).toBe(0);
       expect(stats.dialogueHardRejects).toBe(0);
+      expect(stats.reviewerDialogueHardRejects).toBe(0);
       // 每一类都应至少产生低置信 warning，而不是静默丢失信号。
       expect(stats.warningsOnLegitimate).toBeGreaterThan(0);
       expect(stats.dialogueWarnings).toBeGreaterThan(0);
+      expect(stats.reviewerDialogueWarnings).toBeGreaterThan(0);
       // 探针输入没有变化时结果必须确定。
       expect(computeCanonGuardProbeStats()).toEqual(stats);
       expect(stats).toMatchInlineSnapshot(`
         {
-          "caught": 12,
+          "caught": 14,
           "dialogueHardRejects": 0,
-          "dialogueWarnings": 8,
+          "dialogueWarnings": 14,
           "hardFalseRejects": 0,
           "neutralHardRejects": 0,
+          "reviewerDialogueHardRejects": 0,
+          "reviewerDialogueWarnings": 8,
           "warningsOnLegitimate": 10,
           "warningsOnShouldReject": 4,
         }
@@ -79,9 +89,10 @@ describe("canon guard labeled probe", () => {
   });
 
   it("records the expected probe sizes", () => {
-    expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(18);
+    expect(CANON_GUARD_SHOULD_REJECT).toHaveLength(20);
     expect(CANON_GUARD_LEGITIMATE).toHaveLength(19);
-    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(8);
+    expect(CANON_GUARD_DIALOGUE_LIE).toHaveLength(14);
+    expect(CANON_GUARD_REVIEWER_DIALOGUE).toHaveLength(8);
     expect(CANON_GUARD_NEUTRAL_PROSE.length).toBeGreaterThan(200);
   });
 });

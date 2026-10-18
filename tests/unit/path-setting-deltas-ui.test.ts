@@ -344,6 +344,24 @@ describe("path setting delta presentation helpers", () => {
     }
   });
 
+  it("rejects a skin-tone modifier unless it follows an emoji modifier base", () => {
+    expect(findForbiddenSettingDeltaChar("👍🏽")).toBeNull();
+    expect(findForbiddenSettingDeltaChar("🏽")).toBe(0x1f3fd);
+    expect(findForbiddenSettingDeltaChar("字🏽")).toBe(0x1f3fd);
+    expect(findForbiddenSettingDeltaChar("❤️🏽")).toBe(0x1f3fd);
+    expect(
+      validateSettingDeltaDraft({
+        subjectKind: "term",
+        characterId: "",
+        termName: "旧灯塔",
+        statement: "旧灯塔🏽已被封锁。",
+      }),
+    ).toEqual({
+      valid: false,
+      error: "设定说明包含不允许的字符 U+1F3FD",
+    });
+  });
+
   it("stores NFC-composed text, preserves full-width punctuation, and measures the stored length", () => {
     // U+1100 U+1161 U+11A8 经 NFC 也组合成 U+AC01（각）。
     const composed = "\u1100\u1161\u11A8";

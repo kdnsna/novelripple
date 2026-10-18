@@ -376,6 +376,9 @@ const CANON_WEAK_CUES = [
   "从没",
   "从来没有",
   "根本没有",
+  // 「矢口否认<title>存在过」没有“没有/未”类否定词，但“否认”本身就是改写信号，
+  // 因此只进入弱线索，不参与硬拒绝。
+  "否认",
 ] as const;
 
 /**
@@ -452,7 +455,8 @@ const CANON_LOSS_CUES = ["没有了", "再也没有"] as const;
  * 引述/对白/传闻/怀疑/撒谎等框架只产生 warning，不硬拒绝。
  *
  * 这些线索必须出现在匹配之前（同一句）；硬检查前还会先剥离成对引号内的
- * 内容，因此角色对白里的否定不会被当成叙述者的直接断言。
+ * 内容，因此角色对白里的否定不会被当成叙述者的直接断言。裸 `说` 与 `骗`
+ * 太短，改用下方更窄的 `hasReportingSayCue` / `hasDeceptionCue` 判定。
  */
 const CANON_DIALOGUE_CUES = [
   "有人说",
@@ -476,9 +480,47 @@ const CANON_DIALOGUE_CUES = [
   "或许",
   "可能",
   "大概",
-  "骗",
-  "说",
 ] as const;
+
+/**
+ * 角色断言框架：角色“咬定/坚持/否认/发誓”的内容仍是角色话语，不是
+ * 叙述者的直接断言，只产生 warning。线索必须出现在匹配之前（同一句）。
+ */
+const CANON_CHARACTER_ASSERTION_CUES = [
+  "一口咬定",
+  "咬定",
+  "咬死",
+  "坚持说",
+  "坚持认为",
+  "一再强调",
+  "矢口否认",
+  "否认",
+  "断言",
+  "发誓",
+  "嚷道",
+  "喊道",
+  "辩称",
+  "硬说",
+  "非说",
+] as const;
+
+/** 愿望/假设框架：角色“希望/但愿/宁愿”的事没有发生，同样只警告。 */
+const CANON_WISH_CUES = [
+  "多希望",
+  "希望",
+  "但愿",
+  "宁愿",
+  "巴不得",
+  "恨不得",
+  "盼着",
+  "宁可相信",
+  "祈祷",
+] as const;
+
+/** `说` 只有作为引述动词时才豁免；这些后续字说明它是“说完/说明/起来”等。 */
+const CANON_SAY_BLOCKED_FOLLOWERS = new Set(["完", "明", "起", "来", "法", "服"]);
+/** 说：/ 说: / 说，是明确的引述框架，即使逗号后已跨分句。 */
+const CANON_SAY_IMMEDIATE_PUNCTUATION = new Set(["：", ":", "，"]);
 
 /** 分句边界：只在同一分句内判断反事实线索与否定谓词的关系。 */
 const CANON_CLAUSE_DELIMITER = /[，,；;：:、]/u;
@@ -603,9 +645,59 @@ function isNonAssertionMatch(
     return true;
   }
 
-  return CANON_DIALOGUE_CUES.some((cue) =>
-    sentence.slice(0, start).includes(cue),
+  return (
+    CANON_DIALOGUE_CUES.some((cue) =>
+      sentence.slice(0, start).includes(cue),
+    ) ||
+    CANON_CHARACTER_ASSERTION_CUES.some((cue) =>
+      sentence.slice(0, start).includes(cue),
+    ) ||
+    CANON_WISH_CUES.some((cue) => sentence.slice(0, start).includes(cue)) ||
+    hasReportingSayCue(sentence, start, clauseStart) ||
+    hasDeceptionCue(sentence.slice(0, start))
   );
+}
+
+/**
+ * `说` 仅在引述框架中豁免：
+ * - 与匹配处于同一分句（`他说了…`、`他转述说…`）；或
+ * - 紧跟 `：` / `:` / `，`（`他说：…`、`他说，…`）。
+ *
+ * 但“说完/说明/说起/说来/说法/说服/说过了”不是引述动词，因此像
+ * 「众人说完后便散了，灯塔熄灭从未发生过。」「这么说来，……」仍会硬拒绝。
+ */
+function hasReportingSayCue(
+  sentence: string,
+  matchStart: number,
+  clauseStart: number,
+): boolean {
+  for (let index = clauseStart; index < matchStart; index += 1) {
+    if (sentence[index] !== "说") continue;
+    if (isBlockedReportingSay(sentence, index)) continue;
+    return true;
+  }
+  for (let index = 0; index < matchStart; index += 1) {
+    if (sentence[index] !== "说") continue;
+    if (isBlockedReportingSay(sentence, index)) continue;
+    if (CANON_SAY_IMMEDIATE_PUNCTUATION.has(sentence[index + 1] ?? "")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isBlockedReportingSay(sentence: string, index: number): boolean {
+  const next = sentence[index + 1];
+  if (next === undefined) return false;
+  if (CANON_SAY_BLOCKED_FOLLOWERS.has(next)) return true;
+  return next === "过" && sentence[index + 2] === "了";
+}
+
+/** `骗` 只在「骗…说」「骗人」「欺骗」中作为转述/谎言框架。 */
+function hasDeceptionCue(prefix: string): boolean {
+  if (prefix.includes("欺骗") || prefix.includes("骗人")) return true;
+  const lieIndex = prefix.indexOf("骗");
+  return lieIndex >= 0 && prefix.slice(lieIndex + 1).includes("说");
 }
 
 function clauseStartBefore(sentence: string, index: number): number {
