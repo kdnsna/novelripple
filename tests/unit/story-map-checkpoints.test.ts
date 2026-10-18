@@ -2,7 +2,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { deriveEvidenceUnitChunks } from "@/domain/source/evidence-unit-chunks";
@@ -203,6 +203,107 @@ async function createContext() {
     source,
     chunks,
     providerResponses: buildFixtureStageResponses(responses, chunks.length),
+  };
+}
+
+/**
+ * 三个自然段各约 5,250 字，超过两块合并上限，稳定生成三个分块。
+ * 全部内容都是自造短句，只用于验证分块来源列表的位置对齐。
+ */
+async function createThreeChunkContext() {
+  const text = [
+    "许澄在旧宅发现一封未寄出的信。",
+    "沈岚在渡口听见有人提起那封信。",
+    "两人在雨夜决定把信交给报馆。",
+  ]
+    .map((sentence) => sentence.repeat(350))
+    .join("\n\n");
+  const project = createProject({ title: "Story Map legacy run gap" });
+  const source = importProjectSource({
+    projectId: project.id,
+    fileName: "invented-three-chunks.md",
+    bytes: new TextEncoder().encode(text),
+  }).source;
+  const chunks = deriveEvidenceUnitChunks(deriveEvidenceUnits(source));
+  const names = ["许澄", "沈岚", "报馆编辑"] as const;
+  const roles = ["protagonist", "supporting", "minor"] as const;
+  const summaries = ["许澄发现旧信", "沈岚听说旧信", "两人决定交出旧信"] as const;
+
+  const extractionByChunk = new Map(
+    chunks.map((chunk, index) => {
+      const characterId = `character_${index + 1}`;
+      const eventId = `event_${index + 1}`;
+      return [
+        index,
+        JSON.stringify({
+          title: "旧信",
+          logline: "一封未寄出的信改变了两个人的选择",
+          characters: [
+            {
+              id: characterId,
+              name: names[index]!,
+              aliases: [],
+              role: roles[index]!,
+              initialState: "尚未作出选择",
+              kind: "individual",
+            },
+          ],
+          events: [
+            {
+              id: eventId,
+              title: summaries[index]!,
+              summary: summaries[index]!,
+              sequence: index + 1,
+              participants: [characterId],
+              stateChanges: [`${names[index]}知道了旧信的存在`],
+              evidenceKind: "fact",
+              evidenceUnitIds: [chunk.coreUnitIds[0]!],
+            },
+          ],
+          edges: [],
+        }),
+      ] as const;
+    }),
+  );
+
+  return {
+    project,
+    source,
+    chunks,
+    providerResponses: {
+      extractionByChunk,
+      gleaning: JSON.stringify({ characters: [], events: [], edges: [] }),
+      names: JSON.stringify({
+        characters: names.map((name, index) => ({
+          id: `character_${index + 1}`,
+          name,
+          aliases: [],
+          role: roles[index]!,
+          initialState: "尚未作出选择",
+          mergedFrom: [`character_${index + 1}`],
+        })),
+        rejectedCandidateIds: [],
+      }),
+      endings: JSON.stringify({
+        additionalEvents: [],
+        endings: [
+          {
+            id: "ending_1",
+            targetEventId: "event_3",
+            requirement: "旧信被交到报馆",
+            evidenceUnitIds: [chunks[2]!.coreUnitIds[0]!],
+          },
+        ],
+        characterEndings: [],
+      }),
+      merge: JSON.stringify({
+        title: "旧信",
+        logline: "一封未寄出的信改变了两个人的选择",
+        duplicateEventGroups: [],
+        duplicateEndingGroups: [],
+        edges: [],
+      }),
+    },
   };
 }
 
@@ -460,6 +561,9 @@ describe("Story Map chunk checkpoints", () => {
         freshCheckpoints.get(`${chunk.index}:glean`)!.generationRunId,
       );
     });
+    // 全新 run group 的每个分块都有真实来源，没有 null 占位。
+    expect(fresh.generation.extractorRunIds).not.toContain(null);
+    expect(fresh.generation.gleaningRunIds).not.toContain(null);
     expect(storyMapContent(resumed.artifact.storyMap)).toEqual(
       storyMapContent(fresh.artifact.storyMap),
     );
@@ -584,6 +688,61 @@ describe("Story Map chunk checkpoints", () => {
     }
   });
 
+  it("keeps one run-id slot per chunk and uses null for a legacy middle chunk", async () => {
+    const { project, source, chunks, providerResponses } =
+      await createThreeChunkContext();
+    expect(chunks).toHaveLength(3);
+    const runGroupId = "run_three_chunk_legacy_gap";
+    const first = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider: new FixtureStageProvider(providerResponses),
+      modelConfig,
+      runGroupId,
+    });
+    expect(first.generation.extractorRunIds).toHaveLength(chunks.length);
+    expect(first.generation.gleaningRunIds).toHaveLength(chunks.length);
+    expect(first.generation.extractorRunIds).not.toContain(null);
+    expect(first.generation.gleaningRunIds).not.toContain(null);
+    const originalExtractorRunIds = [...first.generation.extractorRunIds];
+    const originalGleaningRunIds = [...first.generation.gleaningRunIds];
+
+    // 只把中间分块的来源清空，模拟迁移前写入、没有 generation_run_id 的行。
+    const legacyIndex = 1;
+    getDatabase()
+      .update(storyMapChunkCheckpoints)
+      .set({ generationRunId: null })
+      .where(
+        and(
+          eq(storyMapChunkCheckpoints.runGroupId, runGroupId),
+          eq(storyMapChunkCheckpoints.chunkIndex, legacyIndex),
+        ),
+      )
+      .run();
+
+    const resumed = await generateStoryMap({
+      projectId: project.id,
+      sourceId: source.id,
+      provider: new FixtureStageProvider(providerResponses),
+      modelConfig,
+      runGroupId,
+    });
+
+    expect(resumed.generation.reusedChunks).toBe(chunks.length);
+    expect(resumed.generation.extractorRunIds).toEqual([
+      originalExtractorRunIds[0],
+      null,
+      originalExtractorRunIds[2],
+    ]);
+    expect(resumed.generation.gleaningRunIds).toEqual([
+      originalGleaningRunIds[0],
+      null,
+      originalGleaningRunIds[2],
+    ]);
+    expect(resumed.generation.extractorRunIds).toHaveLength(chunks.length);
+    expect(resumed.generation.gleaningRunIds).toHaveLength(chunks.length);
+  });
+
   it("reuses pre-provenance checkpoints without inventing run ids", async () => {
     const { project, source, chunks, providerResponses } =
       await createContext();
@@ -611,7 +770,12 @@ describe("Story Map chunk checkpoints", () => {
       runGroupId,
     });
     expect(resumed.generation.reusedChunks).toBe(chunks.length);
-    expect(resumed.generation.extractorRunIds).toEqual([]);
-    expect(resumed.generation.gleaningRunIds).toEqual([]);
+    // 旧检查点来源未知，但列表仍按分块顺序保留 null 占位。
+    expect(resumed.generation.extractorRunIds).toEqual(
+      chunks.map(() => null),
+    );
+    expect(resumed.generation.gleaningRunIds).toEqual(
+      chunks.map(() => null),
+    );
   });
 });

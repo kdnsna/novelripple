@@ -108,6 +108,49 @@ export const ImpactPlanSchema = z
   })
   .strict()
   .superRefine((plan, context) => {
+    // 不确定项只是服务端派生的索引，必须指向本计划内真实存在的对象。
+    // 旧 Artifact 缺少这些字段时保持原样，下面的检查自然跳过。
+    const impactIds = new Set(plan.impacts.map((impact) => impact.id));
+    for (const [field, values] of [
+      ["uncertainEdgeIds", plan.uncertainEdgeIds],
+      ["uncertainImpactIds", plan.uncertainImpactIds],
+      ["usedUncertainEdgeIds", plan.usedUncertainEdgeIds],
+    ] as const) {
+      if (!values) continue;
+      const seen = new Set<string>();
+      values.forEach((value, index) => {
+        if (seen.has(value)) {
+          context.addIssue({
+            code: "custom",
+            path: [field, index],
+            message: `${field} 不得重复：${value}`,
+          });
+        }
+        seen.add(value);
+      });
+    }
+    plan.uncertainImpactIds?.forEach((impactId, index) => {
+      if (!impactIds.has(impactId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["uncertainImpactIds", index],
+          message: `uncertainImpactIds 引用了本计划中不存在的 Impact：${impactId}`,
+        });
+      }
+    });
+    if (plan.uncertainEdgeIds && plan.usedUncertainEdgeIds) {
+      const uncertainEdgeIds = new Set(plan.uncertainEdgeIds);
+      plan.usedUncertainEdgeIds.forEach((edgeId, index) => {
+        if (!uncertainEdgeIds.has(edgeId)) {
+          context.addIssue({
+            code: "custom",
+            path: ["usedUncertainEdgeIds", index],
+            message: `usedUncertainEdgeIds 必须是 uncertainEdgeIds 的子集：${edgeId}`,
+          });
+        }
+      });
+    }
+
     if (plan.mode === "open") {
       if (plan.anchors.length > 0) {
         context.addIssue({

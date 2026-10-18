@@ -236,6 +236,22 @@ export const StoryMapSchema = z
   })
   .strict();
 
+/**
+ * 生成结果里只用于追踪来源的摘要，不进入 Story Map Artifact。
+ * run id 列表与分块一一对应；旧检查点没有来源时保留 null 占位。
+ */
+export const StoryMapGenerationSchema = z
+  .object({
+    chunkCount: z.number().int().positive(),
+    reusedChunks: z.number().int().nonnegative(),
+    extractorRunIds: z.array(z.string().min(1).nullable()),
+    gleaningRunIds: z.array(z.string().min(1).nullable()),
+    namesRunId: z.string().min(1),
+    endingsRunId: z.string().min(1),
+    reconcilerRunId: z.string().min(1),
+  })
+  .strict();
+
 export type Character = z.infer<typeof CharacterSchema>;
 export type StoryMapCandidateCharacter = z.infer<
   typeof StoryMapCandidateCharacterSchema
@@ -250,6 +266,7 @@ export type StoryMapContentCandidate = z.infer<
   typeof StoryMapContentCandidateSchema
 >;
 export type StoryMap = z.infer<typeof StoryMapSchema>;
+export type StoryMapGeneration = z.infer<typeof StoryMapGenerationSchema>;
 export type StoryMapCandidateEvent = z.infer<typeof StoryMapCandidateEventSchema>;
 export type StoryMapCandidateEdge = z.infer<typeof StoryMapCandidateEdgeSchema>;
 export type StoryMapCandidateEnding = z.infer<typeof StoryMapCandidateEndingSchema>;

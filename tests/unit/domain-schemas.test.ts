@@ -74,6 +74,75 @@ const storyMapCandidate = {
   ],
 };
 
+function validImpactPlan() {
+  return {
+    id: "impact_plan_1",
+    storyMapId: "story_map_1",
+    mode: "strict",
+    divergence: {
+      id: "divergence_choice",
+      eventId: "event_1",
+      type: "choice",
+      instruction: "许澄选择不公开证据",
+    },
+    anchors: [
+      {
+        id: "anchor_1",
+        targetEventId: "event_2",
+        requirement: "证据最终进入公共记录",
+        strength: "hard",
+      },
+    ],
+    impacts: [
+      {
+        id: "impact_direct",
+        scope: "direct",
+        changeType: "removed",
+        fromEventId: "event_1",
+        affectedEventId: "event_1",
+        summary: "公开行动不发生",
+        explanation: "选择直接移除原行动",
+        reasonPath: ["event_1"],
+        confidence: 1,
+      },
+      {
+        id: "impact_downstream",
+        scope: "downstream",
+        changeType: "modified",
+        fromEventId: "event_1",
+        affectedEventId: "event_2",
+        summary: "公众无法按原路径获知证据",
+        explanation: "直接改变向后传导",
+        reasonPath: ["event_1", "event_2"],
+        confidence: 0.9,
+      },
+      {
+        id: "impact_ending",
+        scope: "ending",
+        changeType: "modified",
+        fromEventId: "event_1",
+        affectedEventId: "event_2",
+        summary: "公开结局需要新路径",
+        explanation: "Anchor 不能再按原路径到达",
+        reasonPath: ["event_1", "event_2"],
+        confidence: 0.8,
+      },
+    ],
+    characterChanges: [],
+    threadChanges: { opened: [], closed: [] },
+    anchorEvaluations: [
+      {
+        anchorId: "anchor_1",
+        status: "rerouted",
+        explanation: "仍可以通过新路径满足",
+        reasonPath: ["event_1", "event_2"],
+      },
+    ],
+    uncertainties: [],
+    status: "candidate",
+  } as const;
+}
+
 describe("core domain schemas", () => {
   it("exports the required SourceReference and Event contracts", () => {
     expect(schemas).toHaveProperty("SourceReferenceSchema");
@@ -91,6 +160,30 @@ describe("core domain schemas", () => {
         schemaVersion: 2,
       }).success,
     ).toBe(false);
+  });
+
+  it("parses Story Map generation run-id lists with nullable or legacy string-only entries", () => {
+    const generation = {
+      chunkCount: 3,
+      reusedChunks: 1,
+      extractorRunIds: ["run_extract_1", null, "run_extract_3"],
+      gleaningRunIds: ["run_glean_1", null, "run_glean_3"],
+      namesRunId: "run_names",
+      endingsRunId: "run_endings",
+      reconcilerRunId: "run_merge",
+    };
+
+    expect(schemas.StoryMapGenerationSchema.safeParse(generation).success).toBe(
+      true,
+    );
+    // 历史数据只有 string，没有 null；同一 Schema 仍可解析。
+    expect(
+      schemas.StoryMapGenerationSchema.safeParse({
+        ...generation,
+        extractorRunIds: ["run_extract_1", "run_extract_2", "run_extract_3"],
+        gleaningRunIds: ["run_glean_1", "run_glean_2", "run_glean_3"],
+      }).success,
+    ).toBe(true);
   });
 
   it("accepts the minor role while keeping old artifacts with old roles readable", () => {
@@ -478,6 +571,48 @@ describe("core domain schemas", () => {
     ]);
     expect(annotated.data?.uncertainImpactIds).toEqual(["impact_downstream"]);
     expect(annotated.data?.usedUncertainEdgeIds).toEqual(["edge_1_2"]);
+  });
+
+  it("rejects duplicate or dangling uncertain ids while keeping old plans readable", () => {
+    const plan = validImpactPlan();
+    const parse = (overrides: Record<string, unknown>) =>
+      schemas.ImpactPlanSchema.safeParse({ ...plan, ...overrides });
+
+    // 旧 Artifact 没有这些字段，仍可解析。
+    const legacy = parse({});
+    expect(legacy.success).toBe(true);
+    expect(legacy.data?.uncertainEdgeIds).toBeUndefined();
+    expect(legacy.data?.uncertainImpactIds).toBeUndefined();
+    expect(legacy.data?.usedUncertainEdgeIds).toBeUndefined();
+
+    expect(
+      parse({ uncertainEdgeIds: ["edge_1_2", "edge_1_2"] }).success,
+    ).toBe(false);
+    expect(
+      parse({ uncertainImpactIds: ["impact_direct", "impact_direct"] }).success,
+    ).toBe(false);
+    expect(
+      parse({
+        uncertainEdgeIds: ["edge_1_2"],
+        usedUncertainEdgeIds: ["edge_1_2", "edge_1_2"],
+      }).success,
+    ).toBe(false);
+    expect(
+      parse({ uncertainImpactIds: ["impact_missing"] }).success,
+    ).toBe(false);
+    expect(
+      parse({
+        uncertainEdgeIds: ["edge_1_2"],
+        usedUncertainEdgeIds: ["edge_unknown"],
+      }).success,
+    ).toBe(false);
+    expect(
+      parse({
+        uncertainEdgeIds: ["edge_1_2"],
+        uncertainImpactIds: ["impact_direct"],
+        usedUncertainEdgeIds: ["edge_1_2"],
+      }).success,
+    ).toBe(true);
   });
 
   it("requires explicit strict/open mode semantics", () => {

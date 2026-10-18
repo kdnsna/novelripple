@@ -252,6 +252,68 @@ describe("Ripple Simulator generation", () => {
     ).toBe("impact-plan.v4");
   });
 
+  it("caps uncertain confidence and records used uncertain edges on feedback revisions", async () => {
+    const { fixture, project, artifact } = await createConfirmedContext();
+    const marked = createStoryMapRevision({
+      projectId: project.id,
+      artifactId: artifact.id,
+      change: { type: "mark_edge_uncertain", edgeId: "edge_07_08" },
+    });
+    const confirmed = confirmStoryMapArtifact({
+      projectId: project.id,
+      artifactId: marked.id,
+    });
+    const planOutput = toModelOutput(fixture.impactPlans[0]);
+    const first = await generateImpactPlan({
+      projectId: project.id,
+      storyMapArtifactId: confirmed.id,
+      divergence: fixture.divergences[0],
+      mode: "strict",
+      endingCandidateIds: ["ending_truth_public"],
+      provider: new MockAIProvider([JSON.stringify(planOutput)]),
+      modelConfig,
+    });
+
+    const revisedOutput = structuredClone(planOutput);
+    revisedOutput.impacts.find(
+      (impact) => impact.id === "impact_02",
+    )!.confidence = 0.95;
+    revisedOutput.impacts.find(
+      (impact) => impact.id === "impact_01",
+    )!.confidence = 0.95;
+    const provider = new MockAIProvider([JSON.stringify(revisedOutput)]);
+
+    const revised = await regenerateImpactPlanFromFeedback({
+      projectId: project.id,
+      priorCandidateArtifactId: first.artifact.id,
+      feedback: "保留不确定路径，但不要把可能性写成确定事实。",
+      provider,
+      modelConfig,
+    });
+
+    expect(revised.artifact.impactPlan.uncertainImpactIds).toEqual([
+      "impact_02",
+    ]);
+    expect(revised.artifact.impactPlan.usedUncertainEdgeIds).toEqual([
+      "edge_07_08",
+    ]);
+    expect(
+      revised.artifact.impactPlan.impacts.find(
+        (impact) => impact.id === "impact_02",
+      )?.confidence,
+    ).toBe(0.5);
+    expect(
+      revised.artifact.impactPlan.impacts.find(
+        (impact) => impact.id === "impact_01",
+      )?.confidence,
+    ).toBe(0.95);
+    expect(
+      listProjectGenerationRuns(project.id).find(
+        (run) => run.id === revised.generation.runId,
+      )?.promptVersion,
+    ).toBe("impact-plan-feedback.v3");
+  });
+
   it("uses one repair for a deterministic ImpactPlan failure", async () => {
     const { fixture, project, artifact } = await createConfirmedContext();
     const invalid = structuredClone(toModelOutput(fixture.impactPlans[0]));
