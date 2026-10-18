@@ -13,6 +13,7 @@ import {
   defaultExpandedTreeIds,
   expandTreeIdsForPath,
   pathCharacterHistoryLabel,
+  pathCharacterStatusLabel,
   worldlineTreeRowBadges,
   worldlineTreeRowLabel,
 } from "@/components/story-workspace/worldline-tree-ui";
@@ -111,9 +112,19 @@ describe("worldline tree presentation helpers", () => {
       sceneId: "scene_1",
       depth: 2,
       summary: "决定公开",
+      status: "dead",
     };
 
     expect(pathCharacterHistoryLabel(divergence)).toBe("分歧点：拒绝交出账簿");
-    expect(pathCharacterHistoryLabel(scene)).toBe("第 2 幕：决定公开");
+    expect(pathCharacterHistoryLabel(scene)).toBe(
+      "第 2 幕：决定公开 · 状态：已故",
+    );
+  });
+
+  it("maps the four path-character statuses to fixed Chinese labels", () => {
+    expect(pathCharacterStatusLabel("alive")).toBe("在世");
+    expect(pathCharacterStatusLabel("dead")).toBe("已故");
+    expect(pathCharacterStatusLabel("absent")).toBe("不在场");
+    expect(pathCharacterStatusLabel("unknown")).toBe("未知");
   });
 });

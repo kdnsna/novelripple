@@ -8,6 +8,7 @@ import {
 } from "@/server/ai/strict-json-schema";
 import type { AIProviderRequest } from "@/server/ai/types";
 import {
+  ContinuationSceneModelOutputV3Schema,
   ImpactPlanModelOutputSchema,
   StoryMapExtractionCandidateSchema,
 } from "@/domain/schemas";
@@ -202,5 +203,78 @@ describe("strict JSON Schema 适配", () => {
     const bodies = calls as Array<{ messages: Array<{ content: string }> }>;
     expect(bodies[0]?.messages[0]?.content).toContain('"anyOf"');
     expect(JSON.stringify(calls)).not.toContain("空字符串");
+  });
+});
+
+
+describe("人物状态线缆 Schema", () => {
+  function findCharacterStatusNode(schema: unknown): unknown {
+    let found: unknown;
+    walkJson(schema, (node) => {
+      if (node === null || typeof node !== "object") return;
+      const value = node as Record<string, unknown>;
+      const properties = value.properties as
+        | Record<string, unknown>
+        | undefined;
+      const characterChanges = properties?.characterChanges as
+        | { items?: { properties?: Record<string, unknown> } }
+        | undefined;
+      if (characterChanges?.items?.properties?.status !== undefined) {
+        found = characterChanges.items.properties.status;
+      }
+    });
+    return found;
+  }
+
+  it("Impact Plan 线缆 Schema 完全没有 status", () => {
+    const schema = z.toJSONSchema(ImpactPlanModelOutputSchema, {
+      target: "draft-7",
+    }) as Record<string, unknown>;
+    const { schema: strict } = toOpenAIStrictSchema(schema);
+    expect(findCharacterStatusNode(strict)).toBeUndefined();
+  });
+
+  it("场景线缆 Schema 的 status 可空且 enum 含空串哨兵", () => {
+    const schema = z.toJSONSchema(ContinuationSceneModelOutputV3Schema, {
+      target: "draft-7",
+    }) as Record<string, unknown>;
+    const { schema: strict, nullablePaths } = toOpenAIStrictSchema(schema);
+    const status = findCharacterStatusNode(strict) as {
+      enum?: string[];
+      type?: string;
+    };
+    expect(status).toMatchObject({ type: "string" });
+    expect(status.enum).toEqual([
+      "alive",
+      "dead",
+      "absent",
+      "unknown",
+      "",
+    ]);
+    expect(
+      nullablePaths.some((path) =>
+        path.endsWith("characterChanges[].status"),
+      ),
+    ).toBe(true);
+
+    const items = (
+      strict as {
+        properties: {
+          statePatch: {
+            properties: {
+              characterChanges: { items: { required: string[] } };
+            };
+          };
+        };
+      }
+    ).properties.statePatch.properties.characterChanges.items;
+    expect(items.required).toContain("status");
+
+    expect(
+      normalizeStrictResponse(
+        { statePatch: { characterChanges: [{ status: "" }] } },
+        nullablePaths,
+      ),
+    ).toEqual({ statePatch: { characterChanges: [{ status: null }] } });
   });
 });

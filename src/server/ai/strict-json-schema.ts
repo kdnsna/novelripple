@@ -97,6 +97,16 @@ function transform(
         typeof inner.description === "string" && inner.description.length > 0
           ? `${inner.description} ${EMPTY_NULLABLE_NOTE}`
           : EMPTY_NULLABLE_NOTE;
+      // enum 的 nullable 分支不能只靠空字符串哨兵："" 不在原 enum 里时
+      // 模型会认为 null 不合法。把 "" 并入 enum，响应归一化再还原为 null。
+      const enumValues = inner.enum;
+      if (
+        Array.isArray(enumValues) &&
+        enumValues.every((value) => typeof value === "string") &&
+        !enumValues.includes("")
+      ) {
+        inner.enum = [...enumValues, ""];
+      }
       return { ...inner, description };
     }
     throw new Error(`json_schema 严格模式不支持的 anyOf 结构：${path}`);

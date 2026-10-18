@@ -256,6 +256,110 @@ test("reopens an inner scene from the worldline tree and branches a new sibling 
   await expect(page.getByTestId("path-character-states")).toBeVisible();
 });
 
+test("restores the persisted reading head and jumps between bookmarks", async ({
+  page,
+}) => {
+  await enterReroutedWorldline(page, `Reading position ${Date.now()}`);
+
+  // 根批次 → 第 1 幕。
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站的第二把锁",
+  );
+  await expect(page.getByTestId("reading-position-status")).toHaveText(
+    "阅读位置已保存。",
+  );
+
+  // 在第 1 幕创建命名书签。
+  await page.getByLabel("书签名").fill("第一幕书签");
+  await page.getByRole("button", { name: "加书签" }).click();
+  const bookmarks = page.getByTestId("worldline-bookmarks");
+  await expect(bookmarks.getByTestId("worldline-bookmark")).toHaveCount(1);
+  await expect(bookmarks).toContainText("第一幕书签");
+  await expect(bookmarks).toContainText("第 1 幕 · 潮标站的第二把锁");
+
+  // 继续到第 2 幕，head 指向最新场景。
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(page.locator(".direction-card")).toHaveCount(3);
+  await page
+    .locator(".direction-card")
+    .first()
+    .getByRole("button", { name: "选择此方向" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+  await expect(page.getByTestId("reading-position-status")).toHaveText(
+    "阅读位置已保存。",
+  );
+
+  // 刷新后从持久化 head 恢复同一场景，书签也从服务端恢复。
+  await page.reload();
+  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
+  await page.getByRole("button", { name: "继续最近 Worldline" }).click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站之后",
+  );
+  await expect(
+    page.getByTestId("worldline-bookmarks").getByTestId("worldline-bookmark"),
+  ).toHaveCount(1);
+
+  // 跳到分歧点，再用书签跳回第 1 幕。
+  await page
+    .getByTestId("worldline-tree")
+    .getByRole("button", { name: "分歧点", exact: true })
+    .click();
+  await expect(page.getByTestId("continuation-path")).toHaveCount(0);
+  await expect(page.getByTestId("reading-position-status")).toHaveText(
+    "阅读位置已保存。",
+  );
+
+  // 分歧点是显式保存的 root：刷新后仍停在分歧点，不跳回默认路径叶子。
+  await page.reload();
+  await expect(page.getByText("已创建 1 条子 Worldline")).toBeVisible();
+  await page.getByRole("button", { name: "继续最近 Worldline" }).click();
+  await expect(page.getByTestId("continuation-path")).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("worldline-tree-row")
+      .filter({
+        has: page.getByRole("button", { name: "分歧点", exact: true }),
+      }),
+  ).toHaveAttribute("aria-current", "true");
+
+  await page
+    .getByTestId("worldline-bookmark")
+    .filter({ hasText: "第一幕书签" })
+    .getByRole("button", { name: "跳转" })
+    .click();
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站的第二把锁",
+  );
+  await expect(page.getByTestId("continuation-scene")).not.toContainText(
+    "潮标站之后",
+  );
+  await expect(page.getByTestId("reading-position-status")).toHaveText(
+    "阅读位置已保存。",
+  );
+
+  // 删除书签后列表清空；删除只影响阅读游标，不影响场景。
+  await page
+    .getByTestId("worldline-bookmark")
+    .filter({ hasText: "第一幕书签" })
+    .getByRole("button", { name: "删除" })
+    .click();
+  await expect(
+    page.getByTestId("worldline-bookmarks").getByTestId("worldline-bookmark"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("continuation-scene")).toContainText(
+    "潮标站的第二把锁",
+  );
+});
+
 test("adds a path-scoped setting delta and keeps it visible on descendants", async ({
   page,
 }) => {

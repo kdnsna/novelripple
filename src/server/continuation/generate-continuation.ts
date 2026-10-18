@@ -31,6 +31,7 @@ import {
   type SceneNode,
   type SceneTree,
 } from "@/domain/continuation/scene-tree";
+import { derivePathCharacterStatuses } from "@/domain/continuation/character-status";
 import { selectContinuationContext } from "@/domain/continuation/select-continuation-context";
 import { isUncertainImpact } from "@/domain/ripple/derive-uncertain-impact-ids";
 import {
@@ -57,6 +58,7 @@ import {
   type Source,
   type StoryMapArtifact,
   type Worldline,
+  type WorldlineCharacterStatusOverride,
   type WorldlineDelta,
 } from "@/domain/schemas";
 import { generateStructured } from "@/server/ai/generate-structured";
@@ -77,6 +79,7 @@ import {
   stableDirectionsArtifactIdV2,
   stableSceneArtifactIdV2,
 } from "@/server/repositories/continuation-repository";
+import { listCharacterStatusOverrides } from "@/server/repositories/character-status-repository";
 import { getProjectSource } from "@/server/repositories/project-repository";
 import {
   getImpactPlanArtifact,
@@ -85,7 +88,7 @@ import {
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 
 const directionsPromptVersion = "continuation-directions.v4";
-const scenePromptVersion = "continuation-scene.v5";
+const scenePromptVersion = "continuation-scene.v7";
 
 export {
   CONTINUATION_CONTEXT_MAX_CHARS_ENV,
@@ -162,6 +165,7 @@ export async function generateContinuationDirections(input: {
       path,
       pathState,
       settingDeltas,
+      characterStatusOverrides: context.characterStatusOverrides,
       selectedDirection: null,
     });
     const prompt = await buildPrompt(directionsPromptVersion, material.prompt);
@@ -319,6 +323,7 @@ export async function generateContinuationScene(input: {
       path,
       pathState,
       settingDeltas,
+      characterStatusOverrides: context.characterStatusOverrides,
       selectedDirection,
     });
     const prompt = await buildPrompt(scenePromptVersion, material.prompt);
@@ -402,6 +407,8 @@ type ContinuationContext = {
   source: Source;
   /** accepted Impact Plan 派生的基础 Delta，不包含任何场景。 */
   baseState: WorldlineDelta;
+  /** 该 Worldline 的读者人物状态覆盖；只沿当前路径生效。 */
+  characterStatusOverrides: WorldlineCharacterStatusOverride[];
 };
 
 function loadContinuationContext(input: {
@@ -459,6 +466,7 @@ function loadContinuationContext(input: {
     storyMapArtifact,
     source,
     baseState,
+    characterStatusOverrides: listCharacterStatusOverrides(worldline.id),
   };
 }
 
@@ -559,6 +567,7 @@ function buildContextMaterial(input: {
   path: readonly SceneNode[];
   pathState: WorldlineDelta;
   settingDeltas: readonly SettingDeltaContextItem[];
+  characterStatusOverrides: readonly WorldlineCharacterStatusOverride[];
   selectedDirection: ContinuationDirection | null;
 }): ContextAssemblerResult {
   const storyMap = input.context.storyMapArtifact.storyMap;
@@ -624,10 +633,27 @@ function buildContextMaterial(input: {
     text: node.prose,
     ...(node.summary === null ? {} : { summary: node.summary }),
   }));
-  const worldlineSetup = buildWorldlineSetup(input.context, input.pathState);
+  const divergence = input.context.worldline.divergence;
+  if (!divergence) {
+    throw new Error("Continuation Worldline 缺少 Divergence");
+  }
+  // UI 与 Prompt 共用同一个折叠入口；这里只投影 Prompt 需要的字段。
+  const characterStatuses = derivePathCharacterStatuses({
+    storyMap,
+    divergence,
+    baseDelta: input.context.baseState,
+    path: input.path,
+    overrides: input.characterStatusOverrides,
+  }).map((character) => ({
+    characterId: character.characterId,
+    status: character.status,
+    source: character.source,
+  }));
+  const currentState = { ...input.pathState, characterStatuses };
+  const worldlineSetup = buildWorldlineSetup(input.context, currentState);
   const worldlineSetupCompact = buildWorldlineSetup(
     input.context,
-    compactCurrentState(input.pathState),
+    compactCurrentState(input.pathState, characterStatuses),
   );
   const anchorReminder = buildAnchorReminder(input.context);
   const selectedDirection =
@@ -670,6 +696,8 @@ const WORLDLINE_SETUP_COMPACT_REMOVED = [
   "currentState.factsAdded[].statement",
   "currentState.characterChanges[].summary",
 ] as const;
+// 注意：currentState.characterStatuses 不在这里——人物状态在紧凑形式中
+// 必须原样保留，不能因为裁剪正文而丢掉“已故/读者设定”等语义。
 
 function buildWorldlineSetup(
   context: ContinuationContext,
@@ -719,7 +747,14 @@ function buildWorldlineSetup(
  * 深层路径的紧凑 currentState：只有计数与 key，不包含任何 fact/人物正文。
  * 仅在必需段超预算时整体替换完整状态，不改变状态语义。
  */
-function compactCurrentState(state: WorldlineDelta) {
+export function compactCurrentState(
+  state: WorldlineDelta,
+  characterStatuses: readonly {
+    characterId: string;
+    status: string;
+    source: string;
+  }[] = [],
+) {
   return {
     factsAddedCount: state.factsAdded.length,
     factsRemovedCount: state.factsRemoved.length,
@@ -733,6 +768,7 @@ function compactCurrentState(state: WorldlineDelta) {
     ),
     threadsOpenedKeys: state.threadsOpened,
     threadsClosedKeys: state.threadsClosed,
+    characterStatuses,
   };
 }
 

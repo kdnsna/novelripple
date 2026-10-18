@@ -9,6 +9,7 @@ import {
 import {
   buildWorldlineTreeOutline,
   derivePathCharacterTimeline,
+  foldCharacterStatus,
   latestBatchForParent,
   listDirectionOptions,
   resolveReadingPath,
@@ -543,6 +544,18 @@ describe("latestBatchForParent", () => {
   });
 });
 
+describe("foldCharacterStatus", () => {
+  it("keeps the last explicit status and ignores missing ones", () => {
+    expect(
+      foldCharacterStatus([{ status: "alive" }, {}, { status: "dead" }, {}]),
+    ).toBe("dead");
+  });
+
+  it("returns null when no change ever set a status", () => {
+    expect(foldCharacterStatus([{}, {}])).toBeNull();
+  });
+});
+
 describe("derivePathCharacterTimeline", () => {
   const divergence = WorldlineDeltaSchema.parse({
     ...emptyStatePatch(),
@@ -703,5 +716,133 @@ describe("derivePathCharacterTimeline", () => {
         characters,
       }),
     ).toThrow("断裂的父子链");
+  });
+});
+
+describe("derivePathCharacterTimeline status", () => {
+  const divergence = WorldlineDeltaSchema.parse({
+    ...emptyStatePatch(),
+    characterChanges: [
+      {
+        characterId: "char_xucheng",
+        summary: "分歧点：拒绝交出账簿",
+        status: "alive",
+      },
+      { characterId: "char_shenyan", summary: "分歧点：保持沉默" },
+    ],
+  });
+  const tree = buildSceneTree([
+    v2SceneFixture({
+      id: "scene_root",
+      parentSceneId: null,
+      depth: 1,
+      createdAt: "2026-08-11T00:00:00.000Z",
+      statePatch: {
+        ...emptyStatePatch(),
+        characterChanges: [
+          { characterId: "char_xucheng", summary: "第一幕：躲进潮标站" },
+          {
+            characterId: "char_shenyan",
+            summary: "第一幕：离开港口",
+            status: "absent",
+          },
+        ],
+      },
+    }),
+    v2SceneFixture({
+      id: "scene_branch_a",
+      parentSceneId: "scene_root",
+      depth: 2,
+      createdAt: "2026-08-11T00:01:00.000Z",
+      statePatch: {
+        ...emptyStatePatch(),
+        characterChanges: [
+          {
+            characterId: "char_xucheng",
+            summary: "第二幕：被追捕",
+            status: "dead",
+          },
+        ],
+      },
+    }),
+    v2SceneFixture({
+      id: "scene_sibling",
+      parentSceneId: "scene_root",
+      depth: 2,
+      createdAt: "2026-08-11T00:02:00.000Z",
+      statePatch: {
+        ...emptyStatePatch(),
+        characterChanges: [
+          {
+            characterId: "char_xucheng",
+            summary: "兄弟分支：安全离开",
+            status: "alive",
+          },
+        ],
+      },
+    }),
+  ]);
+  const characters = [
+    { id: "char_shenyan", name: "沈砚" },
+    { id: "char_xucheng", name: "许澄" },
+  ];
+
+  it("folds status along the current path and keeps omissions unchanged", () => {
+    const path = resolveReadingPath(tree, {
+      kind: "scene",
+      sceneId: "scene_branch_a",
+    });
+    const timeline = derivePathCharacterTimeline({
+      baseDelta: divergence,
+      path,
+      characters,
+    });
+    const xucheng = timeline.find(
+      (state) => state.characterId === "char_xucheng",
+    );
+    const shenyan = timeline.find(
+      (state) => state.characterId === "char_shenyan",
+    );
+
+    expect(xucheng?.currentStatus).toBe("dead");
+    // 第一幕只写 summary，不清空分歧点的 alive；第二幕再改为 dead。
+    expect(xucheng?.history.map((entry) => entry.status)).toEqual([
+      "alive",
+      undefined,
+      "dead",
+    ]);
+    expect(shenyan?.currentStatus).toBe("absent");
+    expect(xucheng?.current).toBe("第二幕：被追捕");
+  });
+
+  it("never folds a sibling branch's status", () => {
+    const path = resolveReadingPath(tree, {
+      kind: "scene",
+      sceneId: "scene_branch_a",
+    });
+    const timeline = derivePathCharacterTimeline({
+      baseDelta: divergence,
+      path,
+      characters,
+    });
+    const xucheng = timeline.find(
+      (state) => state.characterId === "char_xucheng",
+    );
+
+    expect(timeline.flatMap((state) => state.history.map((entry) => entry.summary)))
+      .not.toContain("兄弟分支：安全离开");
+    expect(xucheng?.currentStatus).not.toBe("alive");
+  });
+
+  it("returns null when the path never sets a status", () => {
+    const timeline = derivePathCharacterTimeline({
+      baseDelta: divergence,
+      path: [],
+      characters,
+    });
+    const shenyan = timeline.find(
+      (state) => state.characterId === "char_shenyan",
+    );
+    expect(shenyan?.currentStatus).toBeNull();
   });
 });
