@@ -261,6 +261,103 @@ describe("chunk candidate assembly", () => {
     expect(result.candidate.endingCandidates[0]!.targetEventId).toBe("e2");
   });
 
+  it("keeps the kept event's text when a merge group omits title and summary", () => {
+    const pool = {
+      characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s" }],
+      events: [
+        { ...event("e2", "u2"), chunkIndex: 0 },
+        { ...event("e2_dup", "u5"), chunkIndex: 1 },
+      ],
+      edges: [],
+    };
+    const result = applyMerge(pool, [], {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [{ keepEventId: "e2", duplicateEventIds: ["e2_dup"] }],
+      duplicateEndingGroups: [],
+      edges: [],
+    });
+    if (!result.success) throw new Error(JSON.stringify(result.issues));
+
+    expect(result.candidate.events).toEqual([
+      expect.objectContaining({
+        id: "e2",
+        title: "e2",
+        summary: "e2",
+        evidenceUnitIds: ["u2", "u5"],
+      }),
+    ]);
+  });
+
+  it("applies title and summary overrides to the kept event and still unions evidence", () => {
+    const pool = {
+      characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s" }],
+      events: [
+        { ...event("e2", "u2"), chunkIndex: 0 },
+        { ...event("e2_dup", "u5"), chunkIndex: 1 },
+      ],
+      edges: [],
+    };
+    const result = applyMerge(pool, [], {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [
+        {
+          keepEventId: "e2",
+          duplicateEventIds: ["e2_dup"],
+          title: "新的情节标题",
+          summary: "新的情节摘要，覆盖整个情节的关键步骤与直接结果。",
+        },
+      ],
+      duplicateEndingGroups: [],
+      edges: [],
+    });
+    if (!result.success) throw new Error(JSON.stringify(result.issues));
+
+    expect(result.candidate.events).toEqual([
+      expect.objectContaining({
+        id: "e2",
+        title: "新的情节标题",
+        summary: "新的情节摘要，覆盖整个情节的关键步骤与直接结果。",
+        evidenceUnitIds: ["u2", "u5"],
+      }),
+    ]);
+  });
+
+  it("overrides only the summary when a merge group omits title", () => {
+    const pool = {
+      characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s" }],
+      events: [
+        { ...event("e2", "u2"), chunkIndex: 0 },
+        { ...event("e2_dup", "u5"), chunkIndex: 1 },
+      ],
+      edges: [],
+    };
+    const result = applyMerge(pool, [], {
+      title: "T",
+      logline: "L",
+      duplicateEventGroups: [
+        {
+          keepEventId: "e2",
+          duplicateEventIds: ["e2_dup"],
+          summary: "只更新摘要，保留原标题。",
+        },
+      ],
+      duplicateEndingGroups: [],
+      edges: [],
+    });
+    if (!result.success) throw new Error(JSON.stringify(result.issues));
+
+    expect(result.candidate.events).toEqual([
+      expect.objectContaining({
+        id: "e2",
+        title: "e2",
+        summary: "只更新摘要，保留原标题。",
+        evidenceUnitIds: ["u2", "u5"],
+      }),
+    ]);
+  });
+
   it("merges duplicate edge and ending evidence after event merge resolution", () => {
     const pool = {
       characters: [{ id: "a", name: "甲", aliases: [], role: "protagonist" as const, initialState: "s" }],
