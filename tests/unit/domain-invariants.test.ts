@@ -5,10 +5,12 @@ import {
   validateImpactPlan,
   validateStoryMap,
 } from "@/domain/invariants/validate-story-map";
+import { validateAgainstPreDivergenceCanon } from "@/domain/invariants/validate-continuation";
 import {
   ImpactPlanSchema,
   SourceSchema,
   StoryMapSchema,
+  WorldlineDeltaSchema,
 } from "@/domain/schemas";
 import { sha256 } from "@/domain/source/normalize-source";
 
@@ -476,5 +478,141 @@ describe("deterministic domain validators", () => {
         }),
       ]),
     );
+  });
+});
+
+describe("post-generation pre-divergence canon validation", () => {
+  /** 分歧事件是 event_2（sequence 2）；event_1 是分歧前、event_2 是分歧点。 */
+  const pathState = WorldlineDeltaSchema.parse({
+    factsAdded: [
+      { key: "generated:branch_1", statement: "许澄暂时没有公开证据。" },
+    ],
+    factsRemoved: ["event:event_2"],
+    characterChanges: [],
+    threadsOpened: [],
+    threadsClosed: [],
+  });
+
+  function evaluate(textFields: string[]) {
+    return validateAgainstPreDivergenceCanon({
+      textFields: textFields.map((text, index) => ({
+        field: `textFields.${index}`,
+        text,
+      })),
+      storyMap,
+      divergenceEventId: "event_2",
+      pathState,
+    });
+  }
+
+  function validate(textFields: string[]) {
+    return evaluate(textFields).issues;
+  }
+
+  it("flags prose that says a locked event did not happen", () => {
+    expect(
+      validate(["许澄发现证据根本没有发生过，公众始终不知道真相。"]),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("发现证据"),
+        }),
+      ]),
+    );
+  });
+
+  it("allows rewriting an event that the path removed", () => {
+    expect(validate(["公开证据并未发生，许澄从一开始就保持沉默。"])).toEqual([]);
+  });
+
+  it("never locks post-divergence events", () => {
+    const result = validateAgainstPreDivergenceCanon({
+      textFields: [
+        { field: "prose", text: "公开证据并未发生，许澄从一开始就保持沉默。" },
+      ],
+      storyMap,
+      divergenceEventId: "event_1",
+      pathState: WorldlineDeltaSchema.parse({
+        factsAdded: [],
+        factsRemoved: [],
+        characterChanges: [],
+        threadsOpened: [],
+        threadsClosed: [],
+      }),
+    });
+    expect(result.issues).toEqual([]);
+  });
+
+  it("allows clean prose that mentions a locked event without a cue", () => {
+    expect(validate(["许澄发现证据后选择沉默，把副本留在抽屉里。"])).toEqual(
+      [],
+    );
+  });
+
+  it("does not hard-reject a bare negation immediately before a locked title", () => {
+    const result = evaluate(["没有发现证据，也没有留下任何记录。"]);
+    expect(result.issues).toEqual([]);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("does not hard-reject counterfactual or loss-framed sentences", () => {
+    for (const text of [
+      "如果没有发现证据，两人也不会结仇。",
+      "再也没有了发现证据那晚的热闹。",
+      "没有发现证据那天的任何记录留下来。",
+    ]) {
+      const result = evaluate([text]);
+      expect(result.issues).toEqual([]);
+      expect(result.warnings.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("still hard-rejects an explicit occurrence negation", () => {
+    for (const text of [
+      "发现证据从未发生。",
+      "发现证据根本没有发生过。",
+      "从来没有发生过发现证据。",
+      "发现证据是捏造的。",
+    ]) {
+      expect(validate([text])).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "textFields.0",
+            message: expect.stringContaining("发现证据"),
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("flags a direction premise that rewrites a locked event", () => {
+    expect(
+      validate([
+        "让周岚只做见证",
+        "发现证据根本没有发生过，周岚只记录未公开的判断。",
+        "独立见证链得到补强。",
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "textFields.1",
+          message: expect.stringContaining("发现证据"),
+        }),
+      ]),
+    );
+  });
+
+  it("does not hard-reject recollection or causal mentions", () => {
+    const result = evaluate([
+      "她想起发现证据那晚，从此不再靠近海岸。",
+      "他始终没有忘记发现证据时的那声钟响。",
+      "因为发现证据，许澄不再公开露面。",
+    ]);
+    expect(result.issues).toEqual([]);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("skips empty and one-character fields", () => {
+    expect(validate(["", "证"])).toEqual([]);
   });
 });

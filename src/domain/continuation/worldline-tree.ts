@@ -5,7 +5,11 @@ import {
   type SceneNode,
   type SceneTree,
 } from "@/domain/continuation/scene-tree";
-import type { ContinuationDirection, WorldlineDelta } from "@/domain/schemas";
+import type {
+  ContinuationCanonWarning,
+  ContinuationDirection,
+  WorldlineDelta,
+} from "@/domain/schemas";
 
 /**
  * 续写面板的方向批次视图模型。
@@ -19,6 +23,10 @@ export type ContinuationDirectionBatchView = {
   batchIndex: number;
   createdAt: string;
   directions: ContinuationDirection[];
+  /** 组装上下文时生效集合的指纹；旧批次没有该字段。 */
+  settingDeltaFingerprint?: string;
+  /** 低置信 Canon 提示；不阻断继续选择方向。 */
+  canonWarnings?: ContinuationCanonWarning[];
 };
 
 /**

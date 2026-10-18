@@ -61,15 +61,21 @@ type Attempt = {
 
 type ValidationResult<T> =
   | { success: true; value: T }
-  | { success: false; issues: string[] };
+  | { success: false; issues: StructuredValidationIssue[] };
 
 export class StructuredGenerationError extends Error {
   readonly runId: string;
+  /** 最终（repair 后）失败的结构化校验问题；用于区分 Canon 拒绝与其他失败。 */
+  readonly finalIssues: readonly StructuredValidationIssue[];
 
-  constructor(runId: string) {
+  constructor(
+    runId: string,
+    finalIssues: readonly StructuredValidationIssue[] = [],
+  ) {
     super("Structured generation failed schema validation");
     this.name = "StructuredGenerationError";
     this.runId = runId;
+    this.finalIssues = finalIssues;
   }
 }
 
@@ -198,7 +204,9 @@ export async function generateStructured<T>(
         modelConfig: metadata.modelConfig,
         repair: {
           previousRawOutput: initialResponse.rawOutput,
-          validationIssues: initialValidation.issues,
+          validationIssues: initialValidation.issues.map(
+            formatValidationIssue,
+          ),
         },
       },
       REPAIR_RETRY_POLICY,
@@ -245,9 +253,9 @@ export async function generateStructured<T>(
   failGenerationRun({
     id: run.id,
     rawOutput: serializeAttempts(attempts),
-    error: repairValidation.issues.join("; "),
+    error: repairValidation.issues.map(formatValidationIssue).join("; "),
   });
-  throw new StructuredGenerationError(run.id);
+  throw new StructuredGenerationError(run.id, repairValidation.issues);
 }
 
 function validateRawOutput<T>(
@@ -259,17 +267,20 @@ function validateRawOutput<T>(
   try {
     parsed = JSON.parse(rawOutput);
   } catch {
-    return { success: false, issues: ["Response is not valid JSON"] };
+    return {
+      success: false,
+      issues: [{ path: "", message: "Response is not valid JSON" }],
+    };
   }
 
   const validation = schema.safeParse(parsed);
   if (!validation.success) {
     return {
       success: false,
-      issues: validation.error.issues.map((issue) => {
-        const path = issue.path.length > 0 ? issue.path.join(".") : "$";
-        return `${path}: ${issue.message}`;
-      }),
+      issues: validation.error.issues.map((issue) => ({
+        path: issue.path.length > 0 ? issue.path.join(".") : "$",
+        message: issue.message,
+      })),
     };
   }
 
@@ -277,14 +288,21 @@ function validateRawOutput<T>(
   if (deterministicIssues.length > 0) {
     return {
       success: false,
-      issues: deterministicIssues.map((issue) => {
-        const path = issue.path.length > 0 ? issue.path : "$";
-        return `${path}: ${issue.message}`;
-      }),
+      issues: deterministicIssues.map((issue) => ({
+        path: issue.path.length > 0 ? issue.path : "$",
+        message: issue.message,
+        ...(issue.code === undefined ? {} : { code: issue.code }),
+      })),
     };
   }
 
   return { success: true, value: validation.data };
+}
+
+function formatValidationIssue(issue: StructuredValidationIssue): string {
+  return issue.path.length > 0
+    ? `${issue.path}: ${issue.message}`
+    : issue.message;
 }
 
 function serializeAttempts(attempts: Attempt[]): string {

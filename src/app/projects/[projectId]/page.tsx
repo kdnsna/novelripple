@@ -98,6 +98,8 @@ export default async function ProjectPage({
     return buildContinuationTreeView(worldline.id, [
       ...artifacts.directions,
       ...artifacts.scenes,
+      ...artifacts.settingDeltas,
+      ...artifacts.settingDeltaLifecycles,
     ]);
   });
 

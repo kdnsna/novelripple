@@ -132,7 +132,20 @@ function isSuffix<T>(previous: readonly T[], next: readonly T[]): boolean {
 
 describe("assembleContext", () => {
   it("renders the fixed section order with stable tags", () => {
-    const result = assemble(10_000);
+    const result = assembleContext({
+      maxChars: 10_000,
+      sections: {
+        ...sections,
+        settingDeltas: [
+          {
+            id: "delta_root",
+            text: "- 旧灯塔（自分歧点起）：旧灯塔已被封锁。",
+            anchorDepth: 0,
+            createdAt: "2026-08-11T00:00:00.000Z",
+          },
+        ],
+      },
+    });
 
     const positions = CONTEXT_SECTION_ORDER.map((kind) =>
       result.prompt.indexOf(`<${kind}>`),
@@ -143,6 +156,9 @@ describe("assembleContext", () => {
     }
     expect(result.prompt.startsWith("<worldline_setup>")).toBe(true);
     expect(result.prompt.indexOf("<canon_events>")).toBeLessThan(
+      result.prompt.indexOf("<setting_deltas>"),
+    );
+    expect(result.prompt.indexOf("<setting_deltas>")).toBeLessThan(
       result.prompt.indexOf("<path_summary>"),
     );
     expect(result.prompt.endsWith("</anchor_reminder>")).toBe(true);
@@ -773,6 +789,104 @@ describe("assembleContext", () => {
     expect(() => assemble(320)).toThrow("必需上下文段与最新场景超过预算");
   });
 
+  it("keeps pinned evidence at every budget at or above the floor", () => {
+    const pinnedText = "分歧事件自身的原著证据。".repeat(10);
+    const dependencyText = "分歧前直接依赖的原著证据。".repeat(8);
+    const pinnedSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      canonEvidence: [
+        {
+          id: "related:event_07:0",
+          text: pinnedText,
+          priority: 0,
+          pinned: true,
+        },
+        {
+          id: "related:event_06:0",
+          text: dependencyText,
+          priority: 0,
+          pinned: true,
+        },
+        { id: "related:event_08:0", text: "分歧后事件证据。", priority: 2 },
+        { id: "style_1", text: "代表片段证据。", priority: 1 },
+      ],
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: pinnedSections,
+    });
+
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length + 20; budget += 1) {
+      const result = tryAssemble(budget, pinnedSections);
+      if (result === null) {
+        expect(firstSuccess).toBeNull();
+        continue;
+      }
+      firstSuccess ??= budget;
+      const canon = sectionOf(result, "canon_evidence");
+      expect(result.prompt).toContain(pinnedText);
+      expect(result.prompt).toContain(dependencyText);
+      expect(canon.pinnedItemIds).toEqual([
+        "related:event_07:0",
+        "related:event_06:0",
+      ]);
+      expect(canon.droppedItemIds).not.toContain("related:event_07:0");
+      expect(canon.droppedItemIds).not.toContain("related:event_06:0");
+    }
+    expect(firstSuccess).not.toBeNull();
+    // 扫描确实触发过第 2 步裁剪，pinned 证据仍然全部保留。
+    let sawEvidenceDrop = false;
+    for (let budget = firstSuccess!; budget <= full.prompt.length; budget += 1) {
+      const result = tryAssemble(budget, pinnedSections);
+      if (!result) continue;
+      sawEvidenceDrop ||= sectionOf(result, "canon_evidence").droppedItemIds.length > 0;
+      expect(result.prompt).toContain(pinnedText);
+    }
+    expect(sawEvidenceDrop).toBe(true);
+  });
+
+  it("fails closed with the typed budget error below the pinned-evidence floor", () => {
+    const pinnedSections: ContextAssemblerInput["sections"] = {
+      ...sections,
+      canonEvidence: [
+        {
+          id: "related:event_07:0",
+          text: "分歧事件自身的原著证据。".repeat(20),
+          priority: 0,
+          pinned: true,
+        },
+      ],
+      recentScenes: [{ id: "scene_1", text: "唯一场景正文。" }],
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: pinnedSections,
+    });
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length; budget += 1) {
+      if (tryAssemble(budget, pinnedSections) !== null) {
+        firstSuccess = budget;
+        break;
+      }
+    }
+    expect(firstSuccess).not.toBeNull();
+
+    let thrown: unknown;
+    try {
+      assembleContext({ maxChars: firstSuccess! - 1, sections: pinnedSections });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ContinuationContextBudgetError);
+    expect(
+      (thrown as ContinuationContextBudgetError).code,
+    ).toBe(CONTINUATION_CONTEXT_BUDGET_EXCEEDED_CODE);
+    expect(
+      (thrown as ContinuationContextBudgetError).neededChars,
+    ).toBeGreaterThan(firstSuccess! - 1);
+  });
+
   it("rejects an invalid budget", () => {
     expect(() => assemble(0)).toThrow("上下文预算必须是正整数");
     expect(() => assemble(1.5)).toThrow("上下文预算必须是正整数");
@@ -992,6 +1106,150 @@ describe("assembleContext", () => {
     expect(sawSummary).toBe(true);
   });
 
+  it("keeps setting deltas in their own trimmable section, never in worldline_setup", () => {
+    const settingSections: ContextAssemblerInput["sections"] = {
+      worldlineSetup: `完整世界线设定：${"事实正文".repeat(40)}`,
+      worldlineSetupCompact: `{"currentState":{"factsAddedCount":2}}`,
+      worldlineSetupCompactRemoved: ["currentState.factsAdded[].statement"],
+      canonEvents:
+        '{"events":[{"id":"event_01"}],"edges":[],"endingCandidates":[]}',
+      settingDeltas: [
+        {
+          id: "delta_root",
+          text: "- 沈砚（自分歧点起）：沈砚从此左手受伤，不能划船。",
+          anchorDepth: 0,
+          createdAt: "2026-08-11T00:00:00.000Z",
+        },
+        {
+          id: "delta_deep",
+          text: "- 旧灯塔（自第 2 幕起）：旧灯塔已被封锁，不能进入。",
+          anchorDepth: 2,
+          createdAt: "2026-08-11T00:01:00.000Z",
+        },
+      ],
+      pathSummary: "第 1 幕：丁——丁的摘要。\n第 2 幕：戊——戊的摘要。",
+      pathSummaryCoveredSceneIds: ["p1", "p2"],
+      canonEvidence: [
+        { id: "related_1", text: "相关证据一。", priority: 2 },
+        { id: "style_1", text: "代表片段。", priority: 1 },
+      ],
+      recentScenes: [
+        { id: "scene_1", text: "第一幕正文。".repeat(6), summary: "第一幕摘要。" },
+        { id: "scene_2", text: "第二幕正文。".repeat(6), summary: "第二幕摘要。" },
+      ],
+      selectedDirection: "让沈砚在雨夜说出真相。",
+      anchorReminder: "请保留顾闻舟在钟楼出现的结局。",
+    };
+    const full = assembleContext({
+      maxChars: 100_000,
+      sections: settingSections,
+    });
+
+    // 规则只在独立段中，不进入永不裁剪的 worldline_setup。
+    expect(renderedSection(full.prompt, "worldline_setup")).not.toContain(
+      "settingDeltas",
+    );
+    expect(renderedSection(full.prompt, "worldline_setup")).not.toContain(
+      "旧灯塔已被封锁",
+    );
+    expect(renderedSection(full.prompt, "setting_deltas")).toContain(
+      "旧灯塔已被封锁，不能进入。",
+    );
+
+    let firstSuccess: number | null = null;
+    for (let budget = 1; budget <= full.prompt.length + 20; budget += 1) {
+      const result = tryAssemble(budget, settingSections);
+      if (result) firstSuccess ??= budget;
+      else expect(firstSuccess).toBeNull();
+    }
+    expect(firstSuccess).not.toBeNull();
+
+    const keptSettingDeltas = (result: ContextAssemblerResult) => {
+      const dropped = new Set(
+        sectionOf(result, "setting_deltas").droppedItemIds,
+      );
+      return settingSections.settingDeltas!
+        .map((item) => item.id)
+        .filter((id) => !dropped.has(id));
+    };
+
+    let previous: ContextAssemblerResult | null = null;
+    let sawSettingDeltaDrop = false;
+    let sawShallowDroppedBeforeDeep = false;
+    for (
+      let budget = firstSuccess!;
+      budget <= full.prompt.length + 40;
+      budget += 1
+    ) {
+      const result = tryAssemble(budget, settingSections);
+      expect(result).not.toBeNull();
+      if (!result) continue;
+      const kept = keptSettingDeltas(result);
+      sawSettingDeltaDrop ||= kept.length < 2;
+      // 更浅的分歧点规则先被丢弃，更深的场景规则保留更久。
+      sawShallowDroppedBeforeDeep ||= !kept.includes("delta_root") &&
+        kept.includes("delta_deep");
+      if (previous) {
+        // 更大预算只能保留相同或更多规则；不会重新丢弃更小预算已保留的规则。
+        for (const id of keptSettingDeltas(previous)) {
+          expect(keptSettingDeltas(result)).toContain(id);
+        }
+        expect(result.prompt.length).toBeGreaterThanOrEqual(
+          previous.prompt.length,
+        );
+      }
+      previous = result;
+    }
+    expect(sawSettingDeltaDrop).toBe(true);
+    expect(sawShallowDroppedBeforeDeep).toBe(true);
+  });
+
+  it("never fails because of trimmable setting deltas when required sections alone fit", () => {
+    const rules: NonNullable<ContextAssemblerInput["sections"]["settingDeltas"]> =
+      Array.from({ length: 20 }, (_, index) => ({
+        id: `delta_${String(index).padStart(2, "0")}`,
+        text: `- 规则 ${index}（自分歧点起）：${"灯".repeat(200)}`,
+        anchorDepth: index % 2,
+        createdAt: `2026-08-11T00:${String(index).padStart(2, "0")}:00.000Z`,
+      }));
+    const requiredSections: ContextAssemblerInput["sections"] = {
+      worldlineSetup: `必需世界线设定：${"事实正文".repeat(30)}`,
+      canonEvents:
+        '{"events":[{"id":"event_01"}],"edges":[],"endingCandidates":[]}',
+      pathSummary: "",
+      canonEvidence: [],
+      recentScenes: [],
+      selectedDirection: "让沈砚在雨夜说出真相。",
+      anchorReminder: "请保留顾闻舟在钟楼出现的结局。",
+    };
+    const base = assembleContext({
+      maxChars: 1_000_000,
+      sections: { ...requiredSections, settingDeltas: [] },
+    });
+
+    // 预算恰好只够必需段：20 条长规则必须被全部丢弃，而不是让组装失败。
+    const result = assembleContext({
+      maxChars: base.prompt.length,
+      sections: { ...requiredSections, settingDeltas: rules },
+    });
+    expect(result.prompt).toBe(base.prompt);
+    expect(sectionOf(result, "setting_deltas")).toMatchObject({
+      included: false,
+      trimmed: true,
+    });
+    expect(
+      new Set(sectionOf(result, "setting_deltas").droppedItemIds),
+    ).toEqual(new Set(rules.map((rule) => rule.id)));
+
+    // 默认 24000 预算下同样的 20 条规则可以正常组装（规则可能被部分裁剪）。
+    expect(() =>
+      assembleContext({
+        maxChars: 24_000,
+        sections: { ...requiredSections, settingDeltas: rules },
+      }),
+    ).not.toThrow();
+  });
+
   it(
     "keeps the ladder monotonic for every budget across seeded random fixtures",
     { timeout: 30_000 },
@@ -1065,6 +1323,7 @@ describe("assembleContext", () => {
         id: string;
         text: string;
         priority: number;
+        pinned: boolean;
         index: number;
       };
       type SceneSpec = {
@@ -1120,6 +1379,7 @@ describe("assembleContext", () => {
             id: `evidence_${index}`,
             text: `${evidenceToken(index)}${makeText(rng, 1, 2)}`,
             priority: randomInt(rng, 0, 3),
+            pinned: rng() < 0.2,
             index,
           }),
         );
@@ -1184,11 +1444,14 @@ describe("assembleContext", () => {
             pathSummaryCoveredSceneIds: pathLines.map(
               (_, index) => `p${index}`,
             ),
-            canonEvidence: evidence.map(({ id, text, priority }) => ({
-              id,
-              text,
-              priority,
-            })),
+            canonEvidence: evidence.map(
+              ({ id, text, priority, pinned }) => ({
+                id,
+                text,
+                priority,
+                pinned,
+              }),
+            ),
             recentScenes: scenes.map(({ id, text, summary }) =>
               summary === undefined ? { id, text } : { id, text, summary },
             ),
@@ -1345,6 +1608,8 @@ describe("assembleContext", () => {
         emptyCanonEvents: false,
         emptySelectedDirection: false,
         emptyAnchorReminder: false,
+        pinnedEvidence: false,
+        unpinnedEvidence: false,
         usedCompact: false,
         usedSummary: false,
         usedTruncation: false,
@@ -1385,6 +1650,12 @@ describe("assembleContext", () => {
         coverage.emptySelectedDirection ||=
           fixture.sections.selectedDirection === "";
         coverage.emptyAnchorReminder ||= fixture.sections.anchorReminder === "";
+        coverage.pinnedEvidence ||= fixture.evidence.some(
+          (item) => item.pinned,
+        );
+        coverage.unpinnedEvidence ||= fixture.evidence.some(
+          (item) => !item.pinned,
+        );
         const full = assembleContext({
           maxChars: 1_000_000,
           sections: fixture.sections,
@@ -1450,11 +1721,22 @@ describe("assembleContext", () => {
             );
           }
 
-          // 任意预算下，保留证据的优先级不低于丢弃证据；同优先级只丢末尾。
+          // pinned 证据在任何成功结果中都必须保留。
+          for (const spec of fixture.evidence) {
+            if (spec.pinned) {
+              assertTrue(
+                snapshot.evidence.has(spec.index),
+                `${label} pinned 证据 ${spec.index} 必须保留`,
+              );
+            }
+          }
+          // 任意预算下，非 pinned 保留证据的优先级不低于非 pinned 丢弃证据；
+          // 同优先级只从末尾丢弃。pinned 可位于任意优先级，不参与该比较。
           let minKeptPriority = Number.POSITIVE_INFINITY;
           let maxDroppedPriority = Number.NEGATIVE_INFINITY;
           const droppedAtPriority = new Set<number>();
           for (const spec of fixture.evidence) {
+            if (spec.pinned) continue;
             if (snapshot.evidence.has(spec.index)) {
               minKeptPriority = Math.min(
                 minKeptPriority,

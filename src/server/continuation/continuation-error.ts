@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import { isContinuationContextBudgetError } from "@/domain/continuation/context-assembler";
+import { SETTING_DELTA_STALE_BATCH_MESSAGE } from "@/domain/continuation/setting-deltas";
+import {
+  CONTINUATION_CANON_GUARD_ENV,
+  isCanonGuardRejectionError,
+} from "@/server/continuation/canon-guard";
 import { CONTINUATION_CONTEXT_MAX_CHARS_ENV } from "@/server/continuation/continuation-limits";
 
 export type ContinuationGenerationStage = "directions" | "scene";
@@ -18,12 +23,18 @@ export function continuationErrorMessage(
   if (isContinuationContextBudgetError(error)) {
     const target = stage === "scene" ? "场景" : "方向";
     return [
-      `续写所需的基础上下文（世界线设定、相关原著事件、结局约束）超过了当前上限（需要约 ${error.neededChars} 字，上限 ${error.maxChars} 字），无法生成${target}。`,
+      `续写所需的基础上下文（世界线设定、相关原著事件、分歧事件及其直接依赖的原著证据、结局约束）超过了当前上限（需要约 ${error.neededChars} 字，上限 ${error.maxChars} 字），无法生成${target}。`,
       "接下来可以：",
       "• 换一个分歧瞬间，或改用「让故事自由发展」（开放模式通常更短）；",
       "• 减少保留的结局 Anchor；",
+      "• 设定增量会在预算不足时自动裁剪，不是本次失败的原因；",
       `• 若由部署方配置，可提高环境变量 ${CONTINUATION_CONTEXT_MAX_CHARS_ENV} 后重试。`,
     ].join("\n");
+  }
+  if (isCanonGuardRejectionError(error)) {
+    return error instanceof Error
+      ? error.message
+      : "生成内容明确否定了分歧前已确认的原著事件，已拒绝且未保存；请重试或换一批。";
   }
   if (error instanceof z.ZodError) {
     return "AI 配置不完整：请检查模型与结构化输出模式。";
@@ -38,6 +49,7 @@ export function continuationErrorMessage(
     "找不到 Worldline 对应的不可变 Source",
     "找不到当前 Worldline 的后续方向 Artifact",
     "找不到选中的后续方向",
+    SETTING_DELTA_STALE_BATCH_MESSAGE,
     "父场景不属于当前 Worldline",
     "后续场景父节点与方向批次不一致",
     "后续场景深度必须等于父场景深度加一",
@@ -73,7 +85,10 @@ export function continuationErrorMessage(
       );
     }
   }
-  if (error.message.includes(CONTINUATION_CONTEXT_MAX_CHARS_ENV)) {
+  if (
+    error.message.includes(CONTINUATION_CONTEXT_MAX_CHARS_ENV) ||
+    error.message.includes(CONTINUATION_CANON_GUARD_ENV)
+  ) {
     return error.message;
   }
   return "Continuation 生成失败；结构化输出未通过校验，未保存 Artifact。";

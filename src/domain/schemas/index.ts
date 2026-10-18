@@ -7,6 +7,7 @@ export * from "./impact-plan";
 export * from "./job";
 export * from "./project";
 export * from "./ripple-suggestion";
+export * from "./setting-delta";
 export * from "./source";
 export * from "./state-fact-id";
 export * from "./story-map";

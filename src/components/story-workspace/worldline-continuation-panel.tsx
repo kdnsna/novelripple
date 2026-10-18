@@ -20,6 +20,10 @@ import {
   type ContinuationDirectionBatchView,
   type ReadingPosition,
 } from "@/domain/continuation/worldline-tree";
+import {
+  isDirectionBatchStale,
+  SETTING_DELTA_STALE_BATCH_MESSAGE,
+} from "@/domain/continuation/setting-deltas";
 import { deriveWorldlineDelta } from "@/domain/invariants/validate-continuation";
 import type {
   ContextManifest,
@@ -34,6 +38,7 @@ import {
   type ContinuationTreeView,
 } from "./continuation-tree-view";
 import { PathCharacterStates } from "./path-character-states";
+import { PathSettingDeltas } from "./path-setting-deltas";
 import { WorldlineTreeNav } from "./worldline-tree-nav";
 import {
   defaultExpandedTreeIds,
@@ -66,6 +71,7 @@ type WorldlineContinuationPanelProps = {
 const contextSectionLabels: Record<ContextManifestSectionKind, string> = {
   worldline_setup: "世界线设定",
   canon_events: "相关原著事件",
+  setting_deltas: "路径设定增量",
   path_summary: "路径摘要",
   canon_evidence: "原著证据",
   recent_scenes: "最近场景",
@@ -215,6 +221,41 @@ export function WorldlineContinuationPanel({
     return directionOptions.find((option) => option.batch.id === latest.id) ?? null;
   }, [activeBatchId, currentNodeId, directionOptions, view.directionBatches]);
   const activeBatch = activeBatchOption?.batch ?? null;
+
+  /**
+   * 批次是否早于当前设定增量。activeBatch 始终属于当前节点，因此父路径就是
+   * currentPath；派生失败时由服务端继续 fail closed，这里不伪装成 stale。
+   */
+  const activeBatchStale = useMemo(() => {
+    if (!activeBatch) return false;
+    try {
+      return isDirectionBatchStale({
+        batch: {
+          id: activeBatch.id,
+          parentSceneId: activeBatch.parentSceneId,
+          createdAt: activeBatch.createdAt,
+          ...(activeBatch.settingDeltaFingerprint === undefined
+            ? {}
+            : {
+                settingDeltaFingerprint:
+                  activeBatch.settingDeltaFingerprint,
+              }),
+        },
+        tree,
+        pathToParent: currentPath,
+        deltas: view.settingDeltas,
+        lifecycles: view.settingDeltaLifecycles,
+      });
+    } catch {
+      return false;
+    }
+  }, [
+    activeBatch,
+    currentPath,
+    tree,
+    view.settingDeltaLifecycles,
+    view.settingDeltas,
+  ]);
 
   function movePosition(next: ReadingPosition): void {
     // 阅读位置只通过这里和 selectGeneratedScene 改变；在此并入新路径的
@@ -412,6 +453,19 @@ export function WorldlineContinuationPanel({
         <PathCharacterStates states={pathDerivation.characters} />
       ) : null}
 
+      <PathSettingDeltas
+        characters={storyMap.characters}
+        currentPath={currentPath}
+        onArtifactAdded={(artifact) =>
+          setView((current) => appendContinuationArtifact(current, artifact))
+        }
+        projectId={projectId}
+        settingDeltaLifecycles={view.settingDeltaLifecycles}
+        settingDeltas={view.settingDeltas}
+        tree={tree}
+        worldlineId={worldline.id}
+      />
+
       {currentPath.length === 0 && !activeBatch ? (
         <section className="continuation-empty">
           <h3>下一步：从分歧点生成 3 个方向</h3>
@@ -523,6 +577,20 @@ export function WorldlineContinuationPanel({
                     ))}
                 </div>
 
+                {scene.canonWarnings && scene.canonWarnings.length > 0 ? (
+                  <ul
+                    className="canon-warning-list"
+                    data-testid="canon-warnings"
+                    role="status"
+                  >
+                    {scene.canonWarnings.map((warning) => (
+                      <li key={`${warning.eventId}:${warning.field}`}>
+                        原著一致性提示：{warning.reason}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+
                 {isSelected ? (
                   <>
                     <details className="state-patch-details">
@@ -621,6 +689,29 @@ export function WorldlineContinuationPanel({
               {pendingKind === "newBatch" ? "正在换一批…" : "换一批"}
             </button>
           </div>
+          {activeBatchStale ? (
+            <p
+              className="setting-delta-stale-banner"
+              data-testid="setting-delta-stale-banner"
+              role="status"
+            >
+              {SETTING_DELTA_STALE_BATCH_MESSAGE}
+            </p>
+          ) : null}
+          {activeBatch.canonWarnings &&
+          activeBatch.canonWarnings.length > 0 ? (
+            <ul
+              className="canon-warning-list"
+              data-testid="canon-warnings"
+              role="status"
+            >
+              {activeBatch.canonWarnings.map((warning) => (
+                <li key={`${warning.eventId}:${warning.field}`}>
+                  原著一致性提示：{warning.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <div className="direction-card-list">
             {activeBatchOption?.directions.map(({ direction, sceneIds }) => {
               const generated = sceneIds.length > 0;
@@ -655,7 +746,7 @@ export function WorldlineContinuationPanel({
                       </button>
                       <button
                         className="text-button"
-                        disabled={pending}
+                        disabled={pending || activeBatchStale}
                         onClick={() =>
                           generateScene(activeBatch, direction.id, true)
                         }
@@ -670,7 +761,7 @@ export function WorldlineContinuationPanel({
                   ) : (
                     <button
                       className="secondary-button"
-                      disabled={pending}
+                      disabled={pending || activeBatchStale}
                       onClick={() => generateScene(activeBatch, direction.id)}
                       type="button"
                     >

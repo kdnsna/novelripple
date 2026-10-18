@@ -27,6 +27,8 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 
 ### 3. 上下文按固定七段组装
 
+> 0011 后续修订：新增独立、可裁剪的 `setting_deltas` 段（位于 `canon_events` 之后、`path_summary` 之前），读者规则不再进入 `worldline_setup`；段顺序变为八段，降级阶梯相应在 `canon_evidence` 与 `recent_scenes` 之间加入规则裁剪。以下保留 0007 采纳时的七段与阶梯描述。
+
 素材按固定顺序进入 `<continuation_context>`：
 
 1. `worldline_setup`；
@@ -37,9 +39,11 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 6. `selected_direction`；
 7. `anchor_reminder`。
 
-总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，按 UTF-16 字符数而非 token 计算，只约束组装后的上下文素材，不包含约 2–3k 字符的系统 Prompt 模板。超预算时只沿一条固定降级阶梯前进。阶梯是单一嵌套序列，每一级只删除或严格缩短上一级的内容：完整内容 → 按 priority 从低到高丢弃 `canon_evidence`（同优先级从末尾，相关事件证据最后丢）→ 从最旧开始整条丢弃 `recent_scenes`（始终保留最新一个场景）→ 按整行从开头裁剪 `path_summary`（保留首行省略/压缩提示到最后一刻，不切半行）→ 用严格更短的紧凑 `worldline_setup` 整体替换 → 用最新场景自己的非空且严格更短的 `summary` 替换正文 → 最新场景没有可用摘要（v1）时在句末边界截断并追加 `（后文已截断）` → 仍超预算才 fail closed。结果是该预算下第一个放得下的状态：更大的预算只会停留在更早（或相同）的状态，绝不会丢掉更小预算已保留的证据或场景，也不会使用更小预算没有启用的降级。第 5—7 步（紧凑 `worldline_setup`、摘要替换、v1 截断）释放的预算**不回填**第 2 步丢弃的证据：跨层回填会把低优先级内容塞进更小预算的结果（大预算停留在第 3—4 步时证据为零，小预算却带着回填证据），破坏嵌套顺序；这些预算只用于让当前状态本身放得下。v1 截断不得落在未闭合引号内（`「」『』“”‘’` 与 ASCII 引号），不得拆开 `……`；句末后紧跟恰好闭合引号的闭引号时（如 `。」`、`。』」`、`……」`），在所有闭引号之后截断；若只有引号内句末可用，则在最外层开引号前截断；若最外层开引号就在正文开头（整段都在引号内）或没有安全非空前缀，则 fail closed。不会因为“完整形式的必需段放不下”提前启用紧凑形式；紧凑形式只出现在阶梯第 5 步。`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 永不整段裁剪（`worldline_setup` 只允许整体替换为更紧凑的等价形式）。
+总素材预算由 `CONTINUATION_CONTEXT_MAX_CHARS` 控制，默认 24000 字符，按 UTF-16 字符数而非 token 计算，只约束组装后的上下文素材，不包含约 2–3k 字符的系统 Prompt 模板。超预算时只沿一条固定降级阶梯前进。阶梯是单一嵌套序列，每一级只删除或严格缩短上一级的内容：完整内容 → 按 priority 从低到高丢弃 `canon_evidence` 中的非 pinned 条目（同优先级从末尾）→ 从最旧开始整条丢弃 `recent_scenes`（始终保留最新一个场景）→ 按整行从开头裁剪 `path_summary`（保留首行省略/压缩提示到最后一刻，不切半行）→ 用严格更短的紧凑 `worldline_setup` 整体替换 → 用最新场景自己的非空且严格更短的 `summary` 替换正文 → 最新场景没有可用摘要（v1）时在句末边界截断并追加 `（后文已截断）` → 仍超预算才 fail closed。结果是该预算下第一个放得下的状态：更大的预算只会停留在更早（或相同）的状态，绝不会丢掉更小预算已保留的证据或场景，也不会使用更小预算没有启用的降级。第 5—7 步（紧凑 `worldline_setup`、摘要替换、v1 截断）释放的预算**不回填**第 2 步丢弃的证据：跨层回填会把低优先级内容塞进更小预算的结果（大预算停留在第 3—4 步时证据为零，小预算却带着回填证据），破坏嵌套顺序；这些预算只用于让当前状态本身放得下。v1 截断不得落在未闭合引号内（`「」『』“”‘’` 与 ASCII 引号），不得拆开 `……`；句末后紧跟恰好闭合引号的闭引号时（如 `。」`、`。』」`、`……」`），在所有闭引号之后截断；若只有引号内句末可用，则在最外层开引号前截断；若最外层开引号就在正文开头（整段都在引号内）或没有安全非空前缀，则 fail closed。不会因为“完整形式的必需段放不下”提前启用紧凑形式；紧凑形式只出现在阶梯第 5 步。`worldline_setup`、`canon_events`、`anchor_reminder` 以及场景生成时的 `selected_direction` 永不整段裁剪（`worldline_setup` 只允许整体替换为更紧凑的等价形式）。
 
-每次场景生成保存不含正文的 Context Manifest：只含段名、`included`、`chars`、`trimmed`、`droppedItemIds`、`budget` 计数，以及 `path_summary` 的 `coveredItemIds` / `watermarkId`（只含场景 id）。`recent_scenes` 另用 `summarizedItemIds` 记录用自身摘要替换正文的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；两者都不再计入 `droppedItemIds`。`canon_evidence` 的 `backfilledItemIds` 只为本分支期间可能已存的旧 manifest 保留为可选只读字段；新 manifest 不再写入（不做跨层证据回填），被丢弃的证据只出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录被移除的字段名（只含字段名，不含正文）。manifest 随场景 Artifact 保存，前端抽屉只展示段名、字数和丢弃项数量，不展示原文或生成正文。
+`canon_evidence` 中的 pinned 条目属于必需下限：分歧事件自身，以及每条已确认 Story Map 边的 `from` 事件——前提是该边指向分歧事件且 `from.sequence < divergence.sequence`——其 `related:<eventId>:<n>` 原著证据永不裁剪，并与 `worldline_setup`、`canon_events`、`selected_direction`、`anchor_reminder` 一起构成预算下限。非 pinned 证据仍按 priority 裁剪；pinned 条目保持原渲染位置，不因固定而重排。若这些必需内容放不下，组装器抛既有类型化 `ContinuationContextBudgetError`，绝不静默丢弃 pinned 证据。
+
+每次场景生成保存不含正文的 Context Manifest：只含段名、`included`、`chars`、`trimmed`、`droppedItemIds`、`budget` 计数，以及 `path_summary` 的 `coveredItemIds` / `watermarkId`（只含场景 id）。`recent_scenes` 另用 `summarizedItemIds` 记录用自身摘要替换正文的最新场景 id，用 `truncatedItemIds` 记录 v1 正文被截断的场景 id；两者都不再计入 `droppedItemIds`。`canon_evidence` 的 `backfilledItemIds` 只为本分支期间可能已存的旧 manifest 保留为可选只读字段；新 manifest 不再写入（不做跨层证据回填），被丢弃的证据只出现在 `droppedItemIds`。pinned 证据可选记录在 `pinnedItemIds`（只含 id），且永不出现在 `droppedItemIds`。`worldline_setup` 启用紧凑形式时用 `compactedFields` 记录被移除的字段名（只含字段名，不含正文）。manifest 随场景 Artifact 保存，前端抽屉只展示段名、字数和丢弃项数量，不展示原文或生成正文。
 
 ### 4. 路径滚动摘要是确定性派生，不额外调用模型
 
@@ -49,14 +53,14 @@ accepted Impact Plan 确定性派生的 Delta 是 `baseDelta`；当前状态是 
 
 v2 packet 的字段去向：
 
-- `readonlyCanonical` → `canon_events`：`sourceId`、`storyMapArtifactId`、`storyMapId`、人物 id/name/aliases/role、相关事件的 id/title/summary/sequence/participants/stateChanges、事件之间的 edges（id/from/to/type/explanation/confidence/confirmed），以及 Anchor 目标 endingCandidates（id/targetEventId/requirement）。边与结局的 `evidence[]` 不进入该段；相关事件的原著证据仍放在可裁剪的 `canon_evidence`。
-- `relevantEvidence` → `canon_evidence` 的前半部分，id 为 `related:<eventId>:<n>`；相关事件证据优先级最高，裁剪时最后丢弃。
+- `readonlyCanonical` → `canon_events`：`sourceId`、`storyMapArtifactId`、`storyMapId`、人物 id/name/aliases/role、相关事件的 id/title/summary/sequence/participants/stateChanges、事件之间的 edges（id/from/to/type/explanation/confidence/confirmed），以及 Anchor 目标 endingCandidates（id/targetEventId/requirement）。边与结局的 `evidence[]` 不进入该段；相关事件的原著证据仍放在 `canon_evidence`（分歧直接依赖的 pinned 条目不可裁剪，其余按 priority 裁剪）。
+- `relevantEvidence` → `canon_evidence` 的前半部分，id 为 `related:<eventId>:<n>`；相关事件证据优先级最高，裁剪时最后丢弃。分歧事件自身及其直接依赖的分歧前事件证据为 pinned，永不裁剪，并进入必需下限。
 - `styleContext.representativeExcerpts` / `styleContext.characterEvidence` → `canon_evidence` 的后半部分，仍由 `selectContinuationContext` 选择，先于相关事件证据被裁剪。
 - `currentWorldline` + `divergence` + `acceptedImpactPlan` + `currentState` → `worldline_setup`：世界线 id/mode、Divergence、anchors、Story Map id/title/logline、人物 id/name/aliases/role、accepted Impact Plan 的 id/mode/divergence/impacts 摘要/characterChanges/threadChanges/anchorEvaluations/uncertainties、当前路径状态。完整 worldline 行不再发送；省略的是数据库/审计字段（`parentWorldlineId`、`baseStoryMapArtifactId`、`acceptedImpactPlanId`、`idempotencyKey`、`createdAt`、`status` 等），不影响生成语义。
 - `stage` 由 Prompt 版本承担；`selectedDirection` 仍是 `selected_direction`。
 - 新增：`path_summary`、`recent_scenes`、`anchor_reminder`、Context Manifest 与段级字符预算。
 
-`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。边与结局的 `evidence[]` 不进入必需段；相关事件的原著证据仍只存在于可裁剪的 `canon_evidence`（相关事件切片优先、最后丢弃），因此必需上下文不会随 edge / ending 的证据数量增长。
+`canon_events`、相关事件证据、边、Anchor 目标结局与 accepted Impact Plan 均未删除；v3 只是把原来混在一个 JSON 里的内容拆成固定顺序、可裁剪、可审计的段。边与结局的 `evidence[]` 不进入必需段；相关事件的原著证据仍只存在于 `canon_evidence`（非 pinned 切片优先、最后丢弃；分歧直接依赖的 pinned 切片进入必需下限），因此必需上下文不会随 edge / ending 的证据数量增长。
 
 ### 6. v1 保持可读，不做迁移
 
@@ -90,7 +94,7 @@ v1 方向没有父节点/批次字段，视为根批次 0；v1 场景没有树�
 
 ## 后续工作（P1）
 
-1. **路径作用域设定条目**：Codex / lore entries 按 `name ∪ aliases` 命中，只读取分叉点之前与当前路径上的内容；`always` 条目进入必需段，场景 `characterChanges` 可转为以场景节点为锚的 progression。
+1. **路径作用域设定条目（已由 0011 交付）**：人物/术语规则按 `anchorSceneId` 沿当前路径生效；0011 未实现按 `name ∪ aliases` 的关键词命中、`always` 必需段分流，也没有把场景 `characterChanges` 转成以场景节点为锚的 progression。后续评审修订把规则从 `worldline_setup` 移到独立、可裁剪的 `setting_deltas` 段（位于 `canon_events` 之后），并增加不可变停用/软删除生命周期与写时上限。
 2. **世界线树视图（已由 0010 以大纲形式交付）**：用只读大纲展示当前路径、已访问旁支和未选择的方向；幽灵方向以角标/方向列表表达，不生成节点，也不使用 React Flow。默认展开分歧点与当前路径，用户展开只增不减，大树用折叠，不预生成未选方向；React Flow 图布局与大树两档渲染仍留待真实需要时评估。
 3. **书签与位置**：“从这里重来”已由 0010 交付（任意节点重开，阅读位置目前只是客户端状态）；仍待持久化命名书签和 `headNodeId`，使刷新后能恢复位置。基线 Story Map revision 变化时把旧世界线标成 stale，允许在旧版本只读继续或按新版本重开，不做自动迁移。
 4. **流式生成**：场景生成改为可中止的流式请求，带 `requestKey` 丢弃过期回包；流式失败不得留下半提交场景，仍以完整 Schema 校验后的 Artifact 为唯一提交点。

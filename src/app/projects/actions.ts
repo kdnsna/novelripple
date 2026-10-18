@@ -8,16 +8,22 @@ import { after } from "next/server";
 import { z } from "zod";
 
 import {
-  type ContinuationDirectionsArtifact,
-  type ContinuationSceneArtifact,
+  SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
+  SettingDeltaSubjectSchema,
   ProjectIdSchema,
   StoryMapRevisionChangeSchema,
   StoryMapGenerationStartModeSchema,
+  type ContinuationDirectionsArtifact,
+  type ContinuationSceneArtifact,
   type ImpactPlanArtifact,
   type RippleSuggestionsArtifact,
+  type SettingDeltaArtifact,
+  type SettingDeltaLifecycleArtifact,
+  type SettingDeltaLifecycleStatus,
   type StoryMapArtifact,
   type Worldline,
 } from "@/domain/schemas";
+import { isSettingDeltaError } from "@/domain/continuation/setting-delta-error";
 import {
   generateConfiguredContinuationDirections,
   generateConfiguredContinuationScene,
@@ -36,6 +42,10 @@ import {
   createProject,
   importProjectSource,
 } from "@/server/repositories/project-repository";
+import {
+  createSettingDeltaArtifact,
+  createSettingDeltaLifecycleArtifact,
+} from "@/server/repositories/continuation-repository";
 import {
   confirmStoryMapArtifact,
   createStoryMapRevision,
@@ -73,6 +83,12 @@ export type ContinuationDirectionsActionResult =
   | { ok: false; error: string };
 export type ContinuationSceneActionResult =
   | { ok: true; artifact: ContinuationSceneArtifact }
+  | { ok: false; error: string };
+export type SettingDeltaActionResult =
+  | { ok: true; artifact: SettingDeltaArtifact }
+  | { ok: false; error: string };
+export type SettingDeltaLifecycleActionResult =
+  | { ok: true; artifact: SettingDeltaLifecycleArtifact }
   | { ok: false; error: string };
 
 export async function createProjectAction(
@@ -411,6 +427,108 @@ export async function generateContinuationSceneAction(
   } catch (error) {
     return { ok: false, error: continuationErrorMessage(error, "scene") };
   }
+}
+
+const AddSettingDeltaInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    anchorSceneId: z.string().min(1).nullable(),
+    subject: SettingDeltaSubjectSchema,
+    // 长度/不可见字符/NFC 由仓储层在规范化后统一校验，避免 Action 的原始
+    // 长度上限抢先拒绝本应被规范化接受的文本。
+    statement: z.string(),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export async function addSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaActionResult> {
+  const parsed = AddSettingDeltaInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "设定增量参数无效：请检查主体、说明与锚点。",
+    };
+  }
+
+  try {
+    const artifact = createSettingDeltaArtifact(parsed.data);
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, artifact };
+  } catch (error) {
+    return { ok: false, error: settingDeltaErrorMessage(error) };
+  }
+}
+
+const SettingDeltaLifecycleInputSchema = z
+  .object({
+    projectId: ProjectIdSchema,
+    worldlineId: z.string().min(1),
+    targetDeltaId: z.string().min(1),
+    idempotencyKey: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+async function changeSettingDeltaLifecycleAction(
+  status: SettingDeltaLifecycleStatus,
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  const parsed = SettingDeltaLifecycleInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: "设定增量操作参数无效：请刷新后重试。",
+    };
+  }
+
+  try {
+    const artifact = createSettingDeltaLifecycleArtifact({
+      ...parsed.data,
+      status,
+    });
+    revalidatePath(`/projects/${parsed.data.projectId}`);
+    return { ok: true, artifact };
+  } catch (error) {
+    return { ok: false, error: settingDeltaErrorMessage(error) };
+  }
+}
+
+export async function deactivateSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  return changeSettingDeltaLifecycleAction("deactivated", input);
+}
+
+export async function reactivateSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  return changeSettingDeltaLifecycleAction("reactivated", input);
+}
+
+export async function deleteSettingDeltaAction(
+  input: unknown,
+): Promise<SettingDeltaLifecycleActionResult> {
+  return changeSettingDeltaLifecycleAction("deleted", input);
+}
+
+function settingDeltaErrorMessage(error: unknown): string {
+  // Zod 只可能来自主体/说明的 Schema 解析；错误文案本身就是面向读者的规则说明。
+  if (error instanceof z.ZodError) {
+    if (
+      error.issues.some(
+        (issue) => issue.message === SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE,
+      )
+    ) {
+      return SETTING_DELTA_FORBIDDEN_CHAR_MESSAGE;
+    }
+    return "设定增量参数无效：请检查主体、说明与锚点。";
+  }
+  // 仓储/领域检查统一抛 SettingDeltaError：message 已包含路径等规则相关
+  // 上下文，直接透传，不再维护一份易漂移的字符串白名单。
+  if (isSettingDeltaError(error)) return error.message;
+  return "设定增量保存失败，未写入任何规则。";
 }
 
 function sourceImportErrorMessage(error: unknown): string {
