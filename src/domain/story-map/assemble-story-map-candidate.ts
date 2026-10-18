@@ -534,6 +534,17 @@ export function applyEndingPass(
 
 // ── 最终合并 ──
 
+/**
+ * 当前边图中没有任何入边/出边的事件 ID，按池中事件顺序返回。
+ * 只读取给定池，供合并轮提示模型跨块寻找直接原因/后果；不修改边。
+ */
+export function findIsolatedEventIds(pool: StoryMapPool): string[] {
+  const connected = new Set(pool.edges.flatMap((edge) => [edge.from, edge.to]));
+  return pool.events
+    .filter((event) => !connected.has(event.id))
+    .map((event) => event.id);
+}
+
 export function applyMerge(
   pool: StoryMapPool,
   endings: StoryMapCandidateEnding[],

@@ -24,6 +24,7 @@ import {
   dedupeEdges,
   dedupeEndings,
   dropGroupCandidates,
+  findIsolatedEventIds,
   validateEndingPass,
   validateRoster,
   type StoryMapPool,
@@ -1087,6 +1088,66 @@ describe("deterministic edge and ending dedupe", () => {
       ["edge_keep", "e2", "e3"],
       ["edge_cross_chunk", "e1", "e3"],
     ]);
+  });
+});
+
+describe("isolated event ids", () => {
+  const edgeOf = (
+    id: string,
+    from: string,
+    to: string,
+  ): StoryMapCandidateEdge => ({
+    id,
+    from,
+    to,
+    type: "causes",
+    explanation: id,
+    confidence: 1,
+    confirmed: false,
+    evidenceUnitIds: ["u1"],
+  });
+
+  it("returns every event id in pool order when there are no edges", () => {
+    const pool: StoryMapPool = {
+      characters: [character("char_a", "甲")],
+      events: [
+        { ...event("e1", "u1", ["char_a"]), chunkIndex: 0 },
+        { ...event("e2", "u2", ["char_a"]), chunkIndex: 1 },
+        { ...event("e3", "u3", ["char_a"]), chunkIndex: 2 },
+      ],
+      edges: [],
+    };
+
+    expect(findIsolatedEventIds(pool)).toEqual(["e1", "e2", "e3"]);
+  });
+
+  it("returns no ids for a fully connected chain", () => {
+    const pool: StoryMapPool = {
+      characters: [character("char_a", "甲")],
+      events: [
+        { ...event("e1", "u1", ["char_a"]), chunkIndex: 0 },
+        { ...event("e2", "u2", ["char_a"]), chunkIndex: 1 },
+        { ...event("e3", "u3", ["char_a"]), chunkIndex: 2 },
+      ],
+      edges: [edgeOf("edge_1", "e1", "e2"), edgeOf("edge_2", "e2", "e3")],
+    };
+
+    expect(findIsolatedEventIds(pool)).toEqual([]);
+  });
+
+  it("counts both edge endpoints and keeps isolated events in pool order", () => {
+    const pool: StoryMapPool = {
+      characters: [character("char_a", "甲")],
+      events: [
+        { ...event("e1", "u1", ["char_a"]), chunkIndex: 0 },
+        { ...event("e2", "u2", ["char_a"]), chunkIndex: 1 },
+        { ...event("e3", "u3", ["char_a"]), chunkIndex: 2 },
+        { ...event("e4", "u4", ["char_a"]), chunkIndex: 3 },
+      ],
+      edges: [edgeOf("edge_1", "e1", "e2"), edgeOf("edge_2", "e3", "e2")],
+    };
+
+    expect(findIsolatedEventIds(pool)).toEqual(["e4"]);
   });
 });
 

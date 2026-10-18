@@ -204,6 +204,18 @@ describe("chunked Story Map recall pipeline", () => {
     expect(mergePrompt).toContain("<granularity_hint>");
     expect(mergePrompt).toContain(`"coreTextChars":${totalCoreChars}`);
     expect(mergePrompt).toContain(`"targetEventRange":[${lowerTarget},${upperTarget}]`);
+    // 合并轮要能用既有边的 explanation 判断强弱，并看到当前孤立事件以补长距离因果。
+    expect(mergePrompt).toContain('"explanation"');
+    expect(mergePrompt).toContain("<isolated_events>");
+    expect(mergePrompt).toContain("</isolated_events>");
+    const isolatedBlock = mergePrompt?.match(
+      /<isolated_events>\s*(\[[\s\S]*?\])\s*<\/isolated_events>/,
+    )?.[1];
+    const isolatedIds = JSON.parse(isolatedBlock ?? "null") as unknown;
+    expect(Array.isArray(isolatedIds)).toBe(true);
+    expect(
+      (isolatedIds as unknown[]).every((id) => typeof id === "string"),
+    ).toBe(true);
 
     const runs = listProjectGenerationRuns(project.id);
     const describeRun = (run: { kind: string; promptVersion: string; status: string }) =>
