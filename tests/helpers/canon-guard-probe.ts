@@ -110,7 +110,7 @@ export const CANON_GUARD_PROBE_PATH_STATE: WorldlineDelta =
     threadsClosed: [],
   });
 
-/** 20 条语义上应被拒绝的改写；字面护栏只能覆盖其中一部分。 */
+/** 19 条语义上应被拒绝的改写；字面护栏只能覆盖其中一部分。 */
 export const CANON_GUARD_SHOULD_REJECT = [
   "灯塔熄灭从未发生。",
   "灯塔熄灭根本没有发生过。",
@@ -132,8 +132,7 @@ export const CANON_GUARD_SHOULD_REJECT = [
   "灯塔熄灭未发生过。",
   "灯塔熄灭未曾发生。",
   "灯塔熄灭没有发生过。",
-  // 裸「说」不再无条件豁免：这些是叙述者的直接断言，不是引述。
-  "众人说完后便散了，灯塔熄灭从未发生过。",
+  // 裸「说」不再无条件豁免：叙述者直接断言，不是引述。
   "这么说来，灯塔熄灭从未发生过。",
 ] as const;
 
@@ -223,41 +222,122 @@ export const CANON_GUARD_DIALOGUE_LIE = [
 /**
  * 框架在第一分句、叙述者否定在第二分句的句子。
  *
- * 框架词只治理自己的分句：逗号/分号/转折连接词之后，叙述者的“从未发生”
- * 必须硬拒绝，不能因为前一句出现希望/怀疑/声称等词就降级为 warning。
- * 覆盖愿望、maybe、以为、告诉、怀疑、发誓、否认、喊道、听说/据说、
- * 咬定、说完/说起、骗，以及同一分句内被“但/可”打断治理的情形。
+ * 第 6 轮后，否定前出现角色主语或推测分句的样本会合法地降级为 warning；
+ * 本集只保留“否定前没有任何角色主语/推测分句”的叙述者否定：愿望词但无
+ * 主语、传闻分句、分句起点转折词、非引语冒号，以及场景/时间/天气/物品
+ * 分句。这些必须继续硬拒绝。
  */
 export const CANON_GUARD_FRAME_THEN_NARRATOR = [
-  "她希望能早点回家，灯塔熄灭从未发生过。",
   "但愿明天风平浪静，交出钥匙根本没有发生过。",
+  "村长怀疑有人偷了船；灯塔熄灭从未发生过。",
+  "据说那年很冷；交出钥匙根本没有发生过。",
+  "她咬定是风浪的错，可交出钥匙根本没有发生过。",
+  "他以为没人知道，但灯塔熄灭从未发生过。",
+  "他以为没人知道但灯塔熄灭从未发生过。",
+  "他坚称，可灯塔熄灭从未发生过。",
+  "结论只有一个：灯塔熄灭从未发生过。",
+  // 第 6 轮新增：否定前没有任何角色主语或推测分句的场景/时间/天气/
+  // 物品分句、非引语冒号、分号，以及角色分句之后的转折词。
+  "夜色渐深，灯塔熄灭从未发生过。",
+  "雨点敲着窗，交出钥匙根本没有发生过。",
+  "钟声在港口回荡，灯塔熄灭未曾发生。",
+  "石阶上积着水，交出钥匙压根没有发生过。",
+  "唯一的解释：灯塔熄灭根本没有发生过。",
+  "风停了；灯塔熄灭从未发生过。",
+  "他点点头，但灯塔熄灭从未发生过。",
+  "潮水退去，交出钥匙从未发生过。",
+  // 无角色主语的「量词 + 道」分句仍不是“说道”，后面的否定硬拒绝。
+  "前面只有一条道，灯塔熄灭从未发生过。",
+] as const;
+
+/**
+ * 第 6 轮从 should-reject / frame-then-narrator 移出的样本。
+ *
+ * 否定之前存在带角色主语的叙述分句（「他……」「众人……」）或以逗号结尾的
+ * 推测分句（「也许……」「他可能……」），按产品决定属于角色话语/不确定
+ * 转述，只 warning。文本保持不变，仅改归类。
+ */
+export const CANON_GUARD_RECLASSIFIED_WARN = [
+  // 同时从 CANON_GUARD_SHOULD_REJECT 与 FRAME_THEN_NARRATOR 移出：
+  // 众人是人称代词主语。
+  "众人说完后便散了，灯塔熄灭从未发生过。",
+  // 从 CANON_GUARD_FRAME_THEN_NARRATOR 移出：角色主语/推测分句在前。
+  "她希望能早点回家，灯塔熄灭从未发生过。",
   "他可能已经忘了，灯塔熄灭从来没有发生过。",
   "也许是她听错了，交出钥匙压根没有发生过。",
   "或许风浪太大，灯塔熄灭未曾发生。",
   "他以为自己听错了，交出钥匙根本没有发生过。",
   "他告诉我风暴要来，灯塔熄灭从未发生过。",
-  "村长怀疑有人偷了船；灯塔熄灭从未发生过。",
   "他发誓自己没撒谎，交出钥匙从来没有发生过。",
   "她否认见过那盏灯，灯塔熄灭根本没有发生过。",
   "她喊道快点走，交出钥匙从未发生过。",
   "他听说风暴要来了，灯塔熄灭从来没有发生过。",
-  "据说那年很冷；交出钥匙根本没有发生过。",
-  "她咬定是风浪的错，可交出钥匙根本没有发生过。",
-  "众人说完后便散了，灯塔熄灭从未发生过。",
   "他说起旧年的灯，交出钥匙从来没有发生过。",
   "他骗众人说风浪很大，灯塔熄灭根本没有发生过。",
-  // 叙述者切换连接词打破治理：逗号版与真正同一分句版都必须硬拒绝。
-  "他以为没人知道，但灯塔熄灭从未发生过。",
-  "他以为没人知道但灯塔熄灭从未发生过。",
-  // PR #15 第 4 轮：框架分句不以言语动词结尾、言语逗号后出现词法转折、
-  // 非引语冒号，以及“可能”不是转折也不是言语动词时，都必须保持硬拒绝。
   "她声称自己看见了光，灯塔熄灭从未发生过。",
   "他解释说风浪太大，交出钥匙根本没有发生过。",
-  "他坚称，可灯塔熄灭从未发生过。",
-  "结论只有一个：灯塔熄灭从未发生过。",
   "他可能记错了，灯塔熄灭从未发生过。",
-  // PR #15 第 5 轮：量词 + 道结尾的叙述分句不是“说道”，后面的叙述者否定仍硬拒绝。
   "他走上那条道，灯塔熄灭从未发生过。",
+] as const;
+
+/**
+ * 24 条「角色主语 + 表外语义动词 + ， + 叙述者式否定」探针。
+ *
+ * 动词刻意不依赖言语动词表（表示/称/透露/承认/警告/嘱咐/提醒/转告/
+ * 坦言/补充/解释/回忆/强调/指出/抱怨/安慰/保证/宣布/通知/暗示/叮嘱/
+ * 劝/写道/记得…），主语覆盖 Story Map 姓名、人称代词与 老渔夫/船长/
+ * 守塔人/村里的孩子们/掌柜的伙计们 等短人物名词。全部必须 0 条硬拒绝。
+ */
+export const CANON_GUARD_OFF_LIST_VERBS = [
+  "沈砚表示，灯塔熄灭从未发生过。",
+  "沈砚称，交出钥匙根本没有发生过。",
+  "他透露，灯塔熄灭从来没有发生过。",
+  "她承认，交出钥匙压根没有发生过。",
+  "老渔夫警告，灯塔熄灭未曾发生。",
+  "船长嘱咐，交出钥匙并没有发生过。",
+  "守塔人提醒，灯塔熄灭从没发生过。",
+  "沈砚转告，交出钥匙并未发生。",
+  "她坦言，灯塔熄灭不曾发生过。",
+  "他补充，交出钥匙从来没有发生过。",
+  "船长解释，灯塔熄灭根本没有发生过。",
+  "沈砚回忆，交出钥匙没有发生过。",
+  "她强调，灯塔熄灭从未发生。",
+  "老渔夫指出，交出钥匙根本不存在。",
+  "他抱怨，灯塔熄灭其实没有发生过。",
+  "村里的孩子们安慰，交出钥匙并没有发生过。",
+  "掌柜的伙计们保证，灯塔熄灭从未发生过。",
+  "沈砚宣布，交出钥匙未曾发生。",
+  "她通知，灯塔熄灭压根没发生。",
+  "船长暗示，交出钥匙没有发生过。",
+  "他叮嘱，灯塔熄灭根本没有发生过。",
+  "老渔夫劝，交出钥匙从来没有发生过。",
+  "她写道，灯塔熄灭从未发生过。",
+  "沈砚记得，交出钥匙并未发生。",
+] as const;
+
+/**
+ * 18 条推测框架探针：每个推测词后接逗号，再接否定（主语有无都覆盖）。
+ * 推测分句只说明这是人物的估计或叙述者的不确定转述，必须 0 条硬拒绝。
+ */
+export const CANON_GUARD_SPECULATION = [
+  "他估计，灯塔熄灭从未发生过。",
+  "大概，交出钥匙根本没有发生过。",
+  "似乎，灯塔熄灭从来没有发生过。",
+  "恐怕，交出钥匙压根没有发生过。",
+  "他以为，灯塔熄灭未曾发生。",
+  "她怀疑，交出钥匙并未发生。",
+  "他猜想，灯塔熄灭从没发生过。",
+  "她猜测，交出钥匙不曾发生过。",
+  "兴许，灯塔熄灭根本没有发生过。",
+  "也许，交出钥匙没有发生过。",
+  "或许，灯塔熄灭没发生过。",
+  "可能，交出钥匙未发生过。",
+  "想必，灯塔熄灭从来没有发生过。",
+  "多半，交出钥匙根本没有发生过。",
+  "仿佛，灯塔熄灭从未发生过。",
+  "好像，交出钥匙压根没有发生过。",
+  "看来，灯塔熄灭未曾发生。",
+  "据估计，交出钥匙并未发生。",
 ] as const;
 
 /**
@@ -333,6 +413,18 @@ export type CanonGuardProbeStats = {
   reviewerDialogueHardRejects: number;
   /** 评审方类别对白样本中出现 warning 的数量。 */
   reviewerDialogueWarnings: number;
+  /** 表外言语动词样本中被硬拒绝的数量（必须为 0）。 */
+  offListVerbHardRejects: number;
+  /** 表外言语动词样本中出现 warning 的数量。 */
+  offListVerbWarnings: number;
+  /** 推测框架样本中被硬拒绝的数量（必须为 0）。 */
+  speculationHardRejects: number;
+  /** 推测框架样本中出现 warning 的数量。 */
+  speculationWarnings: number;
+  /** 第 6 轮重新归类样本中被硬拒绝的数量（必须为 0）。 */
+  reclassifiedHardRejects: number;
+  /** 第 6 轮重新归类样本中出现 warning 的数量。 */
+  reclassifiedWarnings: number;
 };
 
 function evaluate(text: string) {
@@ -352,6 +444,9 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
   const reviewerDialogue = CANON_GUARD_REVIEWER_DIALOGUE.map(evaluate);
   const frameThenNarrator = CANON_GUARD_FRAME_THEN_NARRATOR.map(evaluate);
   const brokenQuoteNarrator = CANON_GUARD_BROKEN_QUOTE_NARRATOR.map(evaluate);
+  const offListVerbs = CANON_GUARD_OFF_LIST_VERBS.map(evaluate);
+  const speculation = CANON_GUARD_SPECULATION.map(evaluate);
+  const reclassified = CANON_GUARD_RECLASSIFIED_WARN.map(evaluate);
   const neutral = evaluate(CANON_GUARD_NEUTRAL_PROSE);
   return {
     caught: shouldReject.filter((result) => result.issues.length > 0).length,
@@ -378,6 +473,24 @@ export function computeCanonGuardProbeStats(): CanonGuardProbeStats {
       (result) => result.issues.length > 0,
     ).length,
     reviewerDialogueWarnings: reviewerDialogue.filter(
+      (result) => result.warnings.length > 0,
+    ).length,
+    offListVerbHardRejects: offListVerbs.filter(
+      (result) => result.issues.length > 0,
+    ).length,
+    offListVerbWarnings: offListVerbs.filter(
+      (result) => result.warnings.length > 0,
+    ).length,
+    speculationHardRejects: speculation.filter(
+      (result) => result.issues.length > 0,
+    ).length,
+    speculationWarnings: speculation.filter(
+      (result) => result.warnings.length > 0,
+    ).length,
+    reclassifiedHardRejects: reclassified.filter(
+      (result) => result.issues.length > 0,
+    ).length,
+    reclassifiedWarnings: reclassified.filter(
       (result) => result.warnings.length > 0,
     ).length,
   };

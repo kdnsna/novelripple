@@ -317,13 +317,21 @@ export function validateAgainstPreDivergenceCanon(input: {
   const warnings: ContinuationCanonWarning[] = [];
   const hardRejections: ContinuationCanonHardRejection[] = [];
   const emitted = new Set<string>();
+  const characterNames = input.storyMap.characters.flatMap((character) => [
+    character.name,
+    ...character.aliases,
+  ]);
 
   for (const field of input.textFields) {
     if (field.text.trim().length < 2) continue;
     for (const event of lockedEvents) {
       const key = `${event.id}\u0000${field.field}`;
       if (emitted.has(key)) continue;
-      const signals = detectEventRewriteSignals(field.text, event.title);
+      const signals = detectEventRewriteSignals(
+        field.text,
+        event.title,
+        characterNames,
+      );
       if (signals.hard) {
         emitted.add(key);
         if (policy === "warn") {
@@ -494,6 +502,34 @@ const CANON_DIALOGUE_CUES = [
   "或许",
   "可能",
   "大概",
+] as const;
+
+/**
+ * 推测/不确定框架（PR #15 第 6 轮）。
+ *
+ * 出现在否定之前（同分句，或前一分句以逗号结尾）时说明这是人物的推测或
+ * 叙述者的不确定转述，不是“事件没发生”的直接断言，只 warning。这里不再
+ * 往言语动词表里堆词，而是让“谁在说/谁在想”成为结构信号。
+ */
+const CANON_SPECULATION_CUES = [
+  "据估计",
+  "估计",
+  "大概",
+  "似乎",
+  "恐怕",
+  "以为",
+  "怀疑",
+  "猜想",
+  "猜测",
+  "兴许",
+  "也许",
+  "或许",
+  "可能",
+  "想必",
+  "多半",
+  "仿佛",
+  "好像",
+  "看来",
 ] as const;
 
 /**
@@ -827,6 +863,7 @@ type CanonRewriteSignals = {
 function detectEventRewriteSignals(
   text: string,
   title: string,
+  characterNames: readonly string[],
 ): CanonRewriteSignals {
   if (title.length < 2) {
     return { hard: false, weak: false, sentence: null, unpairedQuote: false };
@@ -853,7 +890,7 @@ function detectEventRewriteSignals(
   for (const span of quotedSpans) {
     const inner = text.slice(span.start + 1, span.end - 1);
     if (!inner.includes(title)) continue;
-    if (hasExplicitOccurrenceNegation(inner, title) !== null) {
+    if (hasExplicitOccurrenceNegation(inner, title, characterNames) !== null) {
       weak = true;
     }
   }
@@ -861,7 +898,7 @@ function detectEventRewriteSignals(
   for (const span of splitSentenceSpans(masked)) {
     const sentence = masked.slice(span.start, span.end);
     if (!sentence.includes(title)) continue;
-    const signal = hasExplicitOccurrenceNegation(sentence, title);
+    const signal = hasExplicitOccurrenceNegation(sentence, title, characterNames);
     if (signal === "hard") {
       const paragraph = paragraphRangeAt(text, span.start);
       return {
@@ -980,6 +1017,7 @@ function isLineBreak(char: string): boolean {
 function hasExplicitOccurrenceNegation(
   sentence: string,
   title: string,
+  characterNames: readonly string[],
 ): "hard" | "nonAssertive" | null {
   const escaped = escapeRegExp(title);
   const gap = `(?:${CANON_PARTICLE_GAP})?`;
@@ -1002,7 +1040,7 @@ function hasExplicitOccurrenceNegation(
   for (const pattern of patterns) {
     for (const match of sentence.matchAll(pattern)) {
       matched = true;
-      if (!isNonAssertionMatch(sentence, match, title)) {
+      if (!isNonAssertionMatch(sentence, match, title, characterNames)) {
         return "hard";
       }
     }
@@ -1015,6 +1053,7 @@ function isNonAssertionMatch(
   sentence: string,
   match: RegExpMatchArray,
   title: string,
+  characterNames: readonly string[],
 ): boolean {
   const start = match.index ?? 0;
   const end = start + match[0].length;
@@ -1062,6 +1101,21 @@ function isNonAssertionMatch(
     start,
     CANON_GOVERNANCE_CLAUSE_DELIMITER,
   );
+  // PR #15 第 6 轮：否定之前只要有一个带角色主语的叙述分句（「他点点头，
+  // 灯塔……」「老渔夫表示，灯塔……」）或一个以逗号结尾的推测分句（「也许，
+  // 灯塔……」），整句就按角色话语/不确定转述处理，只 warning。分句内出现
+  // 叙述者转折词时取消该豁免，仍按叙述者断言硬拒绝。
+  if (
+    precedingCharacterSubjectClause(
+      sentence,
+      governanceClauseStart,
+      start,
+      characterNames,
+    ) ||
+    precedingSpeculationClause(sentence, governanceClauseStart, start)
+  ) {
+    return true;
+  }
   // 1) 言语动词 + 逗号等价于冒号引出的直接引语：被转述的否定只警告。
   // 2) 后置引述（「…，他说。」）治理同一句前面所有分句。
   if (
@@ -1090,9 +1144,316 @@ function isNonAssertionMatch(
       governanceClauseStart,
       CANON_WISH_CUES,
     ) ||
+    hasGoverningFrameCue(
+      sentence,
+      start,
+      governanceClauseStart,
+      CANON_SPECULATION_CUES,
+    ) ||
     hasReportingSayCue(sentence, start, governanceClauseStart) ||
     hasDeceptionCue(sentence, start, governanceClauseStart)
   );
+}
+
+/**
+ * 分句是否以“角色主语 + 其它内容”开头（PR #15 第 6 轮的结构信号）。
+ *
+ * 这是纯词法判断：先去掉首尾空白与一个 ≤4 字的常见时间/语气状语，再按
+ * ① Story Map 人物姓名/别名（最长优先）② 人称代词（最长优先）③ 1–8 个
+ * CJK 字、以人物后缀字结尾的短人物名词（老渔夫/船长/守塔人/掌柜的伙计们）
+ * 识别主语，并要求主语后至少还有一个 CJK 字。人物名词候选还要排除含
+ * 系动词/存在动词/介词的短语，并要求指示/存在限定词后紧跟量词（见
+ * `isPersonNounPhrase`）。它不判断“后面是不是动词”，因此比言语动词表宽，
+ * 也不需要继续枚举动词；代价是人物后缀是启发式，例如以“生/王”等结尾的
+ * 非人物词也可能被当成人称名词（见 ADR 0011）。
+ */
+export function clauseHasCharacterSubject(
+  clause: string,
+  characterNames: readonly string[],
+): boolean {
+  const trimmed = stripLeadingCanonAdverbials(clause.trim());
+  if (trimmed.length === 0) return false;
+
+  const names = [...characterNames]
+    .filter((name) => name.length > 0)
+    .sort((left, right) => right.length - left.length);
+  for (const name of names) {
+    if (
+      trimmed.startsWith(name) &&
+      hasCjkContent(trimmed.slice(name.length))
+    ) {
+      return true;
+    }
+  }
+
+  for (const pronoun of CANON_PERSONAL_PRONOUNS_BY_LENGTH) {
+    if (
+      trimmed.startsWith(pronoun) &&
+      hasCjkContent(trimmed.slice(pronoun.length))
+    ) {
+      return true;
+    }
+  }
+
+  const nounPrefix = trimmed.match(CANON_CJK_PREFIX_PATTERN)?.[0] ?? "";
+  for (let length = 1; length <= nounPrefix.length; length += 1) {
+    if (!CANON_PERSON_NOUN_SUFFIX_CHARS.has(nounPrefix[length - 1]!)) continue;
+    if (!hasCjkContent(trimmed.slice(length))) continue;
+    if (isPersonNounPhrase(nounPrefix.slice(0, length))) return true;
+  }
+  return false;
+}
+
+/**
+ * 1–8 字候选是否可能是一个短人物名词（T18）。
+ *
+ * 旧实现只看后缀字，于是「这是水手们的说法」里的「这是水手们」也被当成
+ * 人物主语，把后面的叙述者否定降级为 warning。这里收紧两个条件：
+ * - 候选短语本身不能含系动词/存在动词/介词（是/有/在/为/被/把/对/向/从/给）；
+ * - 以指示/存在限定词（这/那/此/某/每/各/有）开头时，必须是
+ *   「指示词 + 量词」结构（那个老人/这位船长/那群孩子），量词允许
+ *   个/位/名/群/些/伙/帮/对/队。
+ *
+ * 指示结构的前两个字是限定词与量词，即使量词本身是「对」也不算介词。
+ * 仍不做词性/句法分析，非人物名词的误判边界见 ADR 0011 已知限制。
+ */
+function isPersonNounPhrase(phrase: string): boolean {
+  const first = phrase[0];
+  if (first === undefined) return false;
+  const determiner = CANON_DETERMINER_PREFIX_CHARS.has(first);
+  if (determiner) {
+    const measure = phrase[1];
+    if (
+      measure === undefined ||
+      !CANON_DETERMINER_MEASURE_CHARS.has(measure)
+    ) {
+      return false;
+    }
+  }
+  for (let index = 0; index < phrase.length; index += 1) {
+    const char = phrase[index]!;
+    if (!CANON_NON_PERSON_NOUN_CHARS.has(char)) continue;
+    if (determiner && index <= 1) continue;
+    return false;
+  }
+  return true;
+}
+
+/** 允许出现在角色主语前的短状语（每个 ≤4 字，最长优先）。 */
+const CANON_LEADING_ADVERBIALS = [
+  "第二天",
+  "一转眼",
+  "不知何时",
+  "后来",
+  "那天",
+  "当时",
+  "忽然",
+  "突然",
+  "这时",
+  "随后",
+  "接着",
+  "于是",
+  "最后",
+  "此刻",
+  "那时",
+  "今天",
+  "昨天",
+  "今夜",
+  "夜里",
+  "清晨",
+  "傍晚",
+  "黄昏",
+  "凌晨",
+  "半夜",
+  "白天",
+  "次日",
+  "当天",
+  "现在",
+  "刚才",
+  "方才",
+  "不久",
+  "片刻",
+  "半晌",
+  "良久",
+] as const;
+const CANON_LEADING_ADVERBIALS_BY_LENGTH = [...CANON_LEADING_ADVERBIALS].sort(
+  (left, right) => right.length - left.length,
+);
+
+/** 人称代词（最长优先，避免「他们」被拆成「他」）。 */
+const CANON_PERSONAL_PRONOUNS = [
+  "他们",
+  "她们",
+  "它们",
+  "我们",
+  "你们",
+  "咱们",
+  "老夫",
+  "本座",
+  "在下",
+  "老子",
+  "人家",
+  "大家",
+  "众人",
+  // 有人 是代词性主语（「有人在敲门」），不是「有 + 人」的存在句短语。
+  "有人",
+  "咱",
+  "他",
+  "她",
+  "它",
+  "我",
+  "你",
+  "您",
+  "俺",
+] as const;
+const CANON_PERSONAL_PRONOUNS_BY_LENGTH = [...CANON_PERSONAL_PRONOUNS].sort(
+  (left, right) => right.length - left.length,
+);
+
+/** 短人物名词的后缀字：老渔夫/船长/守塔人/孩子们/掌柜的伙计们。 */
+const CANON_PERSON_NOUN_SUFFIX_CHARS = new Set([
+  "人",
+  "者",
+  "长",
+  "夫",
+  "婆",
+  "公",
+  "爷",
+  "娘",
+  "妇",
+  "女",
+  "孩",
+  "子",
+  "哥",
+  "姐",
+  "弟",
+  "妹",
+  "叔",
+  "婶",
+  "伯",
+  "姨",
+  "师",
+  "匠",
+  "工",
+  "手",
+  "员",
+  "官",
+  "王",
+  "客",
+  "生",
+  "翁",
+  "丁",
+  "童",
+  "兵",
+  "卒",
+  "们",
+]);
+
+/** 人物名词短语中不能出现的系动词/存在动词/介词。 */
+const CANON_NON_PERSON_NOUN_CHARS = new Set([
+  "是",
+  "有",
+  "在",
+  "为",
+  "被",
+  "把",
+  "对",
+  "向",
+  "从",
+  "给",
+]);
+
+/** 指示/存在限定词；单独出现时不是人物名词。 */
+const CANON_DETERMINER_PREFIX_CHARS = new Set([
+  "这",
+  "那",
+  "此",
+  "某",
+  "每",
+  "各",
+  "有",
+]);
+
+/** 指示词后允许的量词：那个老人/这位船长/那群孩子。 */
+const CANON_DETERMINER_MEASURE_CHARS = new Set([
+  "个",
+  "位",
+  "名",
+  "群",
+  "些",
+  "伙",
+  "帮",
+  "对",
+  "队",
+]);
+
+const CANON_CJK_CHAR_PATTERN =
+  /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u;
+const CANON_CJK_PREFIX_PATTERN =
+  /^[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]{1,8}/u;
+
+function stripLeadingCanonAdverbials(clause: string): string {
+  let rest = clause;
+  while (rest.length > 0) {
+    const adverbial = CANON_LEADING_ADVERBIALS_BY_LENGTH.find((item) =>
+      rest.startsWith(item),
+    );
+    if (!adverbial) return rest;
+    rest = rest.slice(adverbial.length).trimStart();
+  }
+  return rest;
+}
+
+function hasCjkContent(text: string): boolean {
+  return CANON_CJK_CHAR_PATTERN.test(text);
+}
+
+/** 否定分句之前是否有带角色主语的叙述分句；叙述者转折词出现时取消。 */
+function precedingCharacterSubjectClause(
+  sentence: string,
+  clauseStart: number,
+  matchStart: number,
+  characterNames: readonly string[],
+): boolean {
+  let segmentStart = 0;
+  for (let index = 0; index < clauseStart; index += 1) {
+    if (!CANON_GOVERNANCE_CLAUSE_DELIMITER.test(sentence[index]!)) continue;
+    if (
+      clauseHasCharacterSubject(
+        sentence.slice(segmentStart, index),
+        characterNames,
+      ) &&
+      !hasNarratorSwitchCue(sentence, index, matchStart)
+    ) {
+      return true;
+    }
+    segmentStart = index + 1;
+  }
+  return false;
+}
+
+/** 否定分句之前是否有以逗号结尾的推测分句；叙述者转折词出现时取消。 */
+function precedingSpeculationClause(
+  sentence: string,
+  clauseStart: number,
+  matchStart: number,
+): boolean {
+  let segmentStart = 0;
+  for (let index = 0; index < clauseStart; index += 1) {
+    const delimiter = sentence[index]!;
+    if (!CANON_GOVERNANCE_CLAUSE_DELIMITER.test(delimiter)) continue;
+    if (
+      (delimiter === "，" || delimiter === ",") &&
+      CANON_SPECULATION_CUES.some((cue) =>
+        sentence.slice(segmentStart, index).includes(cue),
+      ) &&
+      !hasNarratorSwitchCue(sentence, index, matchStart)
+    ) {
+      return true;
+    }
+    segmentStart = index + 1;
+  }
+  return false;
 }
 
 /**
