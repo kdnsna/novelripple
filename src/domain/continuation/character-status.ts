@@ -46,40 +46,171 @@ export type SourceBaselineStatus = {
   eventId: string;
 };
 
-const DEATH_KEYWORDS = [
+/**
+ * 显式死亡句型的动词白名单。
+ *
+ * 关键词从「句子任意位置出现死亡词」收窄为「姓名 + 有限连接词 + 动词」，
+ * 因为自由文本里的死亡词经常属于马、亲属、路人或外国名字的一部分。
+ * 这里只放能直接跟在人物姓名后的短动词；`殉` 只以 `殉职/殉国/殉难` 出现，
+ * 因而 `殉情未遂` 之类不会命中。主动语态的 `处死` 不收（参与者可能是
+ * 行刑者），只保留 `被处死`；`被杀死/被害死` 同样表示参与者是死者。
+ */
+export const DEATH_VERBS = [
   "死亡",
-  "死了",
-  "去世",
   "身亡",
-  "遇难",
   "病故",
+  "病逝",
   "病死",
-  "牺牲",
-  "被杀",
-  "丧命",
+  "去世",
+  "逝世",
   "过世",
   "亡故",
-  "殉",
+  "遇害",
+  "遇难",
+  "阵亡",
+  "战死",
+  "殉职",
+  "殉国",
+  "殉难",
+  "被杀",
+  "被害",
+  "被杀死",
+  "被害死",
+  "被斩",
+  "被处死",
+  "牺牲",
+  "丧命",
   "毙命",
   "自尽",
+  "自缢",
   "溺亡",
+  "溺死",
+  "死去",
+  "死于",
+  "死在",
 ] as const;
 
-const NEGATED_DEATH_KEYWORDS = [
-  "没死",
-  "未死",
-  "不死",
+/** 姓名与动词之间允许的固定连接词；最多两个，匹配时优先最长词。 */
+export const DEATH_CONNECTORS = [
+  "已经",
+  "当场",
+  "不幸",
+  "最终",
+  "被",
+  "已",
+  "于",
+  "因",
+  "终",
+  "也",
+] as const;
+
+/** 姓名前允许出现的单个短时间副词。 */
+export const DEATH_LEADING_ADVERBS = [
+  "最终",
+  "终于",
+  "随后",
+  "不久",
+  "当夜",
+  "次日",
+  "最后",
+] as const;
+
+/**
+ * 整句任意位置出现即判 unknown 的否定/不确定措辞。
+ * 这里是子串匹配，命中只会让推断更保守。
+ */
+export const DEATH_NEGATION_MARKERS = [
+  "并未",
+  "没有",
+  "没",
+  "未曾",
+  "未",
+  "未遂",
+  "不曾",
+  "实则",
+  "其实",
+  "实际上",
+  "传言",
+  "传闻",
+  "据说",
+  "据传",
+  "谣传",
+  "谣言",
+  "误传",
+  "误报",
+  "误以为",
+  "以为",
+  "疑似",
+  "似乎",
+  "可能",
+  "或许",
+  "消息",
+  "一说",
+  "不可信",
+  "假的",
+  "死去活来",
   "假死",
-  "装死",
   "诈死",
+  "装死",
+  "救活",
+  "救回",
+  "复活",
+  "苏醒",
+  "醒来",
+  "还活着",
+  "仍活着",
+  "活了下来",
+  "生还",
+  "幸存",
+  "死里逃生",
   "险些",
   "差点",
+  "几乎",
+  "不死",
+  "没死",
+  "未死",
+] as const;
+
+/** 夸张/比喻用法；命中即 unknown。 */
+export const DEATH_FIGURATIVE_MARKERS = [
+  "笑死",
+  "气死",
+  "累死",
+  "怕死",
+  "羞死",
+  "吓死",
+  "烦死",
+  "急死",
+  "困死",
+  "馋死",
+] as const;
+
+/** 死亡事件之后、分歧点之前出现即撤销该人物推断的复活/生还标记。 */
+export const DEATH_REVIVAL_MARKERS = [
+  "复活",
+  "救活",
+  "救回",
+  "死而复生",
+  "苏醒",
+  "醒来",
+  "生还",
+  "幸存",
+  "还活着",
+  "仍活着",
+  "活着",
+  "归来",
+  "重现",
+  "现身",
+  "未死",
+  "没死",
+  "假死",
 ] as const;
 
 /**
  * 从「分歧点之前、有证据的 fact 事件」推断原著人物基线状态。
  *
- * 这是确定性启发式，不调用模型：
+ * 这是确定性启发式，不调用模型。它不再按关键词猜测，而是只认显式死亡
+ * 句型；其余情况一律 unknown（宁可漏报，也不把活人标死）：
  * - 只在 Story Map 已 confirmed 时推断；草稿/候选一律不推断；
  * - 只读 `sequence < 分歧事件.sequence` 的事件，分歧事件自身与之后事件
  *   都不参与；
@@ -88,9 +219,13 @@ const NEGATED_DEATH_KEYWORDS = [
  *   stateChange 点名了其中一人。当前 Event Schema 没有结构化的「死者」
  *   字段（`stateChanges` 是自由文本），因此无法可靠地从多人事件中挑出
  *   被推断者；未来若新增该字段，可以在那一分支使用，而不是解析自由文本；
- * - 单一参与者事件中，某条 stateChange 需包含死亡关键词且不含否定/假死
- *   措辞；若同一句还整词提到**其他**角色，死亡可能属于别人，跳过；
- * - 以上所有命中只用于让推断更保守。
+ * - 单一参与者事件中，stateChange 必须命中显式句型白名单
+ *   （`matchesExplicitDeathShape`）：某分句以人物姓名/别名开头，姓名后
+ *   至多两个固定连接词，然后直接跟短死亡动词；分句没有点名参与者时
+ *   unknown，整句含否定/不确定/比喻措辞时 unknown；
+ * - 若同一句还整词提到**其他**角色，死亡可能属于别人，跳过；
+ * - 推断出 dead 后，若死亡事件之后、分歧点之前的事件再次把该人物列为
+ *   参与者或整词点名，并出现复活/生还标记，则撤销推断（回到 unknown）。
  *
  * 只返回基线为 dead 的人物；其余人物由调用方默认为 unknown。
  */
@@ -119,31 +254,68 @@ export function deriveSourceBaselineStatuses(input: {
       (name) => name.length > 0,
     ),
   }));
-  const events = [...storyMap.events]
-    .filter(
-      (event) =>
-        event.sequence < divergenceEvent.sequence &&
-        event.evidenceKind === "fact" &&
-        event.evidence.length > 0,
-    )
+  const preDivergenceEvents = [...storyMap.events]
+    .filter((event) => event.sequence < divergenceEvent.sequence)
     .sort((left, right) => left.sequence - right.sequence);
+  const events = preDivergenceEvents.filter(
+    (event) => event.evidenceKind === "fact" && event.evidence.length > 0,
+  );
 
   for (const event of events) {
     // 多人事件没有结构化归因；任何“谁死了”的猜测都可能把活人标死。
     if (event.participants.length !== 1) continue;
     const [participant] = event.participants;
-    if (!charactersById.has(participant)) continue;
+    const character = charactersById.get(participant);
+    if (!character) continue;
 
+    const names = [character.name, ...character.aliases].filter(
+      (name) => name.length > 0,
+    );
     for (const stateChange of event.stateChanges) {
-      if (!hasDeathKeyword(stateChange)) continue;
-      if (hasNegatedDeathKeyword(stateChange)) continue;
       if (mentionsOtherCharacter(stateChange, participant)) continue;
+      if (!matchesExplicitDeathShape(stateChange, names)) continue;
       result.set(participant, {
         status: "dead",
         source: "source_inference",
         eventId: event.id,
       });
       break;
+    }
+  }
+
+  // 复活/生还清空：只扫死亡事件之后、分歧点之前的事件，任何 evidenceKind
+  // 都可能推翻先前推断；只要该人物是参与者或整词被点名且句中出现标记。
+  if (result.size > 0) {
+    const eventById = new Map(
+      preDivergenceEvents.map((event) => [event.id, event]),
+    );
+    const namesById = new Map(
+      characterNames.map((entry) => [entry.characterId, entry.names]),
+    );
+    for (const [characterId, inference] of [...result.entries()]) {
+      const deathEvent = eventById.get(inference.eventId);
+      if (!deathEvent) continue;
+      const names = namesById.get(characterId) ?? [];
+      const otherNames = characterNames
+        .filter((entry) => entry.characterId !== characterId)
+        .flatMap((entry) => entry.names);
+      const cleared = preDivergenceEvents.some((event) => {
+        if (event.sequence <= deathEvent.sequence) return false;
+        const targetsCharacter =
+          event.participants.includes(characterId) ||
+          event.stateChanges.some((stateChange) =>
+            names.some((name) =>
+              mentionsWholeWord(stateChange, name, otherNames),
+            ),
+          );
+        return (
+          targetsCharacter &&
+          event.stateChanges.some((stateChange) =>
+            hasAnyMarker(stateChange, DEATH_REVIVAL_MARKERS),
+          )
+        );
+      });
+      if (cleared) result.delete(characterId);
     }
   }
 
@@ -168,6 +340,103 @@ export function deriveSourceBaselineStatuses(input: {
   }
 
   return result;
+}
+
+/**
+ * 显式死亡句型白名单：stateChange 按中文标点与空白切成若干分句，某个
+ * 分句必须以人物姓名/别名（≥2 个码点）开头；姓名前至多一个固定时间
+ * 副词，姓名后至多两个固定连接词，然后直接跟 `DEATH_VERBS` 中的动词。
+ * 裸「死 / 死了」只在分句末尾成立。
+ *
+ * 姓名左边界是分句开头、右边界是连接词/动词，因此「张三丰」不会命中
+ * 「张三」，「艾伦·坡」不会命中「艾伦」，「林青的马」不会命中「林青」，
+ * 地点名「韩松岭」也不会命中「韩松」。整句任意位置出现否定/不确定措辞
+ * 或笑死/气死等比喻时一律不匹配。
+ */
+export function matchesExplicitDeathShape(
+  stateChange: string,
+  names: readonly string[],
+): boolean {
+  if (hasAnyMarker(stateChange, DEATH_NEGATION_MARKERS)) return false;
+  if (hasAnyMarker(stateChange, DEATH_FIGURATIVE_MARKERS)) return false;
+  const usableNames = names.filter((name) => Array.from(name).length >= 2);
+  if (usableNames.length === 0) return false;
+  return splitClauses(stateChange).some((clause) =>
+    usableNames.some((name) => matchesDeathClause(clause, name)),
+  );
+}
+
+const CLAUSE_SEPARATORS = /[\s，。；;！!？?、]+/u;
+
+function splitClauses(text: string): string[] {
+  return text.split(CLAUSE_SEPARATORS).filter((clause) => clause.length > 0);
+}
+
+function matchesDeathClause(clause: string, name: string): boolean {
+  let rest = clause;
+  // 只允许一个前导时间副词，且去掉后必须紧接姓名；否则保持原样。
+  for (const adverb of DEATH_LEADING_ADVERBS) {
+    if (!rest.startsWith(adverb)) continue;
+    const withoutAdverb = rest.slice(adverb.length);
+    if (withoutAdverb.startsWith(name)) {
+      rest = withoutAdverb;
+      break;
+    }
+  }
+  if (!rest.startsWith(name)) return false;
+
+  let tail = rest.slice(name.length);
+  for (let count = 0; count < 2; count += 1) {
+    // 连接词与动词可能重叠（被杀 = 被 + 杀）；若剩余部分已经以死亡动词
+    // 或裸「死/死了」开头，就不要把动词的第一个字当连接词吃掉。
+    if (tail === "死" || tail === "死了") break;
+    if (DEATH_VERBS.some((verb) => tail.startsWith(verb))) break;
+    const connector = longestMatchingPrefix(tail, DEATH_CONNECTORS);
+    if (!connector) break;
+    tail = tail.slice(connector.length);
+  }
+  if (tail === "死" || tail === "死了") return true;
+  return matchesDeathTail(tail);
+}
+
+/**
+ * 动词之后的精确后缀规则：分句必须结束、只剩一个「了」，或由「于/在」
+ * 引出地点/原因短语；`死于/死在` 自带介词，后面必须有地点/原因短语。
+ * 这样 `被杀` 不会命中「被杀手追杀」，`病故` 不会命中「病故的消息」，
+ * `牺牲` 不会命中「牺牲了休息时间」。
+ */
+function matchesDeathTail(tail: string): boolean {
+  for (const verb of DEATH_VERBS) {
+    if (!tail.startsWith(verb)) continue;
+    const rest = tail.slice(verb.length);
+    if (verb === "死于" || verb === "死在") {
+      return rest.length > 0;
+    }
+    if (rest.length === 0 || rest === "了") return true;
+    if ((rest.startsWith("于") || rest.startsWith("在")) && rest.length > 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function longestMatchingPrefix(
+  text: string,
+  candidates: readonly string[],
+): string | null {
+  let best: string | null = null;
+  for (const candidate of candidates) {
+    if (!text.startsWith(candidate)) continue;
+    if (best === null || candidate.length > best.length) best = candidate;
+  }
+  return best;
+}
+
+function hasAnyMarker(
+  value: string,
+  markers: readonly string[],
+): boolean {
+  return markers.some((marker) => value.includes(marker));
 }
 
 /**
@@ -444,14 +713,6 @@ function compareOverrides(
   }
   if (left.id === right.id) return 0;
   return left.id < right.id ? -1 : 1;
-}
-
-function hasDeathKeyword(value: string): boolean {
-  return DEATH_KEYWORDS.some((keyword) => value.includes(keyword));
-}
-
-function hasNegatedDeathKeyword(value: string): boolean {
-  return NEGATED_DEATH_KEYWORDS.some((keyword) => value.includes(keyword));
 }
 
 /** 供折叠与测试复用的单条合并规则。 */

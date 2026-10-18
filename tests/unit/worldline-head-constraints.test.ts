@@ -85,6 +85,7 @@ describe("worldline reading head constraints", () => {
     for (const [kind, nodeId] of [
       ["root", "scene_1"],
       ["scene", null],
+      ["scene", ""],
       [null, "scene_1"],
       ["bogus", null],
     ] as const) {
@@ -116,6 +117,19 @@ describe("worldline reading head constraints", () => {
         "active",
         "root",
         "scene_1",
+      ),
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      insert.run(
+        "wl_empty_head",
+        "project_head",
+        "artifact_head",
+        "open",
+        "[]",
+        "empty-head",
+        "active",
+        "scene",
+        "",
       ),
     ).toThrow(/CHECK constraint failed/);
     expect(() =>

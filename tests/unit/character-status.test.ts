@@ -71,7 +71,7 @@ const storyMap = StoryMapSchema.parse({
       summary: "风暴前的值守",
       sequence: 1,
       participants: ["character_shen"],
-      stateChanges: ["阿砚在风暴中身亡"],
+      stateChanges: ["阿砚不幸遇难"],
       evidenceKind: "fact",
       evidence: [reference],
     },
@@ -221,7 +221,7 @@ function derive(
 }
 
 describe("deriveSourceBaselineStatuses", () => {
-  it("infers only pre-divergence fact deaths with evidence", () => {
+  it("infers only pre-divergence fact deaths with evidence and an explicit shape", () => {
     const baseline = deriveSourceBaselineStatuses({ storyMap, divergence });
     expect(baseline.get("character_shen")).toEqual({
       status: "dead",
@@ -230,8 +230,8 @@ describe("deriveSourceBaselineStatuses", () => {
     });
     // inference、否定措辞、分歧点自身与之后的事件都不算基线。
     expect(baseline.has("character_gu")).toBe(false);
-    expect(baseline.has("character_zhou")).toBe(true);
-    expect(baseline.get("character_zhou")?.eventId).toBe("event_6");
+    // 「落水身亡」没有点名参与者；白名单要求姓名在分句开头，因此 unknown。
+    expect(baseline.has("character_zhou")).toBe(false);
   });
 
   it("requires the divergence event to exist", () => {
@@ -387,18 +387,33 @@ describe("deriveSourceBaselineStatuses: exactly-one-person rule", () => {
     expect([...result.keys()]).toEqual([]);
   });
 
-  it("does not false-match a single-char name inside a longer word", () => {
+  it("never matches a single-character name at the start of a sentence", () => {
     const result = baseline({
       events: [
         {
           id: "event_1",
           sequence: 1,
-          participants: ["character_han", "character_jia"],
+          participants: ["character_han"],
           stateChanges: ["韩国使者死亡"],
         },
       ],
     });
+    // 「韩」是单字名，永远不进入显式句型白名单。
     expect(result.has("character_han")).toBe(false);
+  });
+
+  it("does not infer when the stateChange never names the participant", () => {
+    const result = baseline({
+      events: [
+        {
+          id: "event_1",
+          sequence: 1,
+          participants: ["character_jia"],
+          stateChanges: ["病故于城外"],
+        },
+      ],
+    });
+    expect([...result.keys()]).toEqual([]);
   });
 
   it("does not infer from a draft Story Map", () => {
@@ -584,7 +599,6 @@ describe("derivePathCharacterStatuses", () => {
     ).toBeUndefined();
     expect(states.map((state) => state.characterId).sort()).toEqual([
       "character_shen",
-      "character_zhou",
     ]);
   });
 });
