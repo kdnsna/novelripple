@@ -75,6 +75,7 @@ This file follows the Keep a Changelog structure; versions follow Semantic Versi
 - 真人观察改为可选，缺失只记为 `not_measured`。Real-user observation is optional.
 - 作者自评是有效的人工评分。Author self-review is valid.
 - 关键人物错误 merge 已从硬失败降级为质量目标（仍会报告，但不阻塞）。Critical character merge mistakes were downgraded from a hard failure to a quality target (reported, non-blocking).
+- 测试：上下文组装器新增整段引号内 v1 场景的全预算 fail-closed 扫描，以及 300 组种子随机夹具的阶梯单调性、证据优先级、路径摘要后缀与截断前缀断言，覆盖跨层证据回填、引号内空前缀和更大预算返回更短 Prompt 的回归。Tests: the context assembler now sweeps every budget for whole-quoted v1 scenes and runs 300 seeded fixtures asserting ladder monotonicity, evidence priority, path-summary suffix and truncation-prefix containment, catching cross-tier evidence backfill, empty prefixes inside quotes and shorter prompts at larger budgets.
 
 ### Fixed / 修复
 
