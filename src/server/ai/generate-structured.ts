@@ -10,9 +10,15 @@ import { z } from "zod";
 import {
   createGenerationRun,
   failGenerationRun,
+  incrementGenerationRunModelCalls,
   succeedGenerationRun,
 } from "@/server/repositories/generation-run-repository";
 
+import {
+  INITIAL_RETRY_POLICY,
+  REPAIR_RETRY_POLICY,
+  type RetryPolicy,
+} from "./structured-retry-policy";
 import type {
   AIProvider,
   AIProviderRequest,
@@ -56,23 +62,6 @@ type Attempt = {
 type ValidationResult<T> =
   | { success: true; value: T }
   | { success: false; issues: string[] };
-
-type RetryPolicy = {
-  emptyResponseRetries: number;
-  transientNetworkRetries: number;
-};
-
-/** 首轮空响应沿用原有两次重试；瞬时网络错误只重试一次。 */
-const INITIAL_RETRY_POLICY: RetryPolicy = {
-  emptyResponseRetries: 2,
-  transientNetworkRetries: 1,
-};
-
-/** repair 只对瞬时网络错误重试一次（网络失败时原响应仍可复用）。 */
-const REPAIR_RETRY_POLICY: RetryPolicy = {
-  emptyResponseRetries: 0,
-  transientNetworkRetries: 1,
-};
 
 export class StructuredGenerationError extends Error {
   readonly runId: string;
@@ -126,7 +115,11 @@ export async function generateStructured<T>(
   });
   const attempts: Attempt[] = [];
   const callProvider = (request: AIProviderRequest): Promise<AIProviderResponse> => {
+    // 先让调用方做预算判断；若它抛错，本次 provider 调用不会发生。
     input.onAttempt?.();
+    // 每次真实调用（含 repair 与瞬时网络重试）前落库；写入失败时这里抛错，
+    // provider.generate 不会执行，避免产生未计入预算的调用。
+    incrementGenerationRunModelCalls(run.id);
     return provider.generate({
       ...request,
       ...(input.signal ? { signal: input.signal } : {}),

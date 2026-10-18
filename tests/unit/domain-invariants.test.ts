@@ -218,6 +218,37 @@ describe("deterministic domain validators", () => {
     expect(validateImpactPlan(impactPlan, storyMap)).toEqual([]);
   });
 
+  it("keeps legacy plans without uncertain ids valid", () => {
+    const legacy = ImpactPlanSchema.parse({
+      ...structuredClone(impactPlan),
+      uncertainEdgeIds: undefined,
+      uncertainImpactIds: undefined,
+      usedUncertainEdgeIds: undefined,
+    });
+
+    expect(legacy.uncertainEdgeIds).toBeUndefined();
+    expect(validateImpactPlan(legacy, storyMap)).toEqual([]);
+  });
+
+  it("rejects uncertain Edge ids that do not exist in the bound Story Map", () => {
+    const invalid = structuredClone(impactPlan);
+    invalid.uncertainEdgeIds = ["edge_1_2", "edge_missing"];
+    invalid.usedUncertainEdgeIds = ["edge_missing"];
+
+    expect(validateImpactPlan(invalid, storyMap)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "uncertainEdgeIds.1",
+          message: expect.stringContaining("未知 Edge"),
+        }),
+        expect.objectContaining({
+          path: "usedUncertainEdgeIds.0",
+          message: expect.stringContaining("未知 Edge"),
+        }),
+      ]),
+    );
+  });
+
   it("rejects missing reasonPath nodes", () => {
     const invalid = structuredClone(impactPlan);
     invalid.impacts[0].reasonPath = ["event_missing"];

@@ -1,4 +1,5 @@
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { eq } from "drizzle-orm";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,12 +13,13 @@ import type {
   AIProviderResponse,
 } from "@/server/ai/types";
 import { closeDatabase, getDatabase } from "@/server/db/client";
-import { artifacts } from "@/server/db/schema";
+import { artifacts, generationRuns } from "@/server/db/schema";
 import { loadRippleFixture } from "@/server/fixtures/load-ripple-fixture";
 import {
-  countRippleSuggestionGenerationRunsForStoryMap,
   createGenerationRun,
+  incrementGenerationRunModelCalls,
   listProjectGenerationRuns,
+  sumRippleSuggestionModelCallsForStoryMap,
   succeedGenerationRun,
 } from "@/server/repositories/generation-run-repository";
 import {
@@ -32,7 +34,7 @@ import {
   listRippleSuggestionsBatchesForStoryMap,
 } from "@/server/repositories/ripple-suggestions-repository";
 import { generateRippleSuggestions } from "@/server/ripple/generate-ripple-suggestions";
-import { rippleSuggestionAttemptLimit } from "@/server/ripple/ripple-suggestion-limits";
+import { rippleSuggestionModelCallLimit } from "@/server/ripple/ripple-suggestion-limits";
 import { generateConfiguredStoryMap } from "@/server/story-map/generate-configured-story-map";
 import { completeReviewAndConfirm } from "../helpers/confirm-ready-story-map";
 
@@ -464,13 +466,44 @@ describe("Ripple Suggestions generation", () => {
       ),
     ).toHaveLength(runsBefore);
     expect(
-      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
     ).toBe(2);
   });
 
-  it("counts failed refresh attempts toward the attempt cap before any model call", async () => {
+  it("persists the initial and repair calls on the generation run", async () => {
+    const { project, artifact } = await createContext();
+    const invalid = {
+      suggestions: [
+        { ...validSuggestions.suggestions[0], eventId: "event_missing" },
+      ],
+    };
+    const provider = new MockAIProvider([
+      JSON.stringify(invalid),
+      JSON.stringify(validSuggestions),
+    ]);
+
+    const result = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      maxBatches: 1,
+      provider,
+      modelConfig,
+    });
+
+    expect(provider.requests).toHaveLength(2);
+    const run = listProjectGenerationRuns(project.id).find(
+      (candidate) => candidate.id === result.generation?.runId,
+    );
+    expect(run).toMatchObject({ status: "succeeded", modelCalls: 2 });
+    expect(
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(2);
+  });
+
+  it("does not let failures block normal refresh before the model-call ceiling", async () => {
     const { project, artifact } = await createContext();
     const maxBatches = 2;
+    const modelCallLimit = rippleSuggestionModelCallLimit(maxBatches);
     await generateRippleSuggestions({
       projectId: project.id,
       storyMapArtifactId: artifact.id,
@@ -479,71 +512,213 @@ describe("Ripple Suggestions generation", () => {
       modelConfig,
     });
 
-    // 首批成功已占 1 次尝试；其余预算全部消耗在失败的换批上。
-    const attemptLimit = rippleSuggestionAttemptLimit(maxBatches);
-    const failingProviders: FailingAIProvider[] = [];
-    for (let attempt = 1; attempt < attemptLimit; attempt += 1) {
+    // 旧实现会按 `批次上限 × 2` 统计 run，3 次失败后就会挡住正常换批。
+    // 现在只数真实调用：9 次失败 + 首批 1 次 = 10 次，仍低于 12 次硬上限。
+    for (let failed = 1; failed <= 9; failed += 1) {
       const provider = new FailingAIProvider();
-      failingProviders.push(provider);
       await expect(
         generateRippleSuggestions({
           projectId: project.id,
           storyMapArtifactId: artifact.id,
-          idempotencyKey: `failed-refresh-${attempt}`,
+          idempotencyKey: `failed-refresh-${failed}`,
           maxBatches,
           provider,
           modelConfig,
         }),
       ).rejects.toThrow("provider unavailable");
+      expect(provider.requests).toHaveLength(1);
     }
-
-    const failedCalls = failingProviders.reduce(
-      (total, provider) => total + provider.requests.length,
-      0,
-    );
-    expect(failedCalls).toBe(attemptLimit - 1);
     expect(
-      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
-    ).toBe(attemptLimit);
-    expect(
-      listProjectGenerationRuns(project.id)
-        .filter((run) => run.kind === "ripple_suggestions")
-        .map((run) => ({
-          status: run.status,
-          storyMapArtifactId: run.storyMapArtifactId,
-        })),
-    ).toEqual(
-      expect.arrayContaining([
-        { status: "succeeded", storyMapArtifactId: artifact.id },
-        ...Array.from({ length: attemptLimit - 1 }, () => ({
-          status: "failed",
-          storyMapArtifactId: artifact.id,
-        })),
-      ]),
-    );
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(10);
 
-    // 达到尝试上限后，即使 provider 本可返回合法结果也不会再被调用。
-    const blockedProvider = new MockAIProvider([
+    const refreshProvider = new MockAIProvider([
       JSON.stringify(validSuggestions),
     ]);
+    const refreshed = await generateRippleSuggestions({
+      projectId: project.id,
+      storyMapArtifactId: artifact.id,
+      idempotencyKey: "refresh-after-failures",
+      maxBatches,
+      provider: refreshProvider,
+      modelConfig,
+    });
+
+    expect(refreshProvider.requests).toHaveLength(1);
+    expect(refreshed.artifact.batchIndex).toBe(1);
+    expect(
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(11);
+    expect(modelCallLimit).toBe(12);
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(2);
+  });
+
+  it("fails closed before any provider call once the model-call ceiling is reached", async () => {
+    const { project, artifact } = await createContext();
+    const maxBatches = 1;
+    const modelCallLimit = rippleSuggestionModelCallLimit(maxBatches);
+    const exhausted = createGenerationRun({
+      projectId: project.id,
+      worldlineId: null,
+      storyMapArtifactId: artifact.id,
+      kind: "ripple_suggestions",
+      provider: "seed",
+      model: "seed-model",
+      promptVersion: "seed",
+      inputHash: "0".repeat(64),
+    });
+    for (let call = 0; call < modelCallLimit; call += 1) {
+      incrementGenerationRunModelCalls(exhausted.id);
+    }
+    expect(
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(modelCallLimit);
+
+    const provider = new MockAIProvider([JSON.stringify(validSuggestions)]);
+    const runsBefore = listProjectGenerationRuns(project.id).filter(
+      (run) => run.kind === "ripple_suggestions",
+    ).length;
+
     await expect(
       generateRippleSuggestions({
         projectId: project.id,
         storyMapArtifactId: artifact.id,
-        idempotencyKey: "over-attempt-cap",
         maxBatches,
-        provider: blockedProvider,
+        provider,
         modelConfig,
       }),
-    ).rejects.toThrow("生成尝试次数已达");
+    ).rejects.toThrow("模型调用上限");
 
-    expect(blockedProvider.requests).toHaveLength(0);
+    expect(provider.requests).toHaveLength(0);
     expect(
-      countRippleSuggestionGenerationRunsForStoryMap(project.id, artifact.id),
-    ).toBe(attemptLimit);
+      listProjectGenerationRuns(project.id).filter(
+        (run) => run.kind === "ripple_suggestions",
+      ),
+    ).toHaveLength(runsBefore);
     expect(
       listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+  });
+
+  it("stops a repair call when the next provider call would exceed the ceiling", async () => {
+    const { project, artifact } = await createContext();
+    const maxBatches = 1;
+    const modelCallLimit = rippleSuggestionModelCallLimit(maxBatches);
+    const seeded = createGenerationRun({
+      projectId: project.id,
+      worldlineId: null,
+      storyMapArtifactId: artifact.id,
+      kind: "ripple_suggestions",
+      provider: "seed",
+      model: "seed-model",
+      promptVersion: "seed",
+      inputHash: "0".repeat(64),
+    });
+    for (let call = 0; call < modelCallLimit - 1; call += 1) {
+      incrementGenerationRunModelCalls(seeded.id);
+    }
+
+    // 首轮返回可解析但未通过领域校验的输出，本应触发 repair；但再调用一次
+    // 就会超过硬上限，因此必须在 repair 前停止。
+    const invalid = {
+      suggestions: [
+        { ...validSuggestions.suggestions[0], eventId: "event_missing" },
+      ],
+    };
+    const provider = new MockAIProvider([
+      JSON.stringify(invalid),
+      JSON.stringify(validSuggestions),
+    ]);
+
+    await expect(
+      generateRippleSuggestions({
+        projectId: project.id,
+        storyMapArtifactId: artifact.id,
+        maxBatches,
+        provider,
+        modelConfig,
+      }),
+    ).rejects.toThrow("模型调用上限");
+
+    expect(provider.requests).toHaveLength(1);
+    expect(
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(modelCallLimit);
+    const run = listProjectGenerationRuns(project.id).find(
+      (candidate) =>
+        candidate.kind === "ripple_suggestions" &&
+        candidate.id !== seeded.id,
+    );
+    expect(run).toMatchObject({ status: "failed", modelCalls: 1 });
+    expect(
+      listRippleSuggestionsBatchesForStoryMap(project.id, artifact.id),
+    ).toHaveLength(0);
+  });
+
+  it("counts legacy generation runs without model_calls as one call each", async () => {
+    const { project, artifact } = await createContext();
+    const legacy = createGenerationRun({
+      projectId: project.id,
+      worldlineId: null,
+      storyMapArtifactId: artifact.id,
+      kind: "ripple_suggestions",
+      provider: "legacy",
+      model: "legacy-model",
+      promptVersion: "seed",
+      inputHash: "0".repeat(64),
+    });
+    getDatabase()
+      .update(generationRuns)
+      .set({ modelCalls: null })
+      .where(eq(generationRuns.id, legacy.id))
+      .run();
+
+    expect(
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(1);
+    expect(
+      listProjectGenerationRuns(project.id).find(
+        (candidate) => candidate.id === legacy.id,
+      )?.modelCalls,
+    ).toBeNull();
+
+    const current = createGenerationRun({
+      projectId: project.id,
+      worldlineId: null,
+      storyMapArtifactId: artifact.id,
+      kind: "ripple_suggestions",
+      provider: "current",
+      model: "current-model",
+      promptVersion: "seed",
+      inputHash: "0".repeat(64),
+    });
+    incrementGenerationRunModelCalls(current.id);
+    incrementGenerationRunModelCalls(current.id);
+
+    expect(
+      sumRippleSuggestionModelCallsForStoryMap(project.id, artifact.id),
+    ).toBe(3);
+  });
+
+  it("refuses to count a call after the generation run is no longer pending", async () => {
+    const { project, artifact } = await createContext();
+    const run = createGenerationRun({
+      projectId: project.id,
+      worldlineId: null,
+      storyMapArtifactId: artifact.id,
+      kind: "ripple_suggestions",
+      provider: "mock",
+      model: "mock-model",
+      promptVersion: "seed",
+      inputHash: "0".repeat(64),
+    });
+    succeedGenerationRun({ id: run.id, rawOutput: "{}" });
+
+    expect(() => incrementGenerationRunModelCalls(run.id)).toThrow(
+      "not pending",
+    );
   });
 
   it("fails closed on an invalid batch cap env before any model call", async () => {

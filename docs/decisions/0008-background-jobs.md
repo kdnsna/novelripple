@@ -107,11 +107,11 @@ queued → chunking → extract(0..n) → glean(0..n) → names → endings → 
 
 迁移 `drizzle/0009_story_map_checkpoint_provenance.sql` 给检查点表增加可空列 `generation_run_id`。每次保存 `extract` / `glean` 行时写入 `generateStructured` 返回的 `generationRunId`；迁移前写入的旧行保持 `null`，不会伪造来源。
 
-生成结果中的 `extractorRunIds` / `gleaningRunIds` 按**分块顺序**返回，而不是按并发完成顺序 append：
+生成结果中的 `extractorRunIds` / `gleaningRunIds` 始终按**分块顺序**返回，且每个分块恰好占一个位置，而不是按并发完成顺序 append：
 
 - 新调用在对应分块序号写入本次 Run；
 - 复用检查点写入该行原始的 `generation_run_id`，因此重试后的结果仍能追溯到真正产生该分块结果的那次运行；
-- 迁移前没有 run id 的旧检查点无法恢复原始 Run，会被略过，不会填入本次 Run 冒充来源。
+- 迁移前没有 run id 的旧检查点无法恢复原始 Run，该位置保留为 `null`，不会填入本次 Run 冒充来源，也不会删除位置导致后续分块下标错位。字段类型为 `(string | null)[]`，历史的 string-only 数组仍可解析。
 
 复用判定仍以 `checkpoint_key + stage` 和阶段校验为准；来源字段只用于追踪，不参与 key，也不放宽 fail-closed 校验。
 

@@ -9,6 +9,7 @@ import {
   StoryMapEndingPassCandidateSchema,
   StoryMapExtractionCandidateSchema,
   StoryMapGleaningCandidateSchema,
+  StoryMapGenerationSchema,
   StoryMapMergeCandidateSchema,
   StoryMapRosterCandidateSchema,
   StoryMapSchema,
@@ -529,24 +530,20 @@ export async function generateStoryMap(input: {
   });
   reportProgress({ stage: "saving", completed: 1, total: 1 });
 
-  return {
-    artifact,
-    generation: {
-      chunkCount: chunks.length,
-      reusedChunks,
-      // 按分块顺序记录产生该分块抽取/补抽结果的 Run；复用检查点时包含原始
-      // run id（迁移前写入、没有 run id 的旧检查点无法伪造，会被略过）。
-      extractorRunIds: extractorRunIds.filter(
-        (runId): runId is string => runId !== null,
-      ),
-      gleaningRunIds: gleaningRunIds.filter(
-        (runId): runId is string => runId !== null,
-      ),
-      namesRunId: roster.generation.runId,
-      endingsRunId: endingPass.generation.runId,
-      reconcilerRunId: merge.generation.runId,
-    },
-  };
+  const generation = StoryMapGenerationSchema.parse({
+    chunkCount: chunks.length,
+    reusedChunks,
+    // 按分块顺序记录产生该分块抽取/补抽结果的 Run，每个分块占一个位置；
+    // 复用检查点时包含原始 run id。迁移前写入、没有 run id 的旧检查点
+    // 无法伪造来源，保留 null 占位，保证位置仍对应分块。
+    extractorRunIds,
+    gleaningRunIds,
+    namesRunId: roster.generation.runId,
+    endingsRunId: endingPass.generation.runId,
+    reconcilerRunId: merge.generation.runId,
+  });
+
+  return { artifact, generation };
 }
 
 function validateCandidate(

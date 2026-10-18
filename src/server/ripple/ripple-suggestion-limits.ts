@@ -1,9 +1,21 @@
+import {
+  INITIAL_RETRY_POLICY,
+  REPAIR_RETRY_POLICY,
+  maxProviderCallsForRetryPolicy,
+} from "@/server/ai/structured-retry-policy";
+
 /**
- * Ripple Suggestions 每个 confirmed Story Map revision 的批次数与尝试次数上限。
+ * Ripple Suggestions 每个 confirmed Story Map revision 的批次数与模型调用上限。
  *
  * 批次从 0 开始（最初自动生成的一组）；每次显式「换一批」增加一个批次。
- * 批次数上限在任何 Prompt 读取与模型调用前按已持久化批次检查，达到后
- * fail closed；不可变批次的数量与“最多尝试几次模型”是两条独立上限。
+ * 两条上限都在任何 Prompt 读取与模型调用前检查，达到后 fail closed：
+ * 1. 成功保存的批次数 ≤ `RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION`；
+ * 2. 真实 provider 调用数 ≤ 批次数上限 × `RIPPLE_SUGGESTION_MAX_MODEL_CALLS_PER_BATCH`。
+ *
+ * 失败调用不会留下批次 Artifact。只数批次会让失败重试无限消耗模型调用；
+ * 数 Generation Run 行又会把“一次 run 内的 repair / 网络重试”漏掉。因此
+ * 直接按每次真实 provider 调用计数，失败与成功同等计入，不再有独立的
+ * “尝试次数”上限。
  */
 export const DEFAULT_RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION = 5;
 
@@ -11,14 +23,20 @@ export const DEFAULT_RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION = 5;
 export const MAX_RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION = 20;
 
 /**
- * 每个 revision 允许的 Ripple Suggestions Generation Run 次数相对批次上限的倍数。
+ * 一个批次最坏情况下会消耗的真实 provider 调用数。
  *
- * 失败的调用不会留下批次 Artifact，只数批次会让失败重试无限消耗模型调用；
- * 因此按 Generation Run（pending / succeeded / failed 都算）计数，允许
- * `批次数上限 × 2` 次尝试。成功批次仍受批次数上限约束，失败与成功共享
- * 这 2 倍预算。
+ * 由 `generate-structured.ts` 实际使用的重试策略直接派生：
+ * - initial：1 次首调 + 2 次空响应重试 + 1 次瞬时网络重试 = 4 次；
+ * - repair：1 次修复调用 + 0 次空响应重试 + 1 次瞬时网络重试 = 2 次。
+ * 两类重试计数器独立，所以单次结构化生成最坏为 4 + 2 = 6 次真实调用。
+ *
+ * 上限按最坏情况预留，避免一个合法的“首轮 + 修复 + 重试”批次被提前拒绝。
+ * 默认批次数上限 5 → 每个 revision 最多 5 × 6 = 30 次真实 provider 调用，
+ * 也是该 revision 的最坏情况调用总数（硬上限，失败调用同样占额度）。
  */
-export const RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH = 2;
+export const RIPPLE_SUGGESTION_MAX_MODEL_CALLS_PER_BATCH =
+  maxProviderCallsForRetryPolicy(INITIAL_RETRY_POLICY) +
+  maxProviderCallsForRetryPolicy(REPAIR_RETRY_POLICY);
 
 export const RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION_ENV =
   "RIPPLE_SUGGESTION_MAX_BATCHES_PER_REVISION";
@@ -49,9 +67,12 @@ export function resolveRippleSuggestionMaxBatches(
   );
 }
 
-/** 每个 revision 的最大生成尝试数（含失败重试）。 */
-export function rippleSuggestionAttemptLimit(maxBatches: number): number {
-  return maxBatches * RIPPLE_SUGGESTION_MAX_ATTEMPTS_PER_BATCH;
+/**
+ * 每个 revision 允许的真实 provider 调用上限，含失败、repair 与瞬时网络重试。
+ * 默认 5 批 → 30 次；显式传入批次数时使用同一推导。
+ */
+export function rippleSuggestionModelCallLimit(maxBatches: number): number {
+  return maxBatches * RIPPLE_SUGGESTION_MAX_MODEL_CALLS_PER_BATCH;
 }
 
 /**

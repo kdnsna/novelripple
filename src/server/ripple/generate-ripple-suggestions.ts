@@ -15,7 +15,7 @@ import type {
   ModelConfig,
   StructuredValidationIssue,
 } from "@/server/ai/types";
-import { countRippleSuggestionGenerationRunsForStoryMap } from "@/server/repositories/generation-run-repository";
+import { sumRippleSuggestionModelCallsForStoryMap } from "@/server/repositories/generation-run-repository";
 import {
   createRippleSuggestionsArtifact,
   findRippleSuggestionsArtifactByIdempotencyKey,
@@ -26,7 +26,7 @@ import {
 import { getStoryMapArtifact } from "@/server/repositories/story-map-artifact-repository";
 import {
   resolveRippleSuggestionMaxBatches,
-  rippleSuggestionAttemptLimit,
+  rippleSuggestionModelCallLimit,
 } from "@/server/ripple/ripple-suggestion-limits";
 
 const promptVersion = "ripple-suggestions.v4";
@@ -180,24 +180,25 @@ async function generateBatch(input: {
   idempotencyKey: string | null;
   previousBatches: RippleSuggestionsArtifact[];
 }) {
-  // 批次与尝试上限都在任何 Prompt 读取与模型调用之前检查。
+  // 批次上限与模型调用上限都在任何 Prompt 读取与模型调用之前检查。
   const maxBatches = resolveRippleSuggestionMaxBatches(input.input.maxBatches);
   if (input.batchIndex >= maxBatches) {
     throw new Error(
       `Ripple Suggestions 已达到本 Story Map revision 的换一批上限（${maxBatches} 批）`,
     );
   }
-  // 失败调用不会留下批次 Artifact，只数批次会让失败重试无限调用模型。
-  // Generation Run 在首次 provider 调用前创建并保留失败行，因此按 revision
-  // 统计 pending / succeeded / failed 尝试，成功与失败共享 2 倍预算。
-  const attemptLimit = rippleSuggestionAttemptLimit(maxBatches);
-  const attempts = countRippleSuggestionGenerationRunsForStoryMap(
+  // 失败调用不会留下批次 Artifact，但它真实消耗过的 provider 调用仍会
+  // 通过 generation_runs.model_calls 计入本 revision 的硬上限。失败与成功
+  // 同等计费，但失败本身不再单独占用“尝试次数”，因此不会提前挡住正常的
+  // 换一批；只有真实调用总数触顶时才 fail closed。
+  const modelCallLimit = rippleSuggestionModelCallLimit(maxBatches);
+  const usedModelCalls = sumRippleSuggestionModelCallsForStoryMap(
     input.input.projectId,
     input.storyMapArtifact.id,
   );
-  if (attempts >= attemptLimit) {
+  if (usedModelCalls >= modelCallLimit) {
     throw new Error(
-      `Ripple Suggestions 生成尝试次数已达本 Story Map revision 的上限（含失败重试，最多 ${attemptLimit} 次，对应换一批上限 ${maxBatches} 批）`,
+      `Ripple Suggestions 已达到本 Story Map revision 的模型调用上限（最多 ${modelCallLimit} 次，含失败与重试），请继续使用已有建议`,
     );
   }
 
@@ -271,6 +272,19 @@ async function generateBatch(input: {
       schema: RippleSuggestionsModelOutputSchema,
       modelConfig: input.input.modelConfig,
       validate: (output) => validateSuggestions(output, storyMap),
+      // 运行中同样受硬上限约束：repair / 瞬时网络重试在下一次真实调用前
+      // 重新统计本 revision 的已发生调用；若再加一次会超限，就抛错且不调用。
+      onAttempt: () => {
+        const calls = sumRippleSuggestionModelCallsForStoryMap(
+          input.input.projectId,
+          input.storyMapArtifact.id,
+        );
+        if (calls + 1 > modelCallLimit) {
+          throw new Error(
+            `Ripple Suggestions 已达到本 Story Map revision 的模型调用上限（最多 ${modelCallLimit} 次，含失败与重试），已停止继续调用模型`,
+          );
+        }
+      },
     },
     input.input.provider,
   );

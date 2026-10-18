@@ -29,6 +29,7 @@ export function createGenerationRun(
   const run = GenerationRunSchema.parse({
     id: `generation_run_${randomUUID()}`,
     ...input,
+    modelCalls: 0,
     status: "pending",
     rawOutput: null,
     error: null,
@@ -38,6 +39,34 @@ export function createGenerationRun(
 
   getDatabase().insert(generationRuns).values(run).run();
   return run;
+}
+
+/**
+ * 在真正发起下一次 provider 调用前，把本 run 的调用数自增并落库。
+ *
+ * 只有仍为 pending 的 run 才能计数：若写入返回空行（例如 run 已被其它
+ * 路径结束）或抛错，调用方必须在发出 provider 请求前中止，保证不会产生
+ * 未计入预算的真实调用。旧行没有 model_calls，不影响新 run 的自增。
+ */
+export function incrementGenerationRunModelCalls(id: string): number {
+  const row = getDatabase()
+    .update(generationRuns)
+    .set({
+      modelCalls: sql`coalesce(${generationRuns.modelCalls}, 0) + 1`,
+    })
+    .where(
+      and(
+        eq(generationRuns.id, id),
+        eq(generationRuns.status, "pending"),
+      ),
+    )
+    .returning({ modelCalls: generationRuns.modelCalls })
+    .get();
+
+  if (!row || row.modelCalls === null) {
+    throw new Error("Generation Run is not pending; model call was not counted");
+  }
+  return row.modelCalls;
 }
 
 export function succeedGenerationRun(input: {
@@ -112,18 +141,21 @@ export function listProjectGenerationRuns(projectId: string): GenerationRun[] {
 }
 
 /**
- * 统计某个 Story Map revision 上已发起的 Ripple Suggestions 生成尝试。
+ * 统计某个 Story Map revision 上已发生的真实 Ripple Suggestions 模型调用数。
  *
- * 每行 Generation Run 在第一次 provider 调用前创建，失败时保留为 failed，
- * 因此 pending / succeeded / failed 都算一次尝试。批次 Artifact 只在成功时
- * 写入；只数批次会让失败重试绕过成本上限，所以上限必须按这里的尝试数检查。
+ * 每次 provider 调用前都会自增当前 run 的 model_calls，所以成功、失败、
+ * pending 的调用都被计入。迁移 0011 之前的旧行没有 model_calls（null），
+ * 无法知道真实次数，按每个 run 1 次保守兜底；没有绑定 story_map_artifact_id
+ * 的旧 run 无法归属到具体 revision，不参与计数。
  */
-export function countRippleSuggestionGenerationRunsForStoryMap(
+export function sumRippleSuggestionModelCallsForStoryMap(
   projectId: string,
   storyMapArtifactId: string,
 ): number {
   const row = getDatabase()
-    .select({ count: sql<number>`count(*)` })
+    .select({
+      total: sql<number>`coalesce(sum(coalesce(${generationRuns.modelCalls}, 1)), 0)`,
+    })
     .from(generationRuns)
     .where(
       and(
@@ -133,5 +165,5 @@ export function countRippleSuggestionGenerationRunsForStoryMap(
       ),
     )
     .get();
-  return row?.count ?? 0;
+  return row?.total ?? 0;
 }

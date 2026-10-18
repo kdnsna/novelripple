@@ -27,7 +27,10 @@ import {
   validateContinuationDirections,
   validateContinuationStatePatch,
 } from "@/domain/invariants/validate-continuation";
-import { assertValidStoryMap } from "@/domain/invariants/validate-story-map";
+import {
+  assertValidImpactPlan,
+  assertValidStoryMap,
+} from "@/domain/invariants/validate-story-map";
 import {
   ContinuationDirectionsModelOutputSchema,
   ContinuationSceneModelOutputV3Schema,
@@ -324,6 +327,12 @@ function loadContinuationContext(input: {
   const source = getProjectSource(input.projectId, storyMapArtifact.sourceId);
   if (!source) throw new Error("找不到 Worldline 对应的不可变 Source");
   assertValidStoryMap(storyMapArtifact.storyMap, source);
+  // 读取续写上下文时重新执行 Impact Plan 领域校验，防止历史或损坏的
+  // 不确定 Edge 索引绕过接受时的检查。
+  assertValidImpactPlan(
+    acceptedImpactPlanArtifact.impactPlan,
+    storyMapArtifact.storyMap,
+  );
   const baseState = deriveWorldlineDelta({
     worldline,
     impactPlan: acceptedImpactPlanArtifact.impactPlan,

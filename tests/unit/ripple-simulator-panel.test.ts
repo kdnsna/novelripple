@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   countUncertainRelations,
   mapAnchorEvaluationRows,
+  suggestionsRefreshState,
   summarizeImpactScope,
   summarizePlainAnchorStatus,
 } from "@/components/story-workspace/ripple-simulator-panel";
@@ -78,5 +79,32 @@ describe("Ripple Preview Anchor presentation", () => {
       uncertainEdgeIds: ["edge_07_08"],
     };
     expect(countUncertainRelations(legacy)).toBe(1);
+  });
+
+  it("distinguishes batch-limit and model-call-limit refresh hints", () => {
+    expect(
+      suggestionsRefreshState({ batchCount: 1, batchLimit: 2, error: null }),
+    ).toEqual({ canRefresh: true, hint: null });
+    expect(
+      suggestionsRefreshState({
+        batchCount: 2,
+        batchLimit: 2,
+        error: null,
+      }),
+    ).toEqual({
+      canRefresh: false,
+      hint: "已达到本 revision 的换一批上限（2 批）",
+    });
+    expect(
+      suggestionsRefreshState({
+        batchCount: 1,
+        batchLimit: 2,
+        error:
+          "Ripple Suggestions 已达到本 Story Map revision 的模型调用上限（最多 12 次，含失败与重试）",
+      }),
+    ).toEqual({
+      canRefresh: false,
+      hint: "本 revision 的模型调用次数已达上限，可继续使用已有建议",
+    });
   });
 });

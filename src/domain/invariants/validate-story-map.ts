@@ -330,6 +330,7 @@ export function validateImpactPlan(
   const characterIds = new Set(
     storyMap.characters.map((character) => character.id),
   );
+  const edgeIds = new Set(storyMap.edges.map((edge) => edge.id));
   const evaluatedAnchorIds = new Set(
     impactPlan.anchorEvaluations.map((evaluation) => evaluation.anchorId),
   );
@@ -341,6 +342,22 @@ export function validateImpactPlan(
     });
   }
   issues.push(...validateImpactPlanReasonPaths(impactPlan, storyMap));
+
+  // 不确定 Edge 索引必须落在绑定的 confirmed Story Map 里；旧计划没有
+  // 这些字段时跳过。生成、接受与读取续写上下文都走同一校验。
+  for (const [field, values] of [
+    ["uncertainEdgeIds", impactPlan.uncertainEdgeIds],
+    ["usedUncertainEdgeIds", impactPlan.usedUncertainEdgeIds],
+  ] as const) {
+    values?.forEach((edgeId, index) => {
+      if (!edgeIds.has(edgeId)) {
+        issues.push({
+          path: `${field}.${index}`,
+          message: `${field} 引用了未知 Edge：${edgeId}`,
+        });
+      }
+    });
+  }
 
   for (const scope of ["direct", "downstream", "ending"] as const) {
     if (!impactPlan.impacts.some((impact) => impact.scope === scope)) {

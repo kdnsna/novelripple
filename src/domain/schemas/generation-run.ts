@@ -13,7 +13,7 @@ export const GenerationRunSchema = z
     worldlineId: z.string().min(1).nullable(),
     /**
      * 本次生成绑定的 Story Map revision；旧行与不需要该绑定的生成解析为 null。
-     * Ripple Suggestions 用它把失败与成功尝试按 revision 合计。
+     * Ripple Suggestions 用它把失败与成功的真实模型调用按 revision 合计。
      */
     storyMapArtifactId: z.string().min(1).nullable().default(null),
     kind: z.string().min(1),
@@ -21,6 +21,11 @@ export const GenerationRunSchema = z
     model: z.string().min(1),
     promptVersion: z.string().min(1),
     inputHash: z.string().regex(/^[a-f0-9]{64}$/),
+    /**
+     * 本 run 实际发起的 provider 调用次数（含 repair 与瞬时网络重试）。
+     * 迁移 0011 之前的旧行没有该值，解析为 null；按 revision 计数时按 1 次兜底。
+     */
+    modelCalls: z.number().int().nonnegative().nullable().default(null),
     status: GenerationRunStatusSchema,
     rawOutput: z.string().nullable(),
     error: z.string().nullable(),

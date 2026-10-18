@@ -49,7 +49,7 @@ export const generationRuns = sqliteTable(
     ),
     /**
      * 本次生成绑定的 Story Map revision。Ripple Suggestions 用它把成功、
-     * 失败与 pending 尝试按 revision 计数；其它生成可以不绑定。
+     * 失败与 pending 的真实模型调用按 revision 计数；其它生成可以不绑定。
      */
     storyMapArtifactId: text("story_map_artifact_id").references(
       (): AnySQLiteColumn => artifacts.id,
@@ -59,6 +59,11 @@ export const generationRuns = sqliteTable(
     model: text("model").notNull(),
     promptVersion: text("prompt_version").notNull(),
     inputHash: text("input_hash").notNull(),
+    /**
+     * 本 run 实际发起的 provider 调用次数（含 repair 与瞬时网络重试）。
+     * 每次调用前自增并落库；迁移 0011 之前的旧行为 null，按 1 次兜底。
+     */
+    modelCalls: integer("model_calls"),
     status: text("status", { enum: ["pending", "succeeded", "failed"] })
       .notNull(),
     rawOutput: text("raw_output"),
