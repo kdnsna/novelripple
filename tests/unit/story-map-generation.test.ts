@@ -104,13 +104,13 @@ const modelConfig = {
 };
 
 describe("chunked Story Map recall pipeline", () => {
-  it("pins the v5 event prompts while names and endings stay v2", () => {
+  it("pins the v6 merge prompt while chunk/glean stay v5 and names/endings stay v2", () => {
     expect(STORY_MAP_PROMPT_VERSIONS).toEqual({
       extract: "story-map-chunk.v5",
       glean: "story-map-glean.v5",
       names: "story-map-names.v2",
       endings: "story-map-endings.v2",
-      merge: "story-map-merge.v5",
+      merge: "story-map-merge.v6",
     });
   });
 
